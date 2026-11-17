@@ -119,13 +119,14 @@ export function seed() {
       const from = o.from ?? int(0, 4);
       return insert(
         `INSERT INTO listings(kind, user_id, company_id, status, points, from_id, to_id, brand, body_type, cargo_type, weight, volume, loading,
-           date_from, date_to, pay_terms, rate, currency, description, distance_km, created_at, closed_at)
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'KZT', ?, ?, ?, ?)`,
+           date_from, date_to, pay_terms, rate, currency, description, distance_km, created_at, closed_at, flags)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'KZT', ?, ?, ?, ?, ?)`,
         kind, user[owner], comp[owner], o.status || 'active', JSON.stringify(points), points[0], points[points.length - 1], o.brand || '',
         o.body ?? null, o.cargo ?? null, o.weight ?? null, o.volume ?? null, JSON.stringify(o.loading || ['rear']),
         o.dateFrom || day(from), o.dateTo || day(from + int(4, 14)),
         JSON.stringify(rate ? pick([['cashless_vat'], ['cashless_novat', 'prepay'], ['cash'], ['cashless_vat', 'prepay']]) : []),
         rate, o.description || '', km, o.createdAt || ago(int(1, 70)), o.status && o.status !== 'active' ? ago(int(80, 400)) : null,
+        JSON.stringify(o.flags || []),
       );
     };
     const cargoKinds = Object.keys(CARGO_DESC);
@@ -210,8 +211,8 @@ export function seed() {
 
     const truck1 = addListing('truck', B, ['almaty', 'balkhash', 'karaganda', 'astana'], { brand: 'Volvo FH', body: 'ref', weight: 20, volume: 82, rate: 480000, from: 3, loading: ['rear', 'side'], description: 'Обратный рейс после выгрузки в Алматы, возьму догруз.', createdAt: ago(8) });
     run(`INSERT INTO responses(listing_id, user_id, company_id, message, price, created_at) VALUES(?, ?, ?, 'Есть 12 т фруктов из Алматы в Караганду, реф обязателен.', 300000, ?)`, truck1, user['Алатау Агро'], comp['Алатау Агро'], ago(1));
-    chat(truck1, B, 'Алатау Агро', [['Алатау Агро', 'Есть 12 т фруктов из Алматы в Караганду, реф обязателен.\n— 300000 KZT']]);
-    addListing('cargo', 'Silk Way Logistics', ['urumqi', 'khorgos', 'almaty'], { cargo: 'consumer', body: 'container', weight: 22, volume: 76, rate: 1450000, from: 2, description: 'Контейнер 40HC, электроника. Нужен брокер на Хоргосе.', createdAt: ago(4) });
+    chat(truck1, B, 'Алатау Агро', [['Алатау Агро', 'Есть 12 т фруктов из Алматы в Караганду, реф обязателен.\n— 300 000 ₸']]);
+    addListing('cargo', 'Silk Way Logistics', ['urumqi', 'khorgos', 'almaty'], { cargo: 'consumer', body: 'container', weight: 22, volume: 76, rate: 1450000, from: 2, description: 'Контейнер 40HC, электроника. Нужен брокер на Хоргосе.', createdAt: ago(4), flags: ['cmr', 'customs'] });
     addListing('truck', 'Silk Way Logistics', ['almaty', 'astana'], { brand: 'MAN TGX', body: 'tent', weight: 22, volume: 92, rate: 400000, from: 1, createdAt: ago(6) });
     run(`INSERT INTO searches(user_id, kind, name, params, notify) VALUES(?, 'cargo', 'Алматы → Астана, реф', ?, 1)`, user[B], JSON.stringify({ from: 'almaty', to: 'astana', body: 'ref', radius: '100' }));
     run('INSERT INTO partners(company_id, partner_id) VALUES(?, ?), (?, ?)', comp[A], comp[B], comp[B], comp[A]);

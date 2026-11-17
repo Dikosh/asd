@@ -274,7 +274,9 @@ export default function listingRoutes(app) {
         `ORDER BY COALESCE(l.boosted_until > :now, 0) DESC, l.id DESC LIMIT ${role === 'broker' ? 80 : 12}`,
       ).filter((l) => !seen.has(l.id));
       // брокеру в первую очередь интересны международные перевозки — там нужна таможня
-      if (role === 'broker') fresh.sort((a, b) => Number(b.international) - Number(a.international));
+      // сначала — объявления, где заказчик прямо отметил «нужен таможенный брокер»
+      const customs = (l) => (l.flags?.includes('customs') ? 2 : 0) + Number(l.international);
+      if (role === 'broker') fresh.sort((a, b) => customs(b) - customs(a));
       out.push({ kind, items: [...matched, ...fresh].slice(0, 8) });
     }
     res.json(out);
