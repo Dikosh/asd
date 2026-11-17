@@ -96,7 +96,7 @@ export function Select({ value, onChange, options, placeholder }: { value: strin
 
 // ---------- выбор города ----------
 // Для поиска названия упрощаются: без регистра, «ё» = «е», казахские буквы приравнены к русским, дефис = пробел.
-const FOLD: Record<string, string> = { ё: 'е', ә: 'а', ғ: 'г', қ: 'к', ң: 'н', ө: 'о', ұ: 'у', ү: 'у', һ: 'х', і: 'и' };
+const FOLD: { [letter: string]: string } = { ё: 'е', ә: 'а', ғ: 'г', қ: 'к', ң: 'н', ө: 'о', ұ: 'у', ү: 'у', һ: 'х', і: 'и' };
 const fold = (s: string) => s.toLowerCase().replace(/[ёәғқңөұүһі]/g, (ch) => FOLD[ch]).replace(/[\s\-–.,]+/g, ' ').trim();
 const cityIndex = new WeakMap<City[], string[][]>();
 /** Упрощённые названия (ru/kz/en) каждого места; считаются один раз на справочник. */

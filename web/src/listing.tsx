@@ -31,7 +31,7 @@ export function SpecChips({ l }: { l: Pick<Listing, 'kind' | 'cargoType' | 'body
       {l.weight != null && <span className="chip">{num(l.weight)} {t('т')}</span>}
       {l.volume != null && <span className="chip">{num(l.volume)} {t('м³')}</span>}
       {l.adrClass != null && <span className="chip adr"><TriangleAlert size={12} /> ADR {l.adrClass}</span>}
-      {l.flags?.map((x) => <span className="chip doc" key={x}>{t(FLAG_L[x])}</span>)}
+      {l.flags?.map((x) => <span className="chip docflag" key={x}>{t(FLAG_L[x])}</span>)}
       {l.loading.map((x) => (
         <span className="chip light" key={x}>{t(LOADING_L[x])}</span>
       ))}

@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Bookmark, BookmarkCheck, Check, ChevronRight, Eye, FileCheck2, Flag, Globe2, MessageSquare, Send, Share2, ShieldAlert, StickyNote, TrendingUp, X } from 'lucide-react';
-import { api, Company, FLAG_L, fmtDates, fmtWhen, Listing, money, num, PAY_L, ROLE_L, t, useApp, useEvent, useLoad } from '../core';
+import { api, Company, fmtDates, fmtWhen, Listing, money, num, PAY_L, ROLE_L, t, useApp, useEvent, useLoad } from '../core';
 import { CompanyBadge, Empty, Field, Loading, MapView, Select } from '../ui';
 import { AcceptResponseModal, canRespondTo, ComplaintModal, ContactButtons, ListingCard, NoteModal, RateBlock, RouteTitle, SpecChips, useShare } from '../listing';
 
@@ -54,8 +54,10 @@ export default function ListingPage() {
   useEffect(() => {
     const el = form.current;
     if (!el || !('IntersectionObserver' in window)) return;
-    setNavH((document.querySelector('.bottomnav') as HTMLElement | null)?.offsetHeight || 0);
-    const io = new IntersectionObserver(([e]) => setFormSeen(e.isIntersecting), { threshold: 0.2 });
+    const h = (document.querySelector('.bottomnav') as HTMLElement | null)?.offsetHeight || 0;
+    setNavH(h);
+    // нижнее меню закрывает край экрана: форма «видна», только когда поднялась над ним
+    const io = new IntersectionObserver(([e]) => setFormSeen(e.isIntersecting), { threshold: 0.25, rootMargin: `0px 0px -${h + 24}px 0px` });
     io.observe(el);
     return () => io.disconnect();
   }, [l?.id, canRespond]);
@@ -121,7 +123,6 @@ export default function ListingPage() {
                 <div className="lcard-tags">
                   <span className={`tag ${l.kind}`}>{l.kind === 'cargo' ? t('Груз') : t('Транспорт')}</span>
                   {l.status !== 'active' && <span className="tag">{l.status === 'closed' ? t('Закрыто') : t('В архиве')}</span>}
-                  {customs && <span className="tag customs"><FileCheck2 size={12} /> {t(FLAG_L.customs)}</span>}
                   {l.international && <span className="tag intl"><Globe2 size={12} /> {t('Международный')}</span>}
                   {l.tripId && <span className="tag trip">{t('В рейсе')}</span>}
                 </div>
