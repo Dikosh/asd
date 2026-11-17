@@ -83,6 +83,10 @@ export default function SearchPage() {
     setSel(null);
   }, [inUrl, kind]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
+    // из адреса убираем то, что фильтр не понимает (например, ?wMin=abc)
+    if (sp.toString() !== written.current) setSp(written.current, { replace: true });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
     const id = setTimeout(() => {
       setDebounced(f);
       const s = serialize(f, view);
@@ -195,6 +199,7 @@ export default function SearchPage() {
     } else if (map.fit.length && fitted !== map.fitKey) setFitted(map.fitKey);
   }, [view, map, fitted]);
   const mapFull = fitted === map.fitKey;
+  const narrow = typeof window.matchMedia === 'function' && window.matchMedia('(max-width: 900px)').matches; // на телефоне карта ниже: под ней сразу видны легенда и объявления города
   const selGroup = sel ? map.groups.find((g) => g.id === sel) : null;
   const onMapPick = (e: React.MouseEvent | React.KeyboardEvent) => {
     if ('key' in e && e.key !== 'Enter') return;
@@ -376,7 +381,7 @@ export default function SearchPage() {
           {view === 'map' && (
             <div className="card map-card search-map">
               <div className="map-click" onClick={onMapPick} onKeyDown={onMapPick}>
-                <MapView routes={mapFull ? map.routes : []} markers={mapFull ? map.markers : map.fit} height={420} fitKey={map.fitKey} />
+                <MapView routes={mapFull ? map.routes : []} markers={mapFull ? map.markers : map.fit} height={narrow ? 320 : 420} fitKey={map.fitKey} />
               </div>
               <div className="map-legend">
                 <span><i className="lg-dot a" /> {t('Погрузка')}</span>
