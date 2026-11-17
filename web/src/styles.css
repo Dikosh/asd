@@ -704,6 +704,7 @@ input[aria-invalid='true']:focus, select[aria-invalid='true']:focus, textarea[ar
 @keyframes sheet { from { transform: translateY(16px); opacity: 0; } }
 /* подтверждение «принять / отклонить отклик» */
 .confirm-who { display: flex; flex-direction: column; gap: 3px; }
+.company-stats.confirm-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .company-stats .wide { grid-column: 1 / -1; }
 .confirm-msg { background: var(--bg); border-radius: 10px; padding: 9px 12px; white-space: pre-line; color: var(--ink2); max-height: 120px; overflow: auto; }
 .respond-bar { display: none; }

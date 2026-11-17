@@ -267,7 +267,7 @@ export function AcceptResponseModal({ r, mode = 'accept', listingRate, onConfirm
         <CompanyBadge c={c} link={false} />
         <span className="muted small">{t(ROLE_L[c.kind] || c.kind)}{r.user?.name ? ` · ${r.user.name}` : ''}</span>
       </div>
-      <div className="company-stats">
+      <div className="company-stats confirm-stats">
         <div className="wide">
           <b>{r.price ? money(r.price, r.currency) : listingRate?.rate ? money(listingRate.rate, listingRate.currency) : t('Договорная')}</b>
           <span>{r.price ? t('цена в отклике') : listingRate?.rate ? t('ставка объявления') : t('цена')}</span>
