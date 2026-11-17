@@ -1,6 +1,6 @@
 // Объявления о грузах и транспорте: размещение, поиск, подбор «по пути», отметки, сохранённые поиски и подписки на них.
 import { z } from 'zod';
-import { q, q1, run, insert, tx } from '../db.js';
+import { dataVersion, q, q1, run, insert, tx } from '../db.js';
 import { cityById, haversine, routeFit } from '../geo.js';
 import { route } from '../routing.js';
 import { notify } from '../notify.js';
@@ -47,14 +47,15 @@ const n = (v) => (v === undefined || v === '' || v === null || isNaN(Number(v)) 
 
 /** Насколько транспорт подходит грузу: 0–100 либо null, если не подходит. */
 export function matchScore(cargo, truck) {
-  const cp = pts(cargo);
-  const detour = routeFit(pts(truck), cp[0], cp[cp.length - 1], 150);
-  if (detour === null) return null;
+  // сначала быстрые проверки (даты, вес, кузов), маршрут — последним: он считается дольше всего
   if (cargo.dateFrom > truck.dateTo || truck.dateFrom > cargo.dateTo) return null;
   if (cargo.weight && truck.weight && cargo.weight > truck.weight) return null;
   if (cargo.volume && truck.volume && cargo.volume > truck.volume) return null;
   // груз требует определённый кузов — машина с другим кузовом не подходит
   if (cargo.bodyType && truck.bodyType && cargo.bodyType !== truck.bodyType) return null;
+  const cp = pts(cargo);
+  const detour = routeFit(pts(truck), cp[0], cp[cp.length - 1], 150);
+  if (detour === null) return null;
   let score = 100 - detour / 3;
   if (cargo.loading.length && truck.loading.length && !cargo.loading.some((x) => truck.loading.includes(x))) score -= 15;
   return score >= 40 ? { score: Math.round(score), detourKm: detour } : null;
@@ -115,23 +116,20 @@ export function passes(l, f) {
   return true;
 }
 
-const ACTIVE = `l.status = 'active' AND l.date_to >= :today AND cs.banned = 0 AND ${L.BOOKED('l')} < l.trucks`;
 // скрытые пользователем объявления и компании из личного чёрного списка в выдачу не попадают
+// (для поиска то же правило — в L.lightListings)
 const VISIBLE = `COALESCE(m.hidden, 0) = 0
   AND NOT EXISTS (SELECT 1 FROM blocks b WHERE b.company_id = :viewerCompany AND b.blocked_id = l.company_id)`;
 
 /** Встречные объявления, подходящие к данному. */
 function matchesFor(user, listing, limit = 10) {
   const otherKind = listing.kind === 'cargo' ? 'truck' : 'cargo';
-  return L.listings(user, `l.kind = :kind AND ${ACTIVE} AND ${VISIBLE} AND l.company_id != :company`, {
-    kind: otherKind,
-    today: L.today(),
-    company: listing.company.id,
-  }, 'ORDER BY l.id DESC LIMIT 1500')
+  const best = L.lightListings(user, otherKind, { exceptCompany: listing.company.id })
     .map((o) => ({ ...o, match: listing.kind === 'cargo' ? matchScore(listing, o) : matchScore(o, listing) }))
     .filter((o) => o.match)
     .sort((a, b) => b.match.score - a.match.score)
     .slice(0, limit);
+  return L.hydrate(user, best);
 }
 
 /**
@@ -235,12 +233,17 @@ export function expireListings() {
        AND NOT EXISTS (SELECT 1 FROM trips t WHERE t.listing_id = listings.id AND t.status = 'active')`, L.now(), L.today());
 }
 
+const recCache = new Map();
+/** Забыть рекомендации пользователя: после его отклика или отметки карточки на главной должны обновиться сразу. */
+export const forgetRecommendations = (userId) => recCache.delete(userId);
+
 export default function listingRoutes(app) {
   // ---- поиск ----
   app.get('/api/listings', auth, (req, res) => {
     const f = req.query;
     const kind = f.kind === 'truck' ? 'truck' : 'cargo';
-    const items = L.listings(req.user, `l.kind = :kind AND ${ACTIVE} AND ${VISIBLE}`, { kind, today: L.today() }, 'ORDER BY l.id DESC LIMIT 5000').filter((l) => passes(l, f));
+    // отбор и сортировка — по лёгким данным, полные карточки — только для первых 200
+    const items = L.lightListings(req.user, kind).filter((l) => passes(l, f));
     const kzt = (l) => toKzt(l.rate, l.currency);
     const perKm = (l) => (l.rate && l.distanceKm ? kzt(l) / l.distanceKm : 0);
     const sorters = {
@@ -253,7 +256,7 @@ export default function listingRoutes(app) {
       distance_asc: (a, b) => a.distanceKm - b.distanceKm,
     };
     items.sort(Object.hasOwn(sorters, f.sort) ? sorters[f.sort] : sorters.new);
-    res.json({ total: items.length, items: items.slice(0, 200) });
+    res.json({ total: items.length, items: L.hydrate(req.user, items.slice(0, 200)) });
   });
 
   app.get('/api/listings/mine', auth, (req, res) => {
@@ -262,7 +265,11 @@ export default function listingRoutes(app) {
   });
 
   // Рекомендации на главной — зависят от роли.
+  // Рекомендации на главной считаются дольше поиска (подбор под каждое своё объявление), поэтому
+  // результат держится минуту для каждого пользователя — пока не изменились объявления или рейсы.
   app.get('/api/recommendations', auth, (req, res) => {
+    const hit = recCache.get(req.user.id);
+    if (hit && hit.ver === dataVersion() && Date.now() - hit.at < 60_000) return res.json(hit.data);
     const role = req.user.role;
     const wants = role === 'customer' ? ['truck'] : role === 'logist' ? ['cargo', 'truck'] : ['cargo'];
     const mine = L.listings(req.user, `l.company_id = :c AND l.status = 'active'`, { c: req.user.company_id }, 'ORDER BY l.id DESC LIMIT 8');
@@ -279,18 +286,19 @@ export default function listingRoutes(app) {
         }
       }
       matched.sort((a, b) => b.match.score - a.match.score);
-      const fresh = L.listings(
-        req.user,
-        `l.kind = :kind AND ${ACTIVE} AND ${VISIBLE} AND l.company_id != :c`,
-        { kind, today: L.today(), c: req.user.company_id, now: L.now() },
-        `ORDER BY COALESCE(l.boosted_until > :now, 0) DESC, l.id DESC LIMIT ${role === 'broker' ? 80 : 12}`,
-      ).filter((l) => !seen.has(l.id));
+      // свежие объявления — из того же быстрого списка, что и поиск: сначала поднятые в топ, потом новые
+      const fresh = L.hydrate(req.user, L.lightListings(req.user, kind, { exceptCompany: req.user.company_id })
+        .filter((l) => !seen.has(l.id))
+        .sort((a, b) => Number(b.boosted) - Number(a.boosted) || b.id - a.id)
+        .slice(0, role === 'broker' ? 80 : 12));
       // брокеру в первую очередь интересны международные перевозки — там нужна таможня
       // сначала — объявления, где заказчик прямо отметил «нужен таможенный брокер»
       const customs = (l) => (l.flags?.includes('customs') ? 2 : 0) + Number(l.international);
       if (role === 'broker') fresh.sort((a, b) => customs(b) - customs(a));
       out.push({ kind, items: [...matched, ...fresh].slice(0, 8) });
     }
+    if (recCache.size > 2000) recCache.clear();
+    recCache.set(req.user.id, { ver: dataVersion(), at: Date.now(), data: out });
     res.json(out);
   });
 
@@ -301,6 +309,7 @@ export default function listingRoutes(app) {
   });
   const markSchema = z.object({ marked: z.boolean().optional(), note: z.string().max(500).optional(), hidden: z.boolean().optional() });
   app.post('/api/listings/:id/mark', auth, (req, res) => {
+    forgetRecommendations(req.user.id);
     const b = parse(markSchema, req.body);
     const id = Number(req.params.id);
     if (!q1('SELECT 1 FROM listings WHERE id = ?', id)) throw bad('not_found', 'Объявление не найдено', 404);

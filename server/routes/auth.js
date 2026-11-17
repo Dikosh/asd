@@ -235,6 +235,7 @@ export default function authRoutes(app) {
       if (b.bin && !isValidBin(b.bin)) throw bad('bin', 'БИН/ИИН не прошёл проверку контрольного разряда');
       if (b.bin && q1('SELECT 1 FROM companies WHERE bin = ? AND id != ?', b.bin, id)) throw bad('bin_taken', 'Компания с таким БИН/ИИН уже зарегистрирована. Если это ваша компания, напишите в поддержку', 409);
       // смена БИН сбрасывает подтверждение компании
+      L.resetCompanyCache();
       run(`UPDATE companies SET bin = ?, verified = CASE WHEN bin IS ? THEN verified ELSE 'none' END WHERE id = ?`, b.bin || null, b.bin || null, id);
     }
     res.json(L.meOut(req.user));

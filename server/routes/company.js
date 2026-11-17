@@ -87,6 +87,7 @@ export default function companyRoutes(app) {
        ON CONFLICT(company_id, author_company) DO UPDATE SET reason = excluded.reason, review = excluded.review`,
       b.companyId, req.user.id, req.user.company_id, b.reason, b.review,
     );
+    L.resetCompanyCache();
     notify(q('SELECT id FROM users WHERE company_id = ?', b.companyId).map((u) => u.id), {
       kind: 'system', title: 'О вашей компании появилась запись в чёрном списке', body: 'Вы можете ответить на неё на странице своей компании', link: `/company/${b.companyId}`,
     });
@@ -104,11 +105,13 @@ export default function companyRoutes(app) {
     if (req.user.is_admin) {
       const e = q1('SELECT c.name FROM blacklist b JOIN companies c ON c.id = b.company_id WHERE b.id = ?', id(req));
       run('DELETE FROM blacklist WHERE id = ?', id(req));
+      L.resetCompanyCache();
       if (e) L.modLog(req.user, 'blacklist_delete', e.name);
     }
     else {
       if (req.user.company_role !== 'owner') throw bad('forbidden', 'Доступно только владельцу компании', 403);
       run('DELETE FROM blacklist WHERE id = ? AND author_company = ?', id(req), req.user.company_id);
+      L.resetCompanyCache();
     }
     res.json({ ok: true });
   });
@@ -162,6 +165,7 @@ export default function companyRoutes(app) {
       throw bad('documents', 'Загрузите свидетельство о регистрации или удостоверение личности');
     if (c.verified === 'verified') throw bad('state', 'Компания уже проверена', 409);
     run(`UPDATE companies SET verified = 'pending', verify_note = '' WHERE id = ?`, c.id);
+    L.resetCompanyCache();
     res.json({ ok: true });
   });
 
@@ -182,6 +186,7 @@ export default function companyRoutes(app) {
     const d = parse(decision, req.body);
     const ok = d.approve;
     run('UPDATE companies SET verified = ?, verify_note = ? WHERE id = ?', ok ? 'verified' : 'rejected', ok ? '' : d.note, id(req));
+    L.resetCompanyCache();
     // при отказе непроверенные документы компании тоже отклоняются с той же причиной — компания видит, что исправить
     if (!ok) run(`UPDATE documents SET status = 'rejected', note = ? WHERE company_id = ? AND status = 'pending'`, d.note, id(req));
     L.modLog(req.user, ok ? 'verify_approve' : 'verify_reject', q1('SELECT name FROM companies WHERE id = ?', id(req))?.name, d.note);

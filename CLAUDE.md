@@ -12,7 +12,8 @@
 ## Устройство
 - `server/` — Express 5 + встроенный `node:sqlite`. `routes/`: auth, listings (поиск, подбор, рыночная ставка), deals (отклики, чат, рейсы, GPS, ссылка водителя), company (кабинет, документы, модерация), extras (уведомления, команда, тариф, модератор, поддержка).
 - `server/lib.js` — общие правила: роли, лимиты, сессии, `parse()` (ошибки проверки по-русски), `companyOut`/`indicator` (репутация), `modLog`.
-- `server/db.js` — схема и миграции (`addColumn`), представления `visible_reviews`, `rated_reviews`, `company_stats`.
+- `server/db.js` — схема и миграции (`addColumn`), представления `visible_reviews`, `rated_reviews`, `company_stats`. `run`/`insert` повышают `dataVersion()` при записи в listings, trips, companies, reviews, blacklist.
+- Поиск, подбор и рекомендации берут активные объявления из памяти (`activePool`/`lightListings` в lib.js, перечитываются при смене `dataVersion`), репутацию — из кэша `companyMap`; полные карточки грузятся только для показываемой страницы (`hydrate`). Писать в эти таблицы — только через `run`/`insert`, иначе поиск не узнает об изменении.
 - `server/i18n.js` — тексты уведомлений на трёх языках (для push).
 - `web/src/` — React + TypeScript + Vite + Leaflet. Строки интерфейса: `t('русская строка')`, переводы в `kz.ts` и `en.ts` (ключ — русская строка).
 - `server/data/places.json` — справочник ~6 650 мест (GeoNames), собирается `scripts/build-places.py`.
@@ -36,7 +37,6 @@
 - Вход по ЭЦП (NCALayer, без госразрешений) и через eGov Mobile (нужно подключение через SmartBridge).
 - HR: найм водителей и логистов. Рассылка новых грузов в Telegram/WhatsApp. Безопасная сделка, факторинг, страхование — как источники дохода.
 - Для боевого запуска: SMS-провайдер (`SMS_WEBHOOK_URL`), поставщик карт (`TILE_URL`), сервер в Казахстане, юрист для правил.
-- Не сделано: быстрый поиск при большом числе объявлений.
 
 ## Репозиторий
 Рабочая ветка — `main` в https://github.com/Dikosh/asd.

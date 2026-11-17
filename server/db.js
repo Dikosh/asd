@@ -199,14 +199,31 @@ const stmt = (sql) => {
   if (!s) cache.set(sql, (s = db.prepare(sql)));
   return s;
 };
+// Версия данных для поиска: растёт при любой записи в объявления, рейсы, компании, отзывы или чёрный список.
+// Поиск держит активные объявления в памяти и перечитывает их, только когда версия изменилась.
+// Счётчик просмотров объявления на выдачу не влияет и версию не меняет.
+let version = 0;
+export const dataVersion = () => version;
+const TOUCHES = /^\s*(?:INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+(?:listings|trips|companies|reviews|blacklist)\b/i;
+const touch = (sql) => {
+  if (TOUCHES.test(sql) && !/SET views = views/.test(sql)) version++;
+};
+
 /** Все строки. Параметры — позиционные (?) или один объект с именованными (:name). */
 export const q = (sql, ...p) => stmt(sql).all(...p);
 export const q1 = (sql, ...p) => stmt(sql).get(...p);
-export const run = (sql, ...p) => stmt(sql).run(...p);
-export const insert = (sql, ...p) => Number(stmt(sql).run(...p).lastInsertRowid);
+export const run = (sql, ...p) => {
+  touch(sql);
+  return stmt(sql).run(...p);
+};
+export const insert = (sql, ...p) => {
+  touch(sql);
+  return Number(stmt(sql).run(...p).lastInsertRowid);
+};
 
 export function tx(fn) {
   db.exec('BEGIN IMMEDIATE');
+  version++; // транзакция может менять объявления — поиск перечитает их
   try {
     const r = fn();
     db.exec('COMMIT');

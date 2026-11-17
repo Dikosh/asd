@@ -6,6 +6,7 @@ import * as L from '../lib.js';
 import { notify } from '../notify.js';
 import { rateLimit } from './auth.js';
 import { fileOut, fileSchema, saveFile, sendFile } from '../files.js';
+import { forgetRecommendations } from './listings.js';
 
 const { bad, parse, auth, staff } = L;
 
@@ -298,6 +299,7 @@ export default function dealRoutes(app) {
       v ? `— машина: ${v.brand}${v.plate ? `, ${v.plate}` : ''}` : '',
     ].filter(Boolean);
     postMessage(out.chatId, req.user, [b.message, ...extra].join('\n'));
+    forgetRecommendations(req.user.id);
     L.push(staffOf(l.company_id), 'response', { listingId: l.id });
     notify(staffOf(l.company_id), { kind: 'response', title: 'Новый отклик: {route}', vars: routeOf(l.id), body: b.message.slice(0, 140), link: `/listing/${l.id}` });
     res.json(out);
@@ -643,6 +645,7 @@ export default function dealRoutes(app) {
     if (q1('SELECT 1 FROM reviews WHERE trip_id = ? AND author_company = ?', t.id, req.user.company_id)) throw bad('duplicate', 'Отзыв уже оставлен', 409);
     run('INSERT INTO reviews(trip_id, author_user, author_company, target_company, rating, text) VALUES(?, ?, ?, ?, ?, ?)',
       t.id, req.user.id, req.user.company_id, target, b.rating, b.text);
+    L.resetCompanyCache();
     notify(staffOf(target), { kind: 'review', title: 'О вашей компании оставили отзыв', body: 'Он станет виден, когда вы оставите свой отзыв по этому рейсу, или через 7 дней', link: `/trip/${t.id}` });
     res.json({ ok: true });
   });

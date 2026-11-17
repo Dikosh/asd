@@ -1,6 +1,6 @@
 // Общие помощники: ошибки, валидация, сессии, SSE, сериализация.
 import crypto from 'node:crypto';
-import { q, q1, run } from './db.js';
+import { dataVersion, q, q1, run } from './db.js';
 import { cityById, isValidBin } from './geo.js';
 
 // Демо-режим включается только явно: он показывает код входа на экране и даёт вход одним нажатием под любой ролью.
@@ -246,6 +246,77 @@ FROM listings l
 JOIN users u ON u.id = l.user_id
 JOIN company_stats cs ON cs.id = l.company_id
 LEFT JOIN marks m ON m.listing_id = l.id AND m.user_id = :viewer`;
+
+// ---------- быстрый поиск ----------
+// Репутация компаний для фильтров поиска считается одним запросом и держится 30 секунд:
+// иначе на каждое из тысяч объявлений заново пересчитываются рейтинг, отзывы и чёрный список.
+let companyCache = { at: 0, ver: -1, map: null };
+export function companyMap() {
+  if (!companyCache.map || companyCache.ver !== dataVersion() || Date.now() - companyCache.at > 30_000) {
+    companyCache = { at: Date.now(), ver: dataVersion(), map: new Map(q('SELECT * FROM company_stats').map((r) => [r.id, companyOut(r)])) };
+  }
+  return companyCache.map;
+}
+function companyById(id) {
+  const c = companyOut(q1('SELECT * FROM company_stats WHERE id = ?', id));
+  companyCache.map?.set(id, c);
+  return c;
+}
+/** Сбросить кэш репутации: после проверки, блокировки компании, нового отзыва. */
+export const resetCompanyCache = () => { companyCache.map = null; };
+
+/**
+ * Активные объявления в памяти — для поиска и подбора. Перечитываются из базы, только когда изменились объявления,
+ * рейсы или компании (dataVersion), и не реже раза в минуту (истекают даты). Здесь лишь поля для фильтров и сортировки;
+ * полные карточки (отклики, рейсы, отметки) загружаются только для показываемой страницы — hydrate().
+ */
+let pool = { ver: -1, at: 0, rows: [] };
+function activePool() {
+  if (pool.ver !== dataVersion() || Date.now() - pool.at > 60_000) {
+    const ver = dataVersion();
+    const rows = q(
+      `SELECT l.id, l.kind, l.points, l.body_type, l.cargo_type, l.weight, l.volume, l.loading, l.date_from, l.date_to, l.pay_terms, l.adr_class, l.flags,
+         l.rate, l.currency, l.distance_km, l.created_at, l.boosted_until, l.company_id, l.trucks, ${BOOKED('l')} AS booked
+       FROM listings l JOIN companies c ON c.id = l.company_id
+       WHERE l.status = 'active' AND c.banned = 0 AND l.date_to >= ? ORDER BY l.id DESC`,
+      today(),
+    );
+    pool = {
+      ver, at: Date.now(),
+      rows: rows.filter((r) => r.booked < r.trucks).map((r) => {
+        const points = j(r.points, []);
+        return {
+          id: r.id, kind: r.kind, points, bodyType: r.body_type, cargoType: r.cargo_type, weight: r.weight, volume: r.volume, loading: j(r.loading, []),
+          dateFrom: r.date_from, dateTo: r.date_to, payTerms: j(r.pay_terms, []), adrClass: r.adr_class, flags: j(r.flags, []), rate: r.rate, currency: r.currency,
+          distanceKm: r.distance_km, createdAt: r.created_at, boostedUntil: r.boosted_until, companyId: r.company_id,
+          international: new Set(points.map((id) => cityById.get(id)?.country)).size > 1,
+        };
+      }),
+    };
+  }
+  return pool.rows;
+}
+/** Объявления вида kind, которые видит пользователь: без скрытых им объявлений и компаний из его личного чёрного списка. */
+export function lightListings(viewer, kind, { exceptCompany = null } = {}) {
+  const companies = companyMap();
+  const hidden = new Set(q('SELECT listing_id FROM marks WHERE user_id = ? AND hidden = 1', viewer.id).map((r) => r.listing_id));
+  const blocked = new Set(q('SELECT blocked_id FROM blocks WHERE company_id = ?', viewer.company_id).map((r) => r.blocked_id));
+  const partners = new Set(q('SELECT partner_id FROM partners WHERE company_id = ?', viewer.company_id).map((r) => r.partner_id));
+  const t = today();
+  const at = now();
+  const out = [];
+  for (const r of activePool()) {
+    if (r.kind !== kind || r.dateTo < t || hidden.has(r.id) || blocked.has(r.companyId) || r.companyId === exceptCompany) continue;
+    out.push({ ...r, boosted: !!r.boostedUntil && r.boostedUntil > at, partner: partners.has(r.companyId), company: companies.get(r.companyId) || companyById(r.companyId) });
+  }
+  return out;
+}
+/** Полные карточки для отобранных лёгких объявлений — в том же порядке, с найденными при отборе полями. */
+export function hydrate(viewer, light) {
+  if (!light.length) return [];
+  const full = new Map(listings(viewer, 'l.id IN (SELECT value FROM json_each(:ids))', { ids: JSON.stringify(light.map((l) => l.id)) }, '').map((l) => [l.id, l]));
+  return light.filter((l) => full.has(l.id)).map((l) => ({ ...full.get(l.id), ...(l.detourKm !== undefined && { detourKm: l.detourKm }), ...(l.match && { match: l.match }) }));
+}
 
 /** Объявления по условию where (именованные параметры), уже в виде JSON для клиента. */
 export function listings(viewer, where, params = {}, tail = 'ORDER BY l.id DESC') {

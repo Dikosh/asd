@@ -343,6 +343,7 @@ export default function extraRoutes(app) {
     if (q1('SELECT 1 FROM users WHERE company_id = ? AND is_admin = 1', c.id)) throw bad('forbidden', 'Нельзя заблокировать компанию модератора', 403);
     if (banned && reason.length < 5) throw bad('reason', 'Укажите причину блокировки — компания её увидит');
     run('UPDATE companies SET banned = ?, ban_reason = ? WHERE id = ?', banned ? 1 : 0, banned ? reason : '', c.id);
+    L.resetCompanyCache();
     if (banned) run(`UPDATE complaints SET status = 'closed' WHERE company_id = ? AND status = 'open'`, c.id);
     L.modLog(req.user, banned ? 'ban' : 'unban', c.name, reason);
     if (!!c.banned !== banned) {
