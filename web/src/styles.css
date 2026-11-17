@@ -313,6 +313,18 @@ input[type='checkbox'] { width: 18px; height: 18px; min-height: 0; accent-color:
 .trip-line { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px; border-radius: 10px; background: var(--bg); color: var(--ink); font-size: 14px; }
 .trip-line:hover { background: var(--blue-l); }
 .assign-card { border: 2px solid var(--blue); }
+.file-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+.file-item { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-radius: 12px; background: var(--bg); color: var(--ink); min-width: 0; }
+.file-item:hover { background: var(--blue-l); }
+.file-item img { width: 100%; height: 100px; object-fit: cover; border-radius: 8px; background: #fff; }
+.file-icon { height: 100px; display: flex; align-items: center; justify-content: center; border-radius: 8px; background: #fff; color: var(--blue); }
+.file-meta { display: flex; flex-direction: column; min-width: 0; }
+.file-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.btn.disabled { opacity: .6; pointer-events: none; }
+.msg-file { display: block; margin-top: 4px; }
+.msg-file img { max-width: 220px; max-height: 220px; border-radius: 10px; display: block; }
+.msg-file.doc { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; text-decoration: underline; }
+.chat-input .attach { cursor: pointer; }
 .vehicle-line { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .vehicle-line .plate { font-family: ui-monospace, monospace; font-weight: 700; padding: 2px 8px; border: 2px solid var(--ink); border-radius: 6px; background: #fff; color: #111; letter-spacing: .5px; }
 .market { display: flex; gap: 11px; align-items: center; padding: 11px 13px; border-radius: 12px; background: var(--bg); color: var(--ink2); }

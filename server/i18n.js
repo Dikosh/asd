@@ -49,6 +49,7 @@ const T = {
   'Укажите машину и водителя': ['Көлік пен жүргізушіні көрсетіңіз', 'Specify the truck and the driver'],
   'Перевозчик подтвердил рейс: {route}': ['Тасымалдаушы рейсті растады: {route}', 'The carrier confirmed the trip: {route}'],
   'Перевозчик заменил машину или водителя: {route}': ['Тасымалдаушы көлікті немесе жүргізушіні ауыстырды: {route}', 'The carrier changed the truck or driver: {route}'],
+  'Новый документ в рейсе: {route}': ['Рейсте жаңа құжат: {route}', 'New document in the trip: {route}'],
   'Вас назначили на рейс: {route}': ['Сізді рейске тағайындады: {route}', 'You were assigned to a trip: {route}'],
 };
 export const TEMPLATES = Object.keys(T);

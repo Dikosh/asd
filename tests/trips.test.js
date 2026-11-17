@@ -124,3 +124,39 @@ test('водитель из команды видит только назнач�
   assert.equal(doc.driver.name, 'Водитель Асхат');
   assert.notEqual(doc.driver.phone, doc.carrier.phone);
 });
+
+test('файлы в чате и рейсе: фото, ТТН, доступ только участникам', async () => {
+  const customer = await signIn('+77061130001', { name: 'Заказчик', companyName: 'Док Груз', companyForm: 'ТОО', role: 'customer' });
+  const carrier = await signIn('+77061130002', { name: 'Перевозчик', companyName: 'Док Транс', companyForm: 'ТОО', role: 'carrier' });
+  const stranger = await signIn('+77061130003', { name: 'Чужой', companyName: 'Чужие', companyForm: 'ИП', role: 'carrier' });
+  const pdf = Buffer.from('%PDF-1.4 test ttn').toString('base64');
+  const png = Buffer.from('89504e470d0a1a0a0000000d49484452', 'hex').toString('base64');
+
+  const { id } = await customer.post('/api/listings', { kind: 'cargo', points: ['almaty', 'taraz'], weight: 5, dateFrom: day(0), dateTo: day(3) });
+  const r = await carrier.post(`/api/listings/${id}/responses`, { message: 'Беру' });
+  // файл в чате — сообщение со ссылкой на файл
+  const sent = await carrier.post(`/api/chats/${r.chatId}/files`, { filename: 'техпаспорт.pdf', mime: 'application/pdf', data: pdf });
+  const msgs = await customer.get(`/api/chats/${r.chatId}/messages`);
+  const withFile = msgs.find((m) => m.file);
+  assert.deepEqual([withFile.file.id, withFile.file.filename], [sent.fileId, 'техпаспорт.pdf']);
+  assert.equal((await customer.call('GET', `/api/files/${sent.fileId}`)).status, 200);
+  assert.equal((await stranger.call('GET', `/api/files/${sent.fileId}`)).status, 404, 'чужой файл чата недоступен');
+  // содержимое должно совпадать с типом
+  assert.equal((await carrier.call('POST', `/api/chats/${r.chatId}/files`, { filename: 'x.pdf', mime: 'application/pdf', data: Buffer.from('MZ fake exe file').toString('base64') })).status, 400);
+  assert.equal((await carrier.call('POST', `/api/chats/${r.chatId}/files`, { filename: 'x.exe', mime: 'application/x-msdownload', data: pdf })).status, 400);
+
+  // файлы рейса: обе стороны и водитель по ссылке
+  const { tripId } = await customer.post(`/api/responses/${r.id}/accept`);
+  await customer.post(`/api/trips/${tripId}/files`, { kind: 'ttn', filename: 'ТТН.pdf', mime: 'application/pdf', data: pdf });
+  const trip = await carrier.get(`/api/trips/${tripId}`);
+  const driverToken = trip.driverToken;
+  const viaLink = client();
+  await viaLink.post(`/api/drive/${driverToken}/files`, { kind: 'photo', filename: 'груз.png', mime: 'image/png', data: png });
+  const files = (await customer.get(`/api/trips/${tripId}`)).files;
+  assert.deepEqual(files.map((f) => f.kind), ['ttn', 'photo']);
+  assert.equal(files[1].byDriverLink, true, 'видно, что файл прислал водитель по ссылке');
+  assert.equal((await viaLink.call('GET', `/api/drive/${driverToken}/files/${files[0].id}`)).status, 200, 'водитель по ссылке видит документы рейса');
+  assert.equal((await stranger.call('GET', `/api/files/${files[0].id}`)).status, 404);
+  assert.equal((await client().call('GET', `/api/track/${trip.trackToken}`)).data.files, undefined, 'получателю по ссылке документы не показываются');
+  assert.ok((await customer.get('/api/notifications')).some((n) => n.title === 'Новый документ в рейсе: {route}'));
+});

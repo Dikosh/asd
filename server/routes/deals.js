@@ -5,6 +5,7 @@ import { cityById, haversine, ROAD_FACTOR } from '../geo.js';
 import * as L from '../lib.js';
 import { notify } from '../notify.js';
 import { rateLimit } from './auth.js';
+import { fileOut, fileSchema, saveFile, sendFile } from '../files.js';
 
 const { bad, parse, auth, staff } = L;
 
@@ -18,8 +19,8 @@ const staffOf = (companyId) => q(`SELECT id FROM users WHERE company_id = ? AND 
 const chatUsers = (chat) => [...staffOf(chat.owner_company), ...staffOf(chat.peer_company)];
 const tripUsers = (t) => [...usersOf(t.customer_company), ...usersOf(t.carrier_company)];
 
-function postMessage(chatId, sender, text) {
-  const id = insert('INSERT INTO messages(chat_id, sender_id, text) VALUES(?, ?, ?)', chatId, sender.id, text);
+function postMessage(chatId, sender, text, fileId = null) {
+  const id = insert('INSERT INTO messages(chat_id, sender_id, text, file_id) VALUES(?, ?, ?, ?)', chatId, sender.id, text, fileId);
   const chat = q1('SELECT * FROM chats WHERE id = ?', chatId);
   L.push(chatUsers(chat), 'message', { chatId, id });
   return id;
@@ -117,6 +118,8 @@ function tripOut(t, viewer, full = false, mode = 'party') {
   }
   if (full) {
     out.events = q('SELECT stage, at FROM trip_events WHERE trip_id = ? ORDER BY id', t.id);
+    // документы и фото рейса видят обе стороны и водитель; получателю по ссылке — нет
+    if (mode !== 'public') out.files = tripFiles(t.id);
     // трек прореживается до ~300 точек
     const track = q('SELECT lat, lon FROM positions WHERE trip_id = ? ORDER BY id', t.id);
     const step = Math.ceil(track.length / 300) || 1;
@@ -131,6 +134,22 @@ function tripOut(t, viewer, full = false, mode = 'party') {
     }
   }
   return out;
+}
+
+const tripFiles = (tripId) =>
+  // загрузил водитель по ссылке — подписываем его именем из рейса, иначе — сотрудником и компанией
+  q(`SELECT f.*, CASE WHEN f.by_driver_link THEN tr.driver_name ELSE COALESCE(u.name, '') || COALESCE(' · ' || c.name, '') END AS author
+     FROM files f JOIN trips tr ON tr.id = f.ref_id LEFT JOIN users u ON u.id = f.user_id LEFT JOIN companies c ON c.id = f.company_id
+     WHERE f.scope = 'trip' AND f.ref_id = ? ORDER BY f.id`, tripId).map(fileOut);
+const FILE_KIND_RU = { photo: 'фото', ttn: 'ТТН', cmr: 'CMR', act: 'акт', invoice: 'счёт', waybill: 'путевой лист', other: 'документ' };
+/** Файл в рейсе: сохранить и сообщить другой стороне. */
+function addTripFile(t, b, by) {
+  if (t.status !== 'active' && Date.now() - Date.parse(t.finished_at || L.now()) > 30 * 86400_000) throw bad('state', 'Рейс закрыт больше месяца назад — документы к нему уже не добавить', 409);
+  const id = saveFile(b, { scope: 'trip', refId: t.id, userId: by?.id ?? null, companyId: by?.company_id ?? t.carrier_company, byDriverLink: !by });
+  L.push(tripUsers(t), 'trip', { tripId: t.id });
+  const to = by?.company_id === t.customer_company ? t.carrier_company : t.customer_company;
+  notify(staffOf(to), { kind: 'trip', title: 'Новый документ в рейсе: {route}', vars: routeOf(t.listing_id), body: `${FILE_KIND_RU[b.kind] || 'документ'}: ${b.filename}`, link: `/trip/${t.id}` });
+  return id;
 }
 
 function tripOf(req) {
@@ -397,12 +416,16 @@ export default function dealRoutes(app) {
     if (changed) L.push(chatUsers(chat), 'read', { chatId: chat.id });
     res.json(
       q(
-        `SELECT m.id, m.sender_id AS senderId, u.name AS senderName, u.company_id AS companyId, m.text, m.is_read AS isRead, m.created_at AS createdAt
-         FROM messages m JOIN users u ON u.id = m.sender_id WHERE m.chat_id = ? ORDER BY m.id DESC LIMIT 300`,
+        `SELECT m.id, m.sender_id AS senderId, u.name AS senderName, u.company_id AS companyId, m.text, m.is_read AS isRead, m.created_at AS createdAt,
+           f.id AS f_id, f.filename AS f_name, f.mime AS f_mime, f.kind AS f_kind, f.size AS f_size
+         FROM messages m JOIN users u ON u.id = m.sender_id LEFT JOIN files f ON f.id = m.file_id WHERE m.chat_id = ? ORDER BY m.id DESC LIMIT 300`,
         chat.id,
       )
         .reverse()
-        .map((m) => ({ id: m.id, senderName: m.senderName, text: m.text, createdAt: m.createdAt, isRead: !!m.isRead, mine: m.companyId === req.user.company_id, me: m.senderId === req.user.id })),
+        .map((m) => ({
+          id: m.id, senderName: m.senderName, text: m.text, createdAt: m.createdAt, isRead: !!m.isRead, mine: m.companyId === req.user.company_id, me: m.senderId === req.user.id,
+          file: m.f_id ? { id: m.f_id, filename: m.f_name, mime: m.f_mime, kind: m.f_kind, size: m.f_size } : null,
+        })),
     );
   });
   app.post('/api/chats/:id/messages', auth, staff, (req, res) => {
@@ -414,7 +437,53 @@ export default function dealRoutes(app) {
     res.json({ id: postMessage(chat.id, req.user, text) });
   });
 
+  // файл в чате: фото груза, документы, реквизиты — сообщением со ссылкой на файл
+  app.post('/api/chats/:id/files', auth, staff, (req, res) => {
+    const chat = chatOf(req);
+    const b = parse(fileSchema, req.body);
+    rateLimit('file:' + req.user.id, 30, 3600_000, 'Слишком много файлов за час — попробуйте позже');
+    if (q1('SELECT 1 FROM blocks WHERE (company_id = :a AND blocked_id = :b) OR (company_id = :b AND blocked_id = :a)', { a: chat.owner_company, b: chat.peer_company }))
+      throw bad('blocked', 'Переписка недоступна: одна из компаний скрыла другую', 403);
+    const fileId = saveFile(b, { scope: 'chat', refId: chat.id, userId: req.user.id, companyId: req.user.company_id });
+    res.json({ id: postMessage(chat.id, req.user, `📎 ${b.filename}`, fileId), fileId });
+  });
+  // Просмотр файла — только участникам чата или рейса (водителю из команды — только своего рейса).
+  app.get('/api/files/:id', auth, (req, res) => {
+    const f = q1('SELECT * FROM files WHERE id = ?', Number(req.params.id));
+    const deny = () => bad('not_found', 'Файл не найден', 404);
+    if (!f) throw deny();
+    if (f.scope === 'chat') {
+      const chat = q1('SELECT * FROM chats WHERE id = ?', f.ref_id);
+      if (!chat || req.user.company_role === 'driver' || (chat.owner_company !== req.user.company_id && chat.peer_company !== req.user.company_id)) throw deny();
+    } else {
+      const t = q1('SELECT * FROM trips WHERE id = ?', f.ref_id);
+      if (!t || (t.customer_company !== req.user.company_id && t.carrier_company !== req.user.company_id)) throw deny();
+      if (req.user.company_role === 'driver' && t.driver_user !== req.user.id) throw deny();
+    }
+    sendFile(res, f);
+  });
+
   // ---------- рейсы ----------
+  app.post('/api/trips/:id/files', auth, (req, res) => {
+    const t = tripOf(req);
+    const b = parse(fileSchema, req.body);
+    rateLimit('file:' + req.user.id, 30, 3600_000, 'Слишком много файлов за час — попробуйте позже');
+    res.json({ id: addTripFile(t, b, req.user) });
+  });
+  // водитель по ссылке: фото груза при погрузке, подписанная ТТН при выгрузке
+  app.post('/api/drive/:token/files', (req, res) => {
+    const t = tripByDriverToken(req);
+    const b = parse(fileSchema, req.body);
+    rateLimit('file:drive:' + t.id, 30, 3600_000, 'Слишком много файлов за час — попробуйте позже');
+    res.json({ id: addTripFile(t, b, null) });
+  });
+  app.get('/api/drive/:token/files/:fid', (req, res) => {
+    const t = tripByDriverToken(req);
+    const f = q1(`SELECT * FROM files WHERE id = ? AND scope = 'trip' AND ref_id = ?`, Number(req.params.fid), t.id);
+    if (!f) throw bad('not_found', 'Файл не найден', 404);
+    sendFile(res, f);
+  });
+
   app.get('/api/trips', auth, (req, res) => {
     // водитель из команды видит только свои рейсы
     const driver = req.user.company_role === 'driver';

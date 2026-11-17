@@ -14,7 +14,7 @@ import { loadRates } from './rates.js';
 import { seed } from './seed.js';
 
 // Что может менять водитель из команды: вести рейс и свои личные настройки. Остальное — сотрудники и владелец.
-const DRIVER_WRITE = [/^\/trips\/\d+\/(stage|gps|position)$/, /^\/notifications\/read$/, /^\/push\//, /^\/me$/, /^\/auth\//, /^\/feedback$/, /^\/team\/accept$/];
+const DRIVER_WRITE = [/^\/trips\/\d+\/(stage|gps|position|files)$/, /^\/notifications\/read$/, /^\/push\//, /^\/me$/, /^\/auth\//, /^\/feedback$/, /^\/team\/accept$/];
 const DRIVER_HIDDEN = [/^\/balance/, /^\/documents/, /^\/responses/, /^\/chats/, /^\/vehicles/, /^\/employees/, /^\/partners/, /^\/blocks/];
 
 export function createApp() {
@@ -35,7 +35,7 @@ export function createApp() {
     next();
   });
   // большое тело запроса нужно только для загрузки документа
-  app.use('/api/documents', express.json({ limit: '8mb' }));
+  app.use(/^\/api\/(documents|chats\/\d+\/files|trips\/\d+\/files|drive\/[^/]+\/files)$/, express.json({ limit: '8mb' }));
   app.use(express.json({ limit: '100kb' }));
   app.use('/api', loadUser, (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');

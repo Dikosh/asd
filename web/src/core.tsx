@@ -45,7 +45,13 @@ export interface Trip {
   myRole?: 'customer' | 'carrier'; trackToken?: string; reviewed?: boolean; chatId?: number | null;
   confirmed: boolean; vehicle: { brand: string; plate: string; trailerPlate: string; bodyType: string | null };
   driver?: { userId: number | null; name: string; phone: string }; loadAddress?: string; unloadAddress?: string; loadTime?: string;
+  files?: TripFile[];
   events?: { stage: string; at: string }[]; track?: [number, number][]; reviews?: { rating: number; text: string; author: string; createdAt: string }[];
+}
+
+/** Файл рейса или чата: фото груза, ТТН, CMR и т. п. */
+export interface TripFile {
+  id: number; kind: string; filename: string; mime: string; size: number; note: string; createdAt: string; author: string; byDriverLink: boolean; companyId: number | null;
 }
 
 // ---------- API ----------
@@ -213,6 +219,38 @@ export const DOC_L: Record<string, string> = {
   id_card: 'Удостоверение личности', selfie: 'Фото с удостоверением в руках', registration: 'Свидетельство о регистрации', license: 'Лицензия', customs_license: 'Свидетельство таможенного представителя', driver_license: 'Водительские права', other: 'Другое',
 };
 export const CUR: Record<string, string> = { KZT: '₸', USD: '$', RUB: '₽' };
+export const FILE_KIND_L: Record<string, string> = {
+  photo: 'Фото груза', ttn: 'ТТН', cmr: 'CMR', act: 'Акт выполненных работ', invoice: 'Счёт', waybill: 'Путевой лист', other: 'Другой документ',
+};
+
+/**
+ * Подготовить файл к отправке: фото с телефона уменьшаются до 2000 px и пересжимаются в JPEG —
+ * так они весят в несколько раз меньше и быстрее уходят по мобильному интернету. PDF отправляется как есть.
+ */
+export async function prepareUpload(f: File): Promise<{ filename: string; mime: string; data: string }> {
+  const asBase64 = (blob: Blob) => new Promise<string>((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(String(r.result).split(',')[1]);
+    r.onerror = () => rej(new Error(t('Не удалось прочитать файл')));
+    r.readAsDataURL(blob);
+  });
+  if (f.type.startsWith('image/') && f.type !== 'image/gif') {
+    try {
+      const img = await createImageBitmap(f);
+      const k = Math.min(1, 2000 / Math.max(img.width, img.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.round(img.width * k);
+      canvas.height = Math.round(img.height * k);
+      canvas.getContext('2d')!.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const blob = await new Promise<Blob | null>((res) => canvas.toBlob(res, 'image/jpeg', 0.82));
+      if (blob && blob.size < f.size) return { filename: f.name.replace(/\.[^.]+$/, '') + '.jpg', mime: 'image/jpeg', data: await asBase64(blob) };
+    } catch {
+      /* браузер не умеет пересжимать этот формат — отправим как есть */
+    }
+  }
+  if (f.size > 5 * 1024 * 1024) throw new Error(t('Файл больше 5 МБ'));
+  return { filename: f.name, mime: f.type, data: await asBase64(f) };
+}
 export const opts = (keys: string[], labels: Record<string, string>) => keys.map((k) => ({ value: k, label: t(labels[k] || k) }));
 
 /** Название места на текущем языке интерфейса. */

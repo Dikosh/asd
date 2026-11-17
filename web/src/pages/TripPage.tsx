@@ -2,9 +2,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
-  ArrowLeft, Check, Clock, Copy, FileText, MapPin, MessageSquare, Navigation, Phone, Play, RefreshCw, Share2, Smartphone, Square, TriangleAlert, Truck, User, WifiOff,
+  ArrowLeft, Camera, Check, Clock, Copy, FileText, MapPin, MessageSquare, Navigation, Paperclip, Phone, Play, RefreshCw, Share2, Smartphone, Square, TriangleAlert, Truck, User, WifiOff,
 } from 'lucide-react';
-import { api, BODY_L, CARGO_L, fmtDates, fmtWhen, LOADING_L, money, num, STAGE_L, t, Trip, useApp, useEvent, useLoad, waLink } from '../core';
+import { api, BODY_L, CARGO_L, FILE_KIND_L, fmtDates, fmtWhen, LOADING_L, money, num, opts, prepareUpload, STAGE_L, t, Trip, useApp, useEvent, useLoad, waLink } from '../core';
 import { Empty, Field, Loading, Logo, MapMarker, MapRoute, MapView, Modal, Select, Stars } from '../ui';
 import { ContactButtons, RouteTitle } from '../listing';
 
@@ -216,6 +216,57 @@ function Addresses({ trip }: { trip: Trip }) {
   );
 }
 
+/**
+ * Документы и фото рейса: ТТН, CMR, акты, фото груза. Видят обе стороны и водитель; удалить нельзя —
+ * это подтверждение для обеих сторон. base — адрес API рейса (/trips/5 или /drive/<ссылка>).
+ */
+function TripFiles({ trip, base, onDone, driverLink = false }: { trip: Trip; base: string; onDone: () => void; driverLink?: boolean }) {
+  const { act } = useApp();
+  const [kind, setKind] = useState(driverLink ? 'photo' : 'ttn');
+  const [busy, setBusy] = useState(false);
+  const input = useRef<HTMLInputElement>(null);
+  const files = trip.files || [];
+  const canAdd = trip.status === 'active' || (!!trip.finishedAt && Date.now() - Date.parse(trip.finishedAt) < 30 * 86400_000);
+  const url = (id: number) => (driverLink ? `/api${base}/files/${id}` : `/api/files/${id}`);
+  const upload = async (f: File) => {
+    setBusy(true);
+    const ok = await act(async () => api(`${base}/files`, 'POST', { kind, ...(await prepareUpload(f)) }), t('Файл добавлен'));
+    setBusy(false);
+    if (input.current) input.current.value = '';
+    if (ok) onDone();
+  };
+  const kinds = Object.keys(FILE_KIND_L);
+  return (
+    <div className="card stack-s">
+      <b><Paperclip size={16} /> {t('Документы и фото')}{files.length > 0 && <span className="muted"> · {files.length}</span>}</b>
+      {files.length === 0 && <p className="muted small">{driverLink ? t('Сфотографируйте груз при погрузке и подписанную ТТН при выгрузке — заказчик сразу их увидит.') : t('ТТН, CMR, акты и фото груза в одном месте: их видят обе стороны и водитель.')}</p>}
+      {files.length > 0 && (
+        <div className="file-grid">
+          {files.map((f) => (
+            <a key={f.id} href={url(f.id)} target="_blank" rel="noreferrer" className="file-item">
+              {f.mime.startsWith('image/') ? <img src={url(f.id)} alt={f.filename} loading="lazy" /> : <span className="file-icon"><FileText size={26} /></span>}
+              <span className="file-meta">
+                <b>{t(FILE_KIND_L[f.kind] || f.kind)}</b>
+                <span className="muted small">{f.byDriverLink ? `${t('Водитель')}${f.author ? ` ${f.author}` : ''}` : f.author} · {fmtWhen(f.createdAt)}</span>
+              </span>
+            </a>
+          ))}
+        </div>
+      )}
+      {canAdd && (
+        <div className="row wrap">
+          <div className="grow"><Select value={kind} onChange={setKind} options={opts(kinds, FILE_KIND_L)} /></div>
+          <label className={`btn primary ${busy ? 'disabled' : ''}`}>
+            {kind === 'photo' ? <Camera size={16} /> : <Paperclip size={16} />} {busy ? t('Отправляем…') : t('Добавить файл')}
+            <input ref={input} type="file" hidden accept="image/*,application/pdf" disabled={busy} onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])} />
+          </label>
+        </div>
+      )}
+      {canAdd && <p className="muted small">{t('Фото, PDF до 5 МБ. Добавленные файлы удалить нельзя — это подтверждение для обеих сторон.')}</p>}
+    </div>
+  );
+}
+
 type Vehicle = { id: number; brand: string; plate: string };
 type Member = { id: number; name: string; phone: string; companyRole: string };
 type Employee = { id: number; name: string; phone: string; position: string };
@@ -385,6 +436,7 @@ export default function TripPage() {
           </div>
           <div className="card map-card"><MapView routes={map.routes} markers={map.markers} height={380} fitKey={String(trip.id)} /></div>
           <div className="card"><StageBar trip={trip} /></div>
+          <TripFiles trip={trip} base={`/trips/${trip.id}`} onDone={reload} />
         </div>
 
         <aside className="stack">
@@ -656,6 +708,7 @@ export function DrivePage() {
               <a className="btn soft block" href={`tel:${trip.customer.phone}`}><Phone size={16} /> {trip.customer.phone}</a>
             </div>
           )}
+          {trip.confirmed && <TripFiles trip={trip} base={`/drive/${token}`} onDone={reload} driverLink />}
           <div className="card map-card"><MapView routes={map.routes} markers={map.markers} height={300} fitKey={String(trip.id)} /></div>
           <div className="card"><StageBar trip={trip} /></div>
         </div>

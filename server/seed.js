@@ -268,7 +268,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       process.exit(1);
     }
     db.exec('PRAGMA foreign_keys=OFF;');
-    for (const t of ['route_cache', 'feedback', 'news', 'push_subs', 'notifications', 'complaints', 'partners', 'blocks', 'listing_views', 'invites', 'transactions', 'jobs', 'blacklist', 'reviews', 'positions', 'trip_events', 'trips', 'messages', 'chats', 'responses', 'searches', 'marks', 'listings', 'employees', 'vehicles', 'documents', 'otps', 'sessions', 'users', 'companies'])
+    for (const t of ['files', 'route_cache', 'feedback', 'news', 'push_subs', 'notifications', 'complaints', 'partners', 'blocks', 'listing_views', 'invites', 'transactions', 'jobs', 'blacklist', 'reviews', 'positions', 'trip_events', 'trips', 'messages', 'chats', 'responses', 'searches', 'marks', 'listings', 'employees', 'vehicles', 'documents', 'otps', 'sessions', 'users', 'companies'])
       db.exec(`DELETE FROM ${t}`);
     db.exec('PRAGMA foreign_keys=ON;');
   }

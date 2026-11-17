@@ -149,6 +149,13 @@ addColumn('trips', 'trailer_plate', `TEXT NOT NULL DEFAULT ''`);
 addColumn('trips', 'driver_user', 'INTEGER');
 addColumn('trips', 'driver_name', `TEXT NOT NULL DEFAULT ''`);
 addColumn('trips', 'driver_phone', `TEXT NOT NULL DEFAULT ''`);
+// файлы в чате и рейсе (фото груза, ТТН, CMR, акты): scope = 'chat' | 'trip', ref_id — id чата или рейса
+db.exec(`CREATE TABLE IF NOT EXISTS files(
+  id INTEGER PRIMARY KEY, scope TEXT NOT NULL, ref_id INTEGER NOT NULL, user_id INTEGER, company_id INTEGER, kind TEXT NOT NULL DEFAULT 'other',
+  filename TEXT NOT NULL, mime TEXT NOT NULL, path TEXT NOT NULL, size INTEGER NOT NULL DEFAULT 0, note TEXT NOT NULL DEFAULT '',
+  by_driver_link INTEGER NOT NULL DEFAULT 0, created_at ${TS});
+CREATE INDEX IF NOT EXISTS files_ref ON files(scope, ref_id);`);
+addColumn('messages', 'file_id', 'INTEGER');
 // рейсы, созданные до появления подтверждения, считаются подтверждёнными — их не останавливаем
 if (addColumn('trips', 'confirmed_at', 'TEXT')) db.exec('UPDATE trips SET confirmed_at = created_at');
 db.exec(`

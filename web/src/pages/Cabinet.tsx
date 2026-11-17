@@ -2,10 +2,10 @@
 import { ReactNode, useEffect, useRef, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import {
-  ArrowLeft, BadgeCheck, Ban, Bookmark, Briefcase, Building2, Calculator, ChevronRight, FileText, Handshake, Inbox, LifeBuoy, LogOut, MessageSquare, Pencil, Plus,
+  ArrowLeft, BadgeCheck, Ban, Bookmark, Briefcase, Building2, Calculator, ChevronRight, FileText, Handshake, Inbox, LifeBuoy, LogOut, MessageSquare, Paperclip, Pencil, Plus,
   Route as RouteIcon, Search, Send, Settings, ShieldCheck, Trash2, TrendingUp, Truck, Upload, UserRound, Users, UsersRound, Wallet,
 } from 'lucide-react';
-import { api, BODY_L, Company, DOC_L, fmtDate, fmtWhen, LOADING_L, Me, money, num, opts, ROLE_L, t, Trip, useApp, useEvent, useLoad } from '../core';
+import { api, BODY_L, Company, DOC_L, fmtDate, fmtWhen, LOADING_L, Me, money, num, opts, prepareUpload, ROLE_L, t, Trip, useApp, useEvent, useLoad } from '../core';
 import { Chips, CitySelect, CompanyBadge, Empty, Field, LangSwitch, Loading, Modal, Select, Tabs, ReasonModal } from '../ui';
 import { TripSummary } from './TripPage';
 import { ContactButtons } from '../listing';
@@ -252,6 +252,13 @@ function Messages({ chatId }: { chatId: number | null }) {
     setText('');
     if (!(await act(() => api(`/chats/${chatId}/messages`, 'POST', { text: body })))) setText(body);
   };
+  // фото груза, техпаспорт, реквизиты — файлом прямо в переписку
+  const [sending, setSending] = useState(false);
+  const attach = async (f: File) => {
+    setSending(true);
+    await act(async () => api(`/chats/${chatId}/files`, 'POST', await prepareUpload(f)));
+    setSending(false);
+  };
   return (
     <div className={`chat-layout ${chatId ? 'open' : ''}`}>
       <div className="card chat-list">
@@ -283,13 +290,21 @@ function Messages({ chatId }: { chatId: number | null }) {
               <div key={m.id} className={`msg ${m.mine ? 'mine' : ''}`}>
                 {/* чат общий для компании: подписываем, кто из коллег или партнёров написал */}
                 {!m.me && <b className="msg-author">{m.senderName}</b>}
-                <p>{m.text}</p>
+                {m.file ? (
+                  m.file.mime.startsWith('image/')
+                    ? <a className="msg-file" href={`/api/files/${m.file.id}`} target="_blank" rel="noreferrer"><img src={`/api/files/${m.file.id}`} alt={m.file.filename} loading="lazy" /></a>
+                    : <a className="msg-file doc" href={`/api/files/${m.file.id}`} target="_blank" rel="noreferrer"><FileText size={16} /> {m.file.filename}</a>
+                ) : <p>{m.text}</p>}
                 <span>{fmtWhen(m.createdAt)}{m.mine && (m.isRead ? ' ✓✓' : ' ✓')}</span>
               </div>
             ))}
             <div ref={end} />
           </div>
           <form className="chat-input" onSubmit={(e) => { e.preventDefault(); send(); }}>
+            <label className={`icon-btn attach ${sending ? 'disabled' : ''}`} aria-label={t('Прикрепить фото или документ')} title={t('Прикрепить фото или документ')}>
+              <Paperclip size={19} />
+              <input type="file" hidden accept="image/*,application/pdf" disabled={sending} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) attach(f); }} />
+            </label>
             <input value={text} onChange={(e) => setText(e.target.value)} placeholder={t('Напишите сообщение…')} maxLength={2000} autoFocus />
             <button className="btn primary" disabled={!text.trim()} aria-label={t('Отправить')}><Send size={17} /></button>
           </form>
