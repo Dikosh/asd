@@ -17,12 +17,17 @@ export interface Listing {
   user: { id: number; name: string; phone: string | null }; mine: boolean; mark: { marked: boolean; note: string; hidden: boolean };
   adrClass: number | null; flags: string[]; views: number; partner: boolean; blocked: boolean; countries: string[];
   responsesCount: number; myResponse: { id: number; status: string } | null; match?: { score: number; detourKm: number }; detourKm?: number;
+  trucks: number; booked: number; full: boolean; loadAddress: string; unloadAddress: string; loadTime: string;
+}
+/** Рейс по объявлению — в карточке объявления (у груза на несколько машин их несколько). */
+export interface ListingTrip {
+  id: number; status: string; stage: string; plate: string; vehicleBrand: string; driverName: string; confirmed: boolean; carrierName: string; customerName: string;
 }
 export interface Me {
   user: { id: number; name: string; phone: string; email: string; role: string; isAdmin: boolean; companyRole: string; settings: Record<string, any> };
   company: Company & { bin: string | null; binValid: boolean; about: string; cityId: string | null; balance: number; planUntil: string | null; verifyNote: string; banned?: boolean; banReason?: string };
   counters: { notifications: number; unread: number; responses: number; trips: number };
-  pendingReviews: { tripId: number; companyName: string }[];
+  pendingReviews: { tripId: number; companyName: string; finishedAt: string }[];
 }
 export interface Meta {
   demo: boolean; cities: City[]; roles: string[]; body: string[]; cargo: string[]; loading: string[]; pay: string[]; currencies: string[];
@@ -38,6 +43,8 @@ export interface Trip {
   dateFrom?: string; dateTo?: string; description?: string; loading?: string[]; payTerms?: string[]; brand?: string;
   position: { lat: number; lon: number; speed: number | null; at: string } | null; remainingKm: number | null; etaHours: number | null;
   myRole?: 'customer' | 'carrier'; trackToken?: string; reviewed?: boolean; chatId?: number | null;
+  confirmed: boolean; vehicle: { brand: string; plate: string; trailerPlate: string; bodyType: string | null };
+  driver?: { userId: number | null; name: string; phone: string }; loadAddress?: string; unloadAddress?: string; loadTime?: string;
   events?: { stage: string; at: string }[]; track?: [number, number][]; reviews?: { rating: number; text: string; author: string; createdAt: string }[];
 }
 

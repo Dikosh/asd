@@ -2,7 +2,7 @@
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import path from 'node:path';
-import { db, q1, run, insert, tx, UPLOAD_DIR } from './db.js';
+import { db, q, q1, run, insert, tx, UPLOAD_DIR } from './db.js';
 import { cityById, roadKm, isValidBin } from './geo.js';
 import { token } from './lib.js';
 
@@ -109,6 +109,9 @@ export function seed() {
     run(`INSERT INTO employees(company_id, name, phone, position, license_cats, experience, esutd, esutd_number) VALUES
       (?, 'Марат Кенжебеков', '+77015550201', 'Водитель', 'C, CE', 12, 'registered', 'ТД-2024-00417'),
       (?, 'Олжас Берик', '+77015550202', 'Водитель', 'C, CE', 5, 'unknown', '')`, comp['Жумабаев Транс'], comp['Жумабаев Транс']);
+    // водитель из команды перевозчика: входит в приложение и видит только свои рейсы (демо-вход «Водитель»)
+    const teamDriver = insert(`INSERT INTO users(name, phone, email, role, company_id, company_role, is_demo, accepted_terms) VALUES(?, ?, '', 'driver', ?, 'driver', 1, ?)`,
+      'Марат Кенжебеков', '+77015550201', comp['Жумабаев Транс'], ago(300));
 
     // ---- объявления ----
     const addListing = (kind, owner, points, o = {}) => {
@@ -186,11 +189,14 @@ export function seed() {
     const live = addListing('cargo', A, ['astana', 'karaganda', 'almaty'], { cargo: 'food', body: 'ref', weight: 18, volume: 82, rate: 520000, dateFrom: day(-1), dateTo: day(3), from: 0, description: 'Молочная продукция, температурный режим +2…+6 °C. Выгрузка в Караганде 4 паллеты.', createdAt: ago(40) });
     const r1 = insert(`INSERT INTO responses(listing_id, user_id, company_id, message, price, status, created_at) VALUES(?, ?, ?, 'Реф свободен, могу встать на загрузку завтра утром.', 500000, 'accepted', ?)`, live, user[B], comp[B], ago(30));
     chat(live, A, B, [[B, 'Реф свободен, могу встать на загрузку завтра утром.\n— 500000 KZT'], [A, 'Добрый день! Подходит. Режим +2…+6, термописец есть?'], [B, 'Да, есть, распечатку дам на выгрузке.'], [A, 'Отлично, принимаю отклик.'], [B, 'Загрузился, выехал из Астаны.']]);
+    run(`UPDATE listings SET load_address = 'Астана, ул. Жетиген 37, склад №4', unload_address = 'Алматы, ул. Рыскулова 103, ворота 2', load_time = '8:00–11:00' WHERE id = ?`, live);
     const trip = insert(
-      `INSERT INTO trips(listing_id, response_id, customer_user, customer_company, carrier_user, carrier_company, price, stage, share_gps, track_token, driver_token, created_at)
-       VALUES(?, ?, ?, ?, ?, ?, 500000, 'in_transit', 1, 'demo-track-jolda', 'demo-drive-jolda', ?)`,
-      live, r1, user[A], comp[A], user[B], comp[B], ago(28),
+      `INSERT INTO trips(listing_id, response_id, customer_user, customer_company, carrier_user, carrier_company, price, stage, share_gps, track_token, driver_token, created_at,
+         vehicle_brand, plate, trailer_plate, driver_user, driver_name, driver_phone, confirmed_at)
+       VALUES(?, ?, ?, ?, ?, ?, 500000, 'in_transit', 1, 'demo-track-jolda', 'demo-drive-jolda', ?, 'Volvo FH', '725 ABA 09', '31 AFB 09', ?, 'Марат Кенжебеков', '+77015550201', ?)`,
+      live, r1, user[A], comp[A], user[B], comp[B], ago(28), teamDriver, ago(27),
     );
+    run('UPDATE trips SET terms = ? WHERE id = ?', JSON.stringify(q1('SELECT points, cargo_type, body_type, weight, volume, distance_km, date_from, date_to, description, loading, pay_terms, brand, load_address, unload_address, load_time FROM listings WHERE id = ?', live)), trip);
     [['planned', 28], ['to_loading', 20], ['loading', 16], ['in_transit', 13]].forEach(([st, hh]) => run('INSERT INTO trip_events(trip_id, stage, at) VALUES(?, ?, ?)', trip, st, ago(hh)));
     // трек: Астана → Караганда → в сторону Балхаша
     const way = [[51.17, 71.43], [50.75, 72.0], [50.3, 72.6], [49.8, 73.1], [49.2, 73.5], [48.6, 73.9], [48.0, 74.3], [47.5, 74.7]];
@@ -214,6 +220,15 @@ export function seed() {
     chat(truck1, B, 'Алатау Агро', [['Алатау Агро', 'Есть 12 т фруктов из Алматы в Караганду, реф обязателен.\n— 300 000 ₸']]);
     addListing('cargo', 'Silk Way Logistics', ['urumqi', 'khorgos', 'almaty'], { cargo: 'consumer', body: 'container', weight: 22, volume: 76, rate: 1450000, from: 2, description: 'Контейнер 40HC, электроника. Нужен брокер на Хоргосе.', createdAt: ago(4), flags: ['cmr', 'customs'] });
     addListing('truck', 'Silk Way Logistics', ['almaty', 'astana'], { brand: 'MAN TGX', body: 'tent', weight: 22, volume: 92, rate: 400000, from: 1, createdAt: ago(6) });
+    // груз на несколько машин: каждая машина — отдельный рейс
+    const grain = addListing('cargo', 'Алатау Агро', ['kostanay', 'astana'], { cargo: 'agro', body: 'grain', weight: 22, volume: 60, rate: 330000, from: 1, description: 'Пшеница 3 класса насыпью, 66 т — нужно три зерновоза. Погрузка с элеватора.', createdAt: ago(7) });
+    run(`UPDATE listings SET trucks = 3, load_address = 'Костанай, элеватор «Береке», ул. Промышленная 12', unload_address = 'Астана, мелькомбинат, ул. Сарыарка 5', load_time = '7:00–15:00' WHERE id = ?`, grain);
+    // история рейсов: машина и водитель указаны, рейсы считаются подтверждёнными
+    for (const t of q('SELECT id, carrier_company FROM trips WHERE confirmed_at IS NULL')) {
+      const v = q1('SELECT brand, plate FROM vehicles WHERE company_id = ? ORDER BY random() LIMIT 1', t.carrier_company) || { brand: 'DAF XF 105', plate: '512 KZT 02' };
+      run(`UPDATE trips SET vehicle_brand = ?, plate = ?, driver_name = ?, driver_phone = ?, confirmed_at = created_at WHERE id = ?`,
+        v.brand, v.plate, pick(['Ерболат Нуртаев', 'Алексей Ким', 'Даурен Сейткали', 'Нурсултан Жаксыбеков']), `+7701${int(1000000, 9999999)}`, t.id);
+    }
     run(`INSERT INTO searches(user_id, kind, name, params, notify) VALUES(?, 'cargo', 'Алматы → Астана, реф', ?, 1)`, user[B], JSON.stringify({ from: 'almaty', to: 'astana', body: 'ref', radius: '100' }));
     run('INSERT INTO partners(company_id, partner_id) VALUES(?, ?), (?, ?)', comp[A], comp[B], comp[B], comp[A]);
     run(`INSERT INTO notifications(user_id, kind, title, body, link, vars, created_at) VALUES

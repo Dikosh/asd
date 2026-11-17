@@ -227,12 +227,19 @@ export const COMPANY_COLS = (a, p) =>
   ['name', 'form', 'kind', 'verified', 'rating', 'reviews', 'reviewers', 'trips', 'bl', 'pro', 'banned'].map((k) => `${a}.${k} AS ${p}${k}`).join(', ');
 
 // ---------- объявления ----------
+/**
+ * Сколько машин по объявлению уже найдено: идущие и завершённые рейсы. Отменённый рейс место освобождает.
+ * Объявление принимает отклики, пока найдено меньше машин, чем нужно (listings.trucks).
+ */
+export const BOOKED = (a) => `(SELECT COUNT(*) FROM trips t WHERE t.listing_id = ${a}.id AND t.status IN ('active', 'completed'))`;
 const LISTING_SQL = `
 SELECT l.*, u.name AS user_name, u.phone AS user_phone, COALESCE(json_extract(u.settings, '$.showPhone'), 1) AS user_show_phone, ${COMPANY_COLS('cs', 'c_')},
   m.marked AS m_marked, m.note AS m_note, m.hidden AS m_hidden,
   (SELECT COUNT(*) FROM responses r WHERE r.listing_id = l.id AND r.status IN ('sent', 'accepted')) AS responses_count,
   (SELECT r.id || ':' || r.status FROM responses r WHERE r.listing_id = l.id AND r.user_id = :viewer ORDER BY r.id DESC LIMIT 1) AS my_response,
-  (SELECT t.id FROM trips t WHERE t.listing_id = l.id AND t.status = 'active' LIMIT 1) AS trip_id,
+  (SELECT t.id FROM trips t WHERE t.listing_id = l.id AND t.status = 'active' AND (t.customer_company = :viewerCompany OR t.carrier_company = :viewerCompany)
+    ORDER BY t.id DESC LIMIT 1) AS trip_id,
+  ${BOOKED('l')} AS booked,
   EXISTS (SELECT 1 FROM partners p WHERE p.company_id = :viewerCompany AND p.partner_id = l.company_id) AS is_partner,
   EXISTS (SELECT 1 FROM blocks b WHERE b.company_id = :viewerCompany AND b.blocked_id = l.company_id) AS is_blocked
 FROM listings l
@@ -279,6 +286,13 @@ export function listingOut(r, viewer) {
     boosted: !!r.boosted_until && r.boosted_until > now(),
     createdAt: r.created_at,
     tripId: r.trip_id || null,
+    trucks: r.trucks,
+    booked: r.booked,
+    // все машины найдены — отклики больше не принимаются
+    full: r.booked >= r.trucks,
+    loadAddress: r.load_address,
+    unloadAddress: r.unload_address,
+    loadTime: r.load_time,
     company: companyOut(r, 'c_'),
     // владелец может скрыть телефон в настройках — тогда связь только через отклик и чат
     user: { id: r.user_id, name: r.user_name, phone: mine || r.user_show_phone ? r.user_phone : null },
@@ -290,9 +304,11 @@ export function listingOut(r, viewer) {
 }
 
 // ---------- профиль ----------
+// на отзыв даётся трое суток после рейса: сразу работу не блокируем
+export const REVIEW_GRACE_HOURS = 72;
 export function pendingReviews(user) {
   return q(
-    `SELECT t.id AS tripId, c.name AS companyName FROM trips t
+    `SELECT t.id AS tripId, c.name AS companyName, t.finished_at AS finishedAt FROM trips t
      JOIN companies c ON c.id = CASE WHEN t.customer_company = :c THEN t.carrier_company ELSE t.customer_company END
      WHERE t.status = 'completed' AND (t.customer_company = :c OR t.carrier_company = :c)
        AND NOT EXISTS (SELECT 1 FROM reviews r WHERE r.trip_id = t.id AND r.author_company = :c)`,
@@ -300,7 +316,9 @@ export function pendingReviews(user) {
   );
 }
 export function requireNoPendingReviews(user) {
-  if (user.company_role !== 'driver' && pendingReviews(user).length) throw bad('review_required', 'Сначала оставьте отзыв о завершённом рейсе', 409);
+  if (user.company_role === 'driver') return;
+  const limit = new Date(Date.now() - REVIEW_GRACE_HOURS * 3600_000).toISOString();
+  if (pendingReviews(user).some((r) => r.finishedAt < limit)) throw bad('review_required', 'Сначала оставьте отзыв о завершённом рейсе', 409);
 }
 export function meOut(user) {
   const c = q1('SELECT cs.*, c.balance, c.plan_until, c.verify_note, c.ban_reason FROM company_stats cs JOIN companies c ON c.id = cs.id WHERE cs.id = ?', user.company_id);
@@ -327,9 +345,10 @@ export function meOut(user) {
         `SELECT COUNT(*) AS n FROM responses r JOIN listings l ON l.id = r.listing_id WHERE l.company_id = ? AND r.status = 'sent'`,
         user.company_id,
       ).n,
-      trips: q1(`SELECT COUNT(*) AS n FROM trips WHERE status = 'active' AND (customer_company = :c OR carrier_company = :c)`, {
-        c: user.company_id,
-      }).n,
+      // водителю из команды — только рейсы, на которые его назначили
+      trips: user.company_role === 'driver'
+        ? q1(`SELECT COUNT(*) AS n FROM trips WHERE status = 'active' AND driver_user = ?`, user.id).n
+        : q1(`SELECT COUNT(*) AS n FROM trips WHERE status = 'active' AND (customer_company = :c OR carrier_company = :c)`, { c: user.company_id }).n,
     },
     // отзыв о партнёре оставляет тот, кто ведёт сделки, — водителя из команды не блокируем
     pendingReviews: user.company_role === 'driver' ? [] : pendingReviews(user),

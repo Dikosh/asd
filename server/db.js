@@ -100,8 +100,11 @@ CREATE TABLE IF NOT EXISTS news(
 CREATE TABLE IF NOT EXISTS feedback(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', created_at ${TS});
 CREATE TABLE IF NOT EXISTS route_cache(key TEXT PRIMARY KEY, km INTEGER NOT NULL, geometry TEXT NOT NULL, created_at ${TS});
 `);
+/** Добавить столбец, если его ещё нет. true — столбец только что добавлен. */
 function addColumn(table, column, definition) {
-  if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  if (db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column)) return false;
+  db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  return true;
 }
 addColumn('notifications', 'vars', `TEXT NOT NULL DEFAULT '{}'`);
 addColumn('users', 'company_role', `TEXT NOT NULL DEFAULT 'owner'`);
@@ -131,6 +134,23 @@ addColumn('invites', 'user_id', 'INTEGER');
 // чат принадлежит двум компаниям: его видят все их сотрудники
 addColumn('chats', 'owner_company', 'INTEGER');
 addColumn('chats', 'peer_company', 'INTEGER');
+// заявка: сколько машин нужно, точные адреса и время погрузки
+addColumn('listings', 'trucks', 'INTEGER NOT NULL DEFAULT 1');
+addColumn('listings', 'load_address', `TEXT NOT NULL DEFAULT ''`);
+addColumn('listings', 'unload_address', `TEXT NOT NULL DEFAULT ''`);
+addColumn('listings', 'load_time', `TEXT NOT NULL DEFAULT ''`);
+// отклик: сколько машин предлагают и какая машина из парка
+addColumn('responses', 'trucks', 'INTEGER NOT NULL DEFAULT 1');
+addColumn('responses', 'vehicle_id', 'INTEGER');
+// рейс: машина и водитель, которых назначил перевозчик; без подтверждения рейс не начинается
+addColumn('trips', 'vehicle_brand', `TEXT NOT NULL DEFAULT ''`);
+addColumn('trips', 'plate', `TEXT NOT NULL DEFAULT ''`);
+addColumn('trips', 'trailer_plate', `TEXT NOT NULL DEFAULT ''`);
+addColumn('trips', 'driver_user', 'INTEGER');
+addColumn('trips', 'driver_name', `TEXT NOT NULL DEFAULT ''`);
+addColumn('trips', 'driver_phone', `TEXT NOT NULL DEFAULT ''`);
+// рейсы, созданные до появления подтверждения, считаются подтверждёнными — их не останавливаем
+if (addColumn('trips', 'confirmed_at', 'TEXT')) db.exec('UPDATE trips SET confirmed_at = created_at');
 db.exec(`
 UPDATE chats SET owner_company = (SELECT company_id FROM users WHERE id = chats.owner_id) WHERE owner_company IS NULL;
 UPDATE chats SET peer_company = (SELECT company_id FROM users WHERE id = chats.peer_id) WHERE peer_company IS NULL;
@@ -139,6 +159,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS trips_driver_token ON trips(driver_token);
 CREATE INDEX IF NOT EXISTS listings_company ON listings(company_id, status);
 CREATE INDEX IF NOT EXISTS responses_listing ON responses(listing_id, status);
 CREATE INDEX IF NOT EXISTS trips_listing ON trips(listing_id, status);
+CREATE INDEX IF NOT EXISTS trips_driver ON trips(driver_user, status);
 CREATE INDEX IF NOT EXISTS reviews_target ON reviews(target_company);
 `);
 

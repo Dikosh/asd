@@ -2,10 +2,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
-  ArrowLeft, Check, Clock, Copy, FileText, MapPin, MessageSquare, Navigation, Phone, Play, RefreshCw, Share2, Smartphone, Square, TriangleAlert, WifiOff,
+  ArrowLeft, Check, Clock, Copy, FileText, MapPin, MessageSquare, Navigation, Phone, Play, RefreshCw, Share2, Smartphone, Square, TriangleAlert, Truck, User, WifiOff,
 } from 'lucide-react';
 import { api, BODY_L, CARGO_L, fmtDates, fmtWhen, LOADING_L, money, num, STAGE_L, t, Trip, useApp, useEvent, useLoad, waLink } from '../core';
-import { Empty, Field, Loading, Logo, MapMarker, MapRoute, MapView, Modal, Stars } from '../ui';
+import { Empty, Field, Loading, Logo, MapMarker, MapRoute, MapView, Modal, Select, Stars } from '../ui';
 import { ContactButtons, RouteTitle } from '../listing';
 
 /** Флаг демо-симуляции: пока она идёт, реальная геолокация не отправляется. */
@@ -32,7 +32,7 @@ const setDeviceShare = (id: number, on: boolean) => {
 
 const STATUS_L: Record<string, string> = { completed: 'Завершён', cancelled: 'Отменён', failed: 'Сорван' };
 const statusClass = (tr: Trip) => (tr.status === 'active' ? 'sent' : tr.status === 'completed' ? 'accepted' : 'declined');
-const statusText = (tr: Trip) => (tr.status === 'active' ? t(STAGE_L[tr.stage]) : t(STATUS_L[tr.status]));
+const statusText = (tr: Trip) => (tr.status === 'active' ? (tr.confirmed ? t(STAGE_L[tr.stage]) : t('Ждёт подтверждения')) : t(STATUS_L[tr.status]));
 
 function useTripMap(trip: Trip | null) {
   const { city, cityName } = useApp();
@@ -180,6 +180,125 @@ export function TripBeacon({ tripId }: { tripId: number }) {
   return null;
 }
 
+/** Машина и водитель рейса: госномер крупно, чтобы узнать машину на погрузке. */
+function VehicleInfo({ trip, showDriver = true }: { trip: Trip; showDriver?: boolean }) {
+  if (!trip.confirmed) return null;
+  const v = trip.vehicle;
+  return (
+    <div className="stack-s">
+      <div className="vehicle-line">
+        <Truck size={18} />
+        <span>{v.brand}{v.bodyType ? ` · ${t(BODY_L[v.bodyType])}` : ''}</span>
+        {v.plate && <span className="plate">{v.plate}</span>}
+        {v.trailerPlate && <span className="muted small">{t('прицеп')}</span>}
+        {v.trailerPlate && <span className="plate">{v.trailerPlate}</span>}
+      </div>
+      {showDriver && trip.driver?.name && (
+        <div className="vehicle-line">
+          <User size={18} />
+          <span>{trip.driver.name}</span>
+          {trip.driver.phone && <a href={`tel:${trip.driver.phone}`} className="link"><Phone size={14} /> {trip.driver.phone}</a>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Адреса и время погрузки из заявки. */
+function Addresses({ trip }: { trip: Trip }) {
+  if (!trip.loadAddress && !trip.unloadAddress && !trip.loadTime) return null;
+  return (
+    <div className="addr">
+      {trip.loadAddress && <div className="kv"><span><MapPin size={14} /> {t('Адрес погрузки')}</span><b>{trip.loadAddress}</b></div>}
+      {trip.unloadAddress && <div className="kv"><span><MapPin size={14} /> {t('Адрес выгрузки')}</span><b>{trip.unloadAddress}</b></div>}
+      {trip.loadTime && <div className="kv"><span><Clock size={14} /> {t('Время погрузки')}</span><b>{trip.loadTime}</b></div>}
+    </div>
+  );
+}
+
+type Vehicle = { id: number; brand: string; plate: string };
+type Member = { id: number; name: string; phone: string; companyRole: string };
+type Employee = { id: number; name: string; phone: string; position: string };
+
+/** Перевозчик подтверждает рейс: машина из парка или вручную, водитель из команды, из сотрудников или вручную. */
+function AssignModal({ trip, onClose, onDone }: { trip: Trip; onClose: () => void; onDone: () => void }) {
+  const { act } = useApp();
+  const parkL = useLoad(() => api<Vehicle[]>('/vehicles').catch(() => []), []);
+  const teamL = useLoad(() => api<{ members: Member[] }>('/team').then((x) => x.members).catch(() => []), []);
+  const staffL = useLoad(() => api<Employee[]>('/employees').catch(() => []), []);
+  const park = parkL.data || [];
+  const team = (teamL.data || []).filter((m) => m.companyRole === 'driver').concat((teamL.data || []).filter((m) => m.companyRole !== 'driver'));
+  const people = staffL.data || [];
+  const [vehicle, setVehicle] = useState(''); // id машины из парка или '' — вручную
+  const [brand, setBrand] = useState(trip.vehicle.brand || trip.brand || '');
+  const [plate, setPlate] = useState(trip.vehicle.plate || '');
+  const [trailer, setTrailer] = useState(trip.vehicle.trailerPlate || '');
+  const [driver, setDriver] = useState(trip.driver?.userId ? `u${trip.driver.userId}` : ''); // u<id> — из команды, e<id> — из сотрудников, '' — вручную
+  const [name, setName] = useState(trip.driver?.name || '');
+  const [phone, setPhone] = useState(trip.driver?.phone || '');
+  const [busy, setBusy] = useState(false);
+  const pickVehicle = (id: string) => {
+    setVehicle(id);
+    const v = park.find((x) => String(x.id) === id);
+    if (v) {
+      setBrand(v.brand);
+      setPlate(v.plate);
+    }
+  };
+  const pickDriver = (id: string) => {
+    setDriver(id);
+    const p = id.startsWith('u') ? team.find((m) => `u${m.id}` === id) : people.find((e) => `e${e.id}` === id);
+    if (p) {
+      setName(p.name);
+      setPhone(p.phone);
+    }
+  };
+  const ok = brand.trim() && plate.trim().length >= 4 && name.trim().length >= 2 && phone.replace(/\D/g, '').length >= 10;
+  const save = async () => {
+    if (busy) return;
+    setBusy(true);
+    const done = await act(() => api(`/trips/${trip.id}/assign`, 'POST', {
+      vehicleId: vehicle ? Number(vehicle) : null, brand: brand.trim(), plate: plate.trim(), trailerPlate: trailer.trim(),
+      driverUserId: driver.startsWith('u') ? Number(driver.slice(1)) : null, driverName: name.trim(), driverPhone: phone.trim(),
+    }), trip.confirmed ? t('Машина и водитель обновлены') : t('Рейс подтверждён'));
+    setBusy(false);
+    if (done) onDone();
+  };
+  return (
+    <Modal title={trip.confirmed ? t('Машина и водитель') : t('Подтвердить рейс')} onClose={() => !busy && onClose()}>
+      <p className="muted small">{t('Заказчик увидит марку, госномер и водителя — так он узнает машину на погрузке. Эти данные попадут в заявку на перевозку.')}</p>
+      {park.length > 0 && (
+        <Field label={t('Машина из парка')}>
+          <Select value={vehicle} onChange={pickVehicle} placeholder={t('Другая машина — ввести вручную')} options={park.map((v) => ({ value: String(v.id), label: `${v.brand}${v.plate ? ` · ${v.plate}` : ''}` }))} />
+        </Field>
+      )}
+      <div className="grid2">
+        <Field label={t('Марка')}><input value={brand} onChange={(e) => { setBrand(e.target.value); setVehicle(''); }} maxLength={60} placeholder="Volvo FH" /></Field>
+        <Field label={t('Госномер')}><input value={plate} onChange={(e) => { setPlate(e.target.value.toUpperCase()); setVehicle(''); }} maxLength={20} placeholder="123 ABC 02" /></Field>
+      </div>
+      <Field label={t('Госномер прицепа (необязательно)')}><input value={trailer} onChange={(e) => setTrailer(e.target.value.toUpperCase())} maxLength={20} /></Field>
+      {(team.length > 0 || people.length > 0) && (
+        <Field label={t('Водитель')}>
+          <Select value={driver} onChange={pickDriver} placeholder={t('Другой водитель — ввести вручную')}
+            options={[
+              ...team.map((m) => ({ value: `u${m.id}`, label: `${m.name}${m.companyRole === 'driver' ? ` · ${t('водитель в приложении')}` : ''}` })),
+              ...people.map((e) => ({ value: `e${e.id}`, label: `${e.name}${e.position ? ` · ${e.position}` : ''}` })),
+            ]} />
+        </Field>
+      )}
+      <div className="grid2">
+        <Field label={t('Имя водителя')}><input value={name} disabled={driver.startsWith('u')} onChange={(e) => { setName(e.target.value); if (driver.startsWith('e')) setDriver(''); }} maxLength={100} /></Field>
+        <Field label={t('Телефон водителя')}><input value={phone} disabled={driver.startsWith('u')} inputMode="tel" onChange={(e) => { setPhone(e.target.value); if (driver.startsWith('e')) setDriver(''); }} maxLength={20} placeholder="+7 701 123 45 67" /></Field>
+      </div>
+      {driver.startsWith('u') && <p className="muted small">{t('Водитель из команды увидит этот рейс в своём приложении и сможет вести его сам.')}</p>}
+      <div className="row end">
+        <button className="btn ghost" onClick={onClose} disabled={busy}>{t('Отмена')}</button>
+        <button className="btn primary" onClick={save} disabled={busy || !ok}><Check size={16} /> {trip.confirmed ? t('Сохранить') : t('Подтвердить рейс')}</button>
+      </div>
+    </Modal>
+  );
+}
+
 export default function TripPage() {
   const id = Number(useParams().id);
   const { act, meta, city, reloadMe, me } = useApp();
@@ -192,6 +311,7 @@ export default function TripPage() {
   const [sim, setSim] = useState(false);
   const [fail, setFail] = useState<string | null>(null);
   const [onDevice, setOnDevice] = useState(sharesFromThisDevice(id));
+  const [assign, setAssign] = useState(false);
   const pos = useRef<{ lat: number; lon: number } | null>(null);
   pos.current = trip?.position || null;
 
@@ -260,6 +380,7 @@ export default function TripPage() {
               {trip.cargoType ? ` · ${t(CARGO_L[trip.cargoType])}` : ''}{trip.weight ? ` · ${trip.weight} ${t('т')}` : ''}
             </div>
             <Eta trip={trip} />
+            <Addresses trip={trip} />
             {trip.status === 'failed' && <div className="form-error"><b>{t('Рейс закрыт как сорванный')}.</b> {trip.failReason}</div>}
           </div>
           <div className="card map-card"><MapView routes={map.routes} markers={map.markers} height={380} fitKey={String(trip.id)} /></div>
@@ -267,7 +388,27 @@ export default function TripPage() {
         </div>
 
         <aside className="stack">
-          {active && carrier && (
+          {active && carrier && !trip.confirmed && (
+            <div className="card stack-s assign-card">
+              <b><Truck size={16} /> {t('Подтвердите рейс')}</b>
+              <p className="muted small">{isDriver ? t('Перевозчик ещё не подтвердил рейс. Обратитесь к диспетчеру.') : t('Укажите машину и водителя. Пока рейс не подтверждён, заказчик ждёт, а этапы отмечать нельзя.')}</p>
+              {!isDriver && <button className="btn primary block big" onClick={() => setAssign(true)}><Check size={18} /> {t('Указать машину и водителя')}</button>}
+            </div>
+          )}
+          {trip.confirmed && (
+            <div className="card stack-s">
+              <b>{t('Машина и водитель')}</b>
+              <VehicleInfo trip={trip} />
+              {active && carrier && !isDriver && stageIdx < meta.stages.indexOf('in_transit') && (
+                <button className="btn ghost" onClick={() => setAssign(true)}>{t('Заменить машину или водителя')}</button>
+              )}
+            </div>
+          )}
+          {active && !carrier && !trip.confirmed && (
+            <div className="info-line">{t('Ждём, пока перевозчик подтвердит рейс: укажет машину и водителя. Мы пришлём уведомление.')}</div>
+          )}
+
+          {active && carrier && trip.confirmed && (
             <div className="card stack-s t-ctl">
               <b>{t('Управление рейсом')}</b>
               <label className="switch">
@@ -333,7 +474,7 @@ export default function TripPage() {
             <div className="card stack-s highlight">
               <b>{t('Оцените работу компании «{name}»', { name: other.name })}</b>
               <p className="muted small">
-                {trip.status === 'completed' ? t('Отзыв обязателен — без него нельзя размещать новые объявления и откликаться.') : t('Рейс не состоялся — расскажите, что произошло. Это поможет другим участникам.')}
+                {trip.status === 'completed' ? t('Оставьте отзыв в течение трёх дней — потом без него нельзя будет размещать объявления и откликаться.') : t('Рейс не состоялся — расскажите, что произошло. Это поможет другим участникам.')}
                 {' '}{t('Партнёр увидит ваш отзыв после того, как оставит свой, или через 7 дней.')}
               </p>
               <div className="center"><Stars value={rating} onChange={setRating} size={32} /></div>
@@ -384,6 +525,7 @@ export default function TripPage() {
         </aside>
       </div>
 
+      {assign && <AssignModal trip={trip} onClose={() => setAssign(false)} onDone={() => { setAssign(false); reload(); }} />}
       {fail !== null && (
         <Modal title={t('Закрыть рейс как сорванный')} onClose={() => setFail(null)}>
           <p className="muted small">{t('Используйте, если машина не приехала, груз не доставлен, пропала связь или вторая сторона отказалась. Рейс закроется, обе стороны смогут оставить отзыв, модератор получит сигнал.')}</p>
@@ -422,6 +564,7 @@ export function PublicTrack() {
             <div className="muted">
               {t('Перевозчик')}: {trip.carrier.name}{trip.bodyType ? ` · ${t(BODY_L[trip.bodyType])}` : ''} · {num(trip.distanceKm)} {t('км')}
             </div>
+            <VehicleInfo trip={trip} showDriver={false} />
             <Eta trip={trip} />
           </div>
           <div className="card map-card"><MapView routes={map.routes} markers={map.markers} height={420} fitKey={String(trip.id)} /></div>
@@ -463,10 +606,14 @@ export function DrivePage() {
               {trip.loading?.length ? ` · ${trip.loading.map((x) => t(LOADING_L[x])).join(', ')}` : ''}
             </div>
             {trip.description && <p className="desc full">{trip.description}</p>}
+            <Addresses trip={trip} />
+            <VehicleInfo trip={trip} showDriver={false} />
             <span className={`status big ${statusClass(trip)}`}>{statusText(trip)}</span>
           </div>
 
-          {trip.status === 'active' ? (
+          {trip.status === 'active' && !trip.confirmed ? (
+            <div className="card"><Empty title={t('Рейс ещё не подтверждён')} text={t('Диспетчер перевозчика должен указать машину и водителя. Обновите страницу чуть позже.')} /></div>
+          ) : trip.status === 'active' ? (
             <div className="card stack-s">
               {!trip.shareGps ? (
                 <>

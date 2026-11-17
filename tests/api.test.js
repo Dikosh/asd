@@ -10,6 +10,7 @@ process.env.DEMO_MODE = '1';
 const { createApp } = await import('../server/index.js');
 const { seed } = await import('../server/seed.js');
 const { isValidBin, routeFit, cityById } = await import('../server/geo.js');
+const { run } = await import('../server/db.js');
 
 let server;
 let base;
@@ -153,6 +154,15 @@ test('полный цикл сделки', async () => {
   const { tripId } = await customer.post(`/api/responses/${resp.id}/accept`);
   assert.ok(tripId);
   assert.equal((await stranger.call('GET', `/api/trips/${tripId}`)).status, 404);
+  // рейс начинается после подтверждения перевозчиком: машина, госномер и водитель
+  assert.equal((await carrier.call('POST', `/api/trips/${tripId}/stage`, { stage: 'to_loading' })).data.error, 'not_confirmed', 'без подтверждения рейс не начать');
+  assert.equal((await customer.get(`/api/trips/${tripId}`)).confirmed, false);
+  assert.equal((await customer.call('POST', `/api/trips/${tripId}/assign`, { brand: 'Volvo', plate: '001 AAA 01', driverName: 'Иван', driverPhone: '+77010001122' })).status, 403, 'подтверждает перевозчик');
+  assert.equal((await carrier.call('POST', `/api/trips/${tripId}/assign`, { brand: 'Volvo', plate: '', driverName: 'Иван', driverPhone: '+77010001122' })).status, 400, 'без госномера не подтвердить');
+  await carrier.post(`/api/trips/${tripId}/assign`, { brand: 'Volvo FH', plate: '001 aaa 01', trailerPlate: '22 ab 01', driverName: 'Иван Петров', driverPhone: '8 701 000 11 22' });
+  const confirmed = await customer.get(`/api/trips/${tripId}`);
+  assert.deepEqual([confirmed.confirmed, confirmed.vehicle.plate, confirmed.vehicle.trailerPlate, confirmed.driver.name, confirmed.driver.phone], [true, '001 AAA 01', '22 AB 01', 'Иван Петров', '+77010001122']);
+  assert.equal((await client().call('GET', `/api/track/${confirmed.trackToken}`)).data.driver, undefined, 'получателю по ссылке водитель не показывается');
   assert.equal((await carrier.call('POST', `/api/trips/${tripId}/stage`, { stage: 'to_loading' })).status, 409, 'без GPS рейс не начать');
   await carrier.post(`/api/trips/${tripId}/gps`, { share: true });
   assert.equal((await customer.call('POST', `/api/trips/${tripId}/stage`, { stage: 'to_loading' })).status, 403);
@@ -174,6 +184,7 @@ test('полный цикл сделки', async () => {
   assert.ok(trip.position && trip.remainingKm > 100 && trip.etaHours >= 1);
   assert.equal((await carrier.get('/api/listings?kind=cargo&from=petropavl')).items.some((l) => l.id === cargo.id), false, 'груз в рейсе скрыт из поиска');
   assert.equal((await customer.call('POST', `/api/trips/${tripId}/complete`)).status, 409);
+  assert.equal((await carrier.call('POST', `/api/trips/${tripId}/assign`, { brand: 'MAN', plate: '002 BBB 02', driverName: 'Пётр', driverPhone: '+77010001133' })).status, 409, 'в пути машину не заменить');
   assert.equal((await carrier.call('POST', `/api/trips/${tripId}/stage`, { stage: 'unloading' })).data.error, 'gps_far', 'выгрузку не отметить вдали от пункта выгрузки');
   await new Promise((r) => setTimeout(r, 1600));
   await carrier.post(`/api/trips/${tripId}/position`, { lat: 51.15, lon: 71.45, sim: true });
@@ -186,6 +197,11 @@ test('полный цикл сделки', async () => {
 
   // отзыв обязателен
   assert.equal((await customer.get('/api/me')).pendingReviews.length, 1);
+  // трое суток на отзыв работа не блокируется, потом — пока отзыв не оставлен
+  const early = await customer.call('POST', '/api/listings', { kind: 'cargo', points: ['astana', 'almaty'], weight: 5, dateFrom: day(0), dateTo: day(3) });
+  assert.equal(early.status, 200, 'сразу после рейса работа не блокируется');
+  await customer.post(`/api/listings/${early.data.id}/status`, { status: 'archived' });
+  run('UPDATE trips SET finished_at = ? WHERE id = ?', new Date(Date.now() - 4 * 86400_000).toISOString(), tripId);
   const blocked = await customer.call('POST', '/api/listings', { kind: 'cargo', points: ['astana', 'almaty'], dateFrom: day(0), dateTo: day(3) });
   assert.equal(blocked.status, 409);
   assert.equal(blocked.data.error, 'review_required');

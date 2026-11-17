@@ -295,7 +295,7 @@ test('статистика цен и калькулятор маршрута', a
   const c = await demo('logist');
   const stats = await c.get('/api/stats/prices?kind=cargo');
   assert.ok(stats.sample >= 20 && stats.directions.length >= 10, JSON.stringify([stats.sample, stats.directions.length]));
-  assert.ok(stats.overall.low <= stats.overall.median && stats.overall.median <= stats.overall.high);
+  assert.ok(stats.bands.length >= 1 && stats.bands.every((b) => b.low <= b.median && b.median <= b.high), JSON.stringify(stats.bands));
   assert.ok(stats.directions.every((d) => d.perKm > 50 && d.perKm < 5000), JSON.stringify(stats.directions.filter((d) => !(d.perKm > 50 && d.perKm < 5000))));
   assert.ok(stats.byBody.length >= 3, JSON.stringify(stats.byBody));
   const r = await c.get('/api/tools/route?points=astana,karaganda,almaty&body=tent');
@@ -303,4 +303,12 @@ test('статистика цен и калькулятор маршрута', a
   assert.ok(r.km > 1000 && r.km < 1500, `Астана — Караганда — Алматы: ${r.km} км`);
   assert.ok(r.cost.low <= r.cost.median && r.cost.median <= r.cost.high && r.cost.median > 100000, JSON.stringify(r.cost));
   assert.equal((await c.call('GET', '/api/tools/route?points=astana')).status, 400);
+
+  // одна «обычная цена»: калькулятор и карточка объявления на том же направлении показывают одно и то же
+  const all = await c.get('/api/listings?kind=cargo');
+  const l = all.items.find((x) => x.rate && x.distanceKm > 300);
+  const card = await c.get(`/api/listings/${l.id}`);
+  const calc = await c.get(`/api/tools/route?points=${l.points.join(',')}&body=${l.bodyType || ''}&weight=${l.weight || ''}`);
+  // карточка не учитывает само объявление, поэтому допускаем разницу в одну ставку выборки
+  if (card.market && calc.cost) assert.ok(Math.abs(calc.cost.perKm - card.market.median) / card.market.median < 0.15, JSON.stringify([calc.cost, card.market]));
 });

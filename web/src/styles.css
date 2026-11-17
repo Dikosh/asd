@@ -308,6 +308,13 @@ input[type='checkbox'] { width: 18px; height: 18px; min-height: 0; accent-color:
 .detail-layout { display: grid; grid-template-columns: minmax(0, 1fr) 340px; gap: 18px; align-items: start; }
 .kv { display: flex; gap: 8px; flex-wrap: wrap; font-size: 14px; }
 .kv span { color: var(--muted); }
+.kv span svg { vertical-align: -2px; }
+.addr { display: flex; flex-direction: column; gap: 4px; padding: 10px 12px; border-radius: 12px; background: var(--bg); }
+.trip-line { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; padding: 8px 10px; border-radius: 10px; background: var(--bg); color: var(--ink); font-size: 14px; }
+.trip-line:hover { background: var(--blue-l); }
+.assign-card { border: 2px solid var(--blue); }
+.vehicle-line { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.vehicle-line .plate { font-family: ui-monospace, monospace; font-weight: 700; padding: 2px 8px; border: 2px solid var(--ink); border-radius: 6px; background: #fff; color: #111; letter-spacing: .5px; }
 .market { display: flex; gap: 11px; align-items: center; padding: 11px 13px; border-radius: 12px; background: var(--bg); color: var(--ink2); }
 .market div { display: flex; flex-direction: column; }
 .market b { color: var(--ink); }
@@ -616,7 +623,9 @@ div.line:not(.card) { padding: 10px 0; border-top: 1px solid var(--line); }
 }
 @media (max-width: 900px) {
   /* рейс на телефоне: сначала управление, потом карта */
-  .trip-layout { display: flex; flex-direction: column; }
+  /* карточки рейса на телефоне — во всю ширину (иначе карта сжимается до нуля) */
+  .trip-layout { display: flex; flex-direction: column; align-items: stretch; }
+  .trip-layout .assign-card { order: -1; }
   .trip-layout > .stack, .trip-layout > aside { display: contents; }
   .trip-layout .t-head { order: -2; }
   .trip-layout .t-ctl { order: -1; }

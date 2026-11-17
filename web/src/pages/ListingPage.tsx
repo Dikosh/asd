@@ -1,15 +1,20 @@
 // Подробная карточка объявления: маршрут на карте, отклик, отклики владельцу, подходящие встречные объявления.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Bookmark, BookmarkCheck, Check, ChevronRight, Eye, FileCheck2, Flag, Globe2, MessageSquare, Send, Share2, ShieldAlert, StickyNote, TrendingUp, X } from 'lucide-react';
-import { api, Company, fmtDates, fmtWhen, Listing, money, num, PAY_L, ROLE_L, t, useApp, useEvent, useLoad } from '../core';
+import { ArrowLeft, Bookmark, BookmarkCheck, Check, ChevronRight, Clock, Eye, FileCheck2, Flag, Globe2, MapPin, MessageSquare, Send, Share2, ShieldAlert, StickyNote, TrendingUp, Truck, X } from 'lucide-react';
+import { api, Company, fmtDates, fmtWhen, Listing, ListingTrip, money, num, PAY_L, ROLE_L, STAGE_L, t, useApp, useEvent, useLoad } from '../core';
 import { CompanyBadge, Empty, Field, Loading, MapView, Select } from '../ui';
 import { AcceptResponseModal, canRespondTo, ComplaintModal, ContactButtons, ListingCard, NoteModal, RateBlock, RouteTitle, SpecChips, useShare } from '../listing';
 
-type Resp = { id: number; message: string; price: number | null; currency: string; status: string; createdAt: string; chatId: number | null; user: { id: number; name: string; phone: string }; company: Company };
+type Resp = {
+  id: number; message: string; price: number | null; currency: string; status: string; createdAt: string; chatId: number | null; user: { id: number; name: string; phone: string }; company: Company;
+  trucks: number; vehicle: { brand: string; plate: string; bodyType: string | null; weight: number | null } | null;
+};
+type Vehicle = { id: number; brand: string; plate: string };
 type Detail = Listing & {
-  market: { low: number; median: number; high: number; sample: number } | null;
+  market: { low: number; median: number; high: number; sample: number; basis: 'direction' | 'similar'; perKm?: number } | null;
   matches: Listing[];
+  trips: ListingTrip[];
   responses?: Resp[];
   chatId?: number | null;
 };
@@ -26,6 +31,8 @@ export default function ListingPage() {
   const [price, setPrice] = useState('');
   const priceOk = /^\d*$/.test(price.replace(/\s/g, ''));
   const [currency, setCurrency] = useState('KZT');
+  const [trucks, setTrucks] = useState(1);
+  const [vehicleId, setVehicleId] = useState('');
   const [note, setNote] = useState(false);
   const [complain, setComplain] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -37,6 +44,13 @@ export default function ListingPage() {
   const share = useShare();
   const broker = me?.company.kind === 'broker';
   const canRespond = !!l && canRespondTo(l);
+  // перевозчик может сразу указать машину из своего парка
+  const offersTruck = !!l && l.kind === 'cargo' && !broker && canRespond;
+  const vehicles = useLoad(() => (offersTruck ? api<Vehicle[]>('/vehicles').catch(() => []) : Promise.resolve([] as Vehicle[])), [offersTruck]);
+  // валюта отклика по умолчанию — валюта объявления
+  useEffect(() => {
+    if (l) setCurrency(l.currency);
+  }, [l?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const map = useMemo(() => {
     if (!l) return null;
@@ -72,10 +86,13 @@ export default function ListingPage() {
   if (loading) return <Loading />;
   if (error || !l) return <div className="card"><Empty title={t('Объявление не найдено')}><Link to="/" className="btn soft">{t('На главную')}</Link></Empty></div>;
 
-  const perKm = l.rate && l.currency === 'KZT' && l.distanceKm ? Math.round(l.rate / l.distanceKm) : null;
+  // ставка объявления в ₸/км считается на сервере — с пересчётом валюты по курсу Нацбанка
+  const perKm = l.market?.perKm ?? null;
   const customs = l.flags.includes('customs');
   const unknown = l.company.verified !== 'verified' && l.company.trips === 0;
   const prepay = l.payTerms.includes('prepay');
+  const free = Math.max(0, l.trucks - l.booked);
+  const myTrips = l.trips.filter((x) => x.status === 'active' || x.status === 'completed');
   // пустое сообщение не мешает откликнуться: отправляем понятный текст по умолчанию
   const defaultMsg = broker
     ? t('Здравствуйте! Готовы помочь с таможенным оформлением этой перевозки.')
@@ -96,7 +113,11 @@ export default function ListingPage() {
   const respond = () => once(async () => {
     let chatId: number | null = null;
     const ok = await act(async () => {
-      chatId = (await api<{ chatId: number | null }>(`/listings/${l.id}/responses`, 'POST', { message: msg.trim() || defaultMsg, price: price.replace(/\s/g, '') ? Number(price.replace(/\s/g, '')) : null, currency })).chatId;
+      const sum = price.replace(/\s/g, '');
+      chatId = (await api<{ chatId: number | null }>(`/listings/${l.id}/responses`, 'POST', {
+        message: msg.trim() || defaultMsg, price: sum ? Number(sum) : null, currency,
+        trucks: offersTruck ? Math.min(trucks, free) : 1, vehicleId: offersTruck && vehicleId && trucks === 1 ? Number(vehicleId) : null,
+      })).chatId;
     }, t('Отклик отправлен'));
     if (!ok) return;
     setMsg('');
@@ -133,6 +154,16 @@ export default function ListingPage() {
               <RateBlock l={l} />
             </div>
             <SpecChips l={l} />
+            {(l.loadAddress || l.unloadAddress || l.loadTime) && (
+              <div className="addr">
+                {l.loadAddress && <div className="kv"><span><MapPin size={14} /> {t('Адрес погрузки')}</span><b>{l.loadAddress}</b></div>}
+                {l.unloadAddress && <div className="kv"><span><MapPin size={14} /> {t('Адрес выгрузки')}</span><b>{l.unloadAddress}</b></div>}
+                {l.loadTime && <div className="kv"><span><Clock size={14} /> {t('Время погрузки')}</span><b>{l.loadTime}</b></div>}
+              </div>
+            )}
+            {l.kind === 'cargo' && l.trucks > 1 && (
+              <div className="kv"><span><Truck size={14} /> {t('Нужно машин')}</span><b>{l.trucks}{l.booked > 0 ? ` · ${t('найдено: {n}', { n: l.booked })}` : ''}</b></div>
+            )}
             {l.payTerms.length > 0 && <div className="kv"><span>{t('Условия оплаты')}</span><b>{l.payTerms.map((p) => t(PAY_L[p])).join(', ')}</b></div>}
             {l.description && <p className="desc full">{l.description}</p>}
             {l.mark.note && <p className="note"><StickyNote size={14} /> {l.mark.note}</p>}
@@ -141,7 +172,10 @@ export default function ListingPage() {
                 <TrendingUp size={18} />
                 <div>
                   <b>{t('Ставка {n} ₸/км', { n: num(perKm) })} — {perKm < l.market.low ? t('ниже рынка') : perKm > l.market.high ? t('выше рынка') : t('в рынке')}</b>
-                  <span>{t('Обычно на платформе: {a}–{b} ₸/км (по {n} объявлениям)', { a: num(l.market.low), b: num(l.market.high), n: l.market.sample })}</span>
+                  <span>
+                    {t('Обычно {m} ₸/км, чаще всего {a}–{b} ₸/км', { m: num(l.market.median), a: num(l.market.low), b: num(l.market.high) })}
+                    {' · '}{l.market.basis === 'direction' ? t('по этому направлению, ставок: {n}', { n: l.market.sample }) : t('по похожим рейсам такой же дальности, ставок: {n}', { n: l.market.sample })}
+                  </span>
                 </div>
               </div>
             )}
@@ -200,13 +234,19 @@ export default function ListingPage() {
                       </div>
                       {r.company.indicator === 'red' && <div className="form-error">{t('Осторожно: у компании много плохих отзывов или записи в чёрном списке.')}</div>}
                       <p>{r.message}</p>
+                      {(r.trucks > 1 || r.vehicle) && (
+                        <div className="chips">
+                          {r.trucks > 1 && <span className="chip strong"><Truck size={12} /> {t('Машин: {n}', { n: r.trucks })}</span>}
+                          {r.vehicle && <span className="chip">{r.vehicle.brand}{r.vehicle.plate ? ` · ${r.vehicle.plate}` : ''}</span>}
+                        </div>
+                      )}
                       {isBroker && <div className="info-line">{t('Таможенный брокер: договоритесь об услугах в чате')}</div>}
                       <div className="row between wrap">
                         <div><b>{r.price ? money(r.price, r.currency) : t('Без предложения цены')}</b> <span className="muted small">· {r.user.name} · {fmtWhen(r.createdAt)}</span></div>
                         <div className="row wrap">
                           {r.user.phone && <ContactButtons phone={r.user.phone} />}
                           {r.chatId && <Link to={`/cabinet/messages/${r.chatId}`} className="btn soft"><MessageSquare size={16} /> {t('Чат')}</Link>}
-                          {r.status === 'sent' && !l.tripId && (
+                          {r.status === 'sent' && !l.full && (
                             <>
                               <button className="btn ghost" disabled={busy} onClick={() => setAsk({ r, mode: 'decline' })}><X size={16} /> {t('Отклонить')}</button>
                               {!isBroker && <button className="btn primary" disabled={busy} onClick={() => setAsk({ r, mode: 'accept' })}><Check size={16} /> {t('Принять')}</button>}
@@ -246,12 +286,31 @@ export default function ListingPage() {
             {!l.mine && (l.user.phone ? <div className="row wrap"><ContactButtons full phone={l.user.phone} /></div> : <p className="muted small">{t('Телефон скрыт владельцем — свяжитесь через отклик и чат.')}</p>)}
           </div>
 
+          {myTrips.length > 0 && (
+            <div className="card stack-s">
+              <b>{myTrips.length > 1 ? t('Рейсы по объявлению') : t('Рейс по объявлению')}</b>
+              {myTrips.map((x) => (
+                <Link key={x.id} to={`/trip/${x.id}`} className="trip-line">
+                  <span>
+                    <b>№{x.id}</b> · {l.mine && l.kind === 'cargo' ? x.carrierName : l.mine ? x.customerName : x.carrierName}
+                    {x.plate ? ` · ${x.plate}` : ''}
+                  </span>
+                  <span className={`status ${x.status === 'completed' ? 'accepted' : 'sent'}`}>
+                    {x.status === 'completed' ? t('Завершён') : !x.confirmed ? t('Ждёт подтверждения') : t(STAGE_L[x.stage])}
+                  </span>
+                </Link>
+              ))}
+            </div>
+          )}
           {l.mine ? (
             <div className="card d-act">
               <b>{t('Это ваше объявление')}</b>
               <div className="muted small"><Eye size={14} /> {t('просмотров: {n}', { n: l.views })} · {t('откликов: {n}', { n: l.responsesCount })}</div>
               <button className="btn soft block" onClick={() => share(l)}><Share2 size={16} /> {t('Поделиться объявлением')}</button>
-              {l.tripId ? <Link to={`/trip/${l.tripId}`} className="btn primary block">{t('Открыть рейс')}</Link> : <Link to={`/my/${l.kind}/${l.id}/edit`} className="btn soft block">{t('Изменить')}</Link>}
+              {!l.tripId && <Link to={`/my/${l.kind}/${l.id}/edit`} className="btn soft block">{t('Изменить')}</Link>}
+              {l.kind === 'cargo' && l.trucks > 1 && l.status === 'active' && (
+                <p className="muted small">{l.full ? t('Все машины найдены — объявление скрыто из поиска.') : t('Осталось найти машин: {n}', { n: free })}</p>
+              )}
             </div>
           ) : (
             <div className="card d-act">
@@ -272,8 +331,19 @@ export default function ListingPage() {
                     <textarea rows={3} value={msg} onChange={(e) => setMsg(e.target.value)} maxLength={1000}
                       placeholder={broker ? t('Какие услуги и сроки предлагаете') : l.kind === 'cargo' ? t('Какая машина, когда готовы встать на погрузку') : t('Какой груз, когда и откуда забирать')} />
                   </Field>
+                  {offersTruck && free > 1 && (
+                    <Field label={t('Сколько машин можете дать')} hint={t('Нужно ещё: {n}', { n: free })}>
+                      <Select value={String(trucks)} onChange={(v) => setTrucks(Number(v))} options={Array.from({ length: free }, (_, i) => ({ value: String(i + 1), label: String(i + 1) }))} />
+                    </Field>
+                  )}
+                  {offersTruck && trucks === 1 && (vehicles.data?.length ?? 0) > 0 && (
+                    <Field label={t('Какая машина поедет (необязательно)')}>
+                      <Select value={vehicleId} onChange={setVehicleId} placeholder={t('Не указывать')}
+                        options={[...vehicles.data!.map((v) => ({ value: String(v.id), label: `${v.brand}${v.plate ? ` · ${v.plate}` : ''}` }))]} />
+                    </Field>
+                  )}
                   <div className="grid2">
-                    <Field label={broker ? t('Стоимость ваших услуг (необязательно)') : t('Ваша цена (необязательно)')}>
+                    <Field label={broker ? t('Стоимость ваших услуг (необязательно)') : free > 1 && trucks > 1 ? t('Цена за одну машину (необязательно)') : t('Ваша цена (необязательно)')}>
                       <input inputMode="numeric" value={price} maxLength={10} onChange={(e) => setPrice(e.target.value.replace(/[^\d\s.,-]/g, ''))} aria-invalid={!priceOk} />
                       {!priceOk && <span className="field-error">{t('Сумма — целое число без копеек, например 350000')}</span>}
                     </Field>

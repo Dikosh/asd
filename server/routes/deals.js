@@ -33,6 +33,7 @@ function chatOf(req) {
 const TRIP_SQL = `
 SELECT t.*, l.kind AS l_kind, l.points AS l_points, l.cargo_type, l.body_type, l.weight, l.volume, l.distance_km,
   l.date_from AS l_date_from, l.date_to AS l_date_to, l.description AS l_description, l.loading AS l_loading, l.pay_terms AS l_pay_terms, l.brand AS l_brand,
+  l.load_address AS l_load_address, l.unload_address AS l_unload_address, l.load_time AS l_load_time, l.trucks AS l_trucks,
   cu.name AS customer_user_name, cu.phone AS customer_phone, cu.settings AS customer_settings, ru.settings AS carrier_settings, cc.name AS customer_name, cc.form AS customer_form, cc.bin AS customer_bin,
   ru.name AS carrier_user_name, ru.phone AS carrier_phone, rc.name AS carrier_name, rc.form AS carrier_form, rc.bin AS carrier_bin
 FROM trips t JOIN listings l ON l.id = t.listing_id
@@ -41,7 +42,9 @@ JOIN users ru ON ru.id = t.carrier_user JOIN companies rc ON rc.id = t.carrier_c
 
 /** Условия сделки фиксируются в момент принятия отклика: правка объявления их уже не меняет. */
 const TERM_COLS = { points: 'l_points', cargo_type: 'cargo_type', body_type: 'body_type', weight: 'weight', volume: 'volume', distance_km: 'distance_km',
-  date_from: 'l_date_from', date_to: 'l_date_to', description: 'l_description', loading: 'l_loading', pay_terms: 'l_pay_terms', brand: 'l_brand' };
+  date_from: 'l_date_from', date_to: 'l_date_to', description: 'l_description', loading: 'l_loading', pay_terms: 'l_pay_terms', brand: 'l_brand',
+  load_address: 'l_load_address', unload_address: 'l_unload_address', load_time: 'l_load_time' };
+const TERMS_SQL = 'SELECT points, cargo_type, body_type, weight, volume, distance_km, date_from, date_to, description, loading, pay_terms, brand, load_address, unload_address, load_time FROM listings WHERE id = ?';
 function withTerms(t) {
   const terms = t && L.j(t.terms, null);
   if (terms) for (const [k, col] of Object.entries(TERM_COLS)) if (k in terms) t[col] = terms[k];
@@ -78,7 +81,15 @@ function tripOut(t, viewer, full = false, mode = 'party') {
     signalLost: t.status === 'active' && !!t.share_gps && !!last && Date.now() - Date.parse(last.at) > 20 * 60_000,
     remainingKm,
     etaHours: remainingKm !== null && t.stage === 'in_transit' ? Math.max(1, Math.round(remainingKm / 55)) : null,
+    // перевозчик подтвердил рейс: назначил машину и водителя
+    confirmed: !!t.confirmed_at,
+    vehicle: { brand: t.vehicle_brand || '', plate: t.plate || '', trailerPlate: t.trailer_plate || '', bodyType: t.body_type },
   };
+  // получателю по ссылке госномер нужен, чтобы узнать машину; имя и телефон водителя — только участникам и самому водителю
+  if (mode !== 'public') {
+    Object.assign(out, { loadAddress: t.l_load_address || '', unloadAddress: t.l_unload_address || '', loadTime: t.l_load_time || '' });
+    out.driver = { userId: t.driver_user || null, name: t.driver_name || '', phone: t.driver_phone || '' };
+  }
   if (mode === 'driver') {
     // водителю нужны контакты для погрузки и условия, но не цена сделки
     Object.assign(out.customer, { userName: t.customer_user_name, phone: t.status === 'active' ? t.customer_phone : null });
@@ -125,6 +136,8 @@ function tripOut(t, viewer, full = false, mode = 'party') {
 function tripOf(req) {
   const t = withTerms(q1(`${TRIP_SQL} WHERE t.id = ?`, Number(req.params.id)));
   if (!t || (t.customer_company !== req.user.company_id && t.carrier_company !== req.user.company_id)) throw bad('not_found', 'Рейс не найден', 404);
+  // водитель из команды видит только рейсы, на которые его назначили
+  if (req.user.company_role === 'driver' && t.driver_user !== req.user.id) throw bad('not_found', 'Рейс не найден', 404);
   return t;
 }
 function tripByDriverToken(req) {
@@ -162,6 +175,7 @@ function setStage(t, stage) {
   if (t.status !== 'active') throw bad('state', 'Рейс уже завершён', 409);
   if (L.STAGES.indexOf(stage) <= L.STAGES.indexOf(t.stage)) throw bad('state', 'Этап уже пройден', 409);
   if (L.STAGES.indexOf(stage) !== L.STAGES.indexOf(t.stage) + 1) throw bad('state', 'Этапы отмечаются по порядку', 409);
+  if (!t.confirmed_at) throw bad('not_confirmed', 'Перевозчик ещё не подтвердил рейс: укажите машину и водителя', 409);
   // делиться GPS в пути обязательно
   if (!t.share_gps) throw bad('gps_required', 'Включите «Делиться GPS», чтобы начать рейс', 409);
   if (L.STAGES.indexOf(stage) >= L.STAGES.indexOf('in_transit')) {
@@ -189,11 +203,18 @@ function setStage(t, stage) {
   L.push(tripUsers(t), 'trip', { tripId: t.id });
   notify(staffOf(t.customer_company), { kind: 'trip', title: STAGE_TITLE[stage], vars: routeOf(t.listing_id), body: stage === 'delivered' ? 'Проверьте груз и подтвердите доставку' : '', link: `/trip/${t.id}` });
 }
+/** Объявление закрывается, когда по нему не осталось идущих рейсов и найдены все машины (или рейс сорван). */
+function closeListingIfDone(listingId, force = false) {
+  if (q1(`SELECT 1 FROM trips WHERE listing_id = ? AND status = 'active'`, listingId)) return;
+  const l = q1(`SELECT trucks, ${L.BOOKED('listings')} AS booked FROM listings WHERE id = ?`, listingId);
+  if (!force && l.booked < l.trucks) return;
+  run(`UPDATE listings SET status = 'closed', closed_at = ? WHERE id = ? AND status = 'active'`, L.now(), listingId);
+  run(`UPDATE responses SET status = 'declined' WHERE listing_id = ? AND status = 'sent'`, listingId);
+}
 function completeTrip(t) {
   tx(() => {
     run(`UPDATE trips SET status = 'completed', finished_at = ?, share_gps = 0 WHERE id = ?`, L.now(), t.id);
-    run(`UPDATE listings SET status = 'closed', closed_at = ? WHERE id = ?`, L.now(), t.listing_id);
-    run(`UPDATE responses SET status = 'declined' WHERE listing_id = ? AND status = 'sent'`, t.listing_id);
+    closeListingIfDone(t.listing_id);
   });
   L.push(tripUsers(t), 'trip', { tripId: t.id });
 }
@@ -217,7 +238,14 @@ export default function dealRoutes(app) {
     message: z.string().trim().min(1).max(1000),
     price: z.number().positive().max(1e9).nullable().optional(),
     currency: z.enum(L.CURRENCIES).default('KZT'),
+    // сколько машин предлагает перевозчик (для груза на несколько машин) и какая машина из парка
+    trucks: z.number().int().min(1).max(50).default(1),
+    vehicleId: z.number().int().positive().nullable().optional(),
   });
+  const freeTrucks = (listingId) => {
+    const l = q1(`SELECT trucks, ${L.BOOKED('listings')} AS booked FROM listings WHERE id = ?`, listingId);
+    return l.trucks - l.booked;
+  };
   app.post('/api/listings/:id/responses', auth, staff, (req, res) => {
     L.requireActiveCompany(req.user);
     L.requireNoPendingReviews(req.user);
@@ -230,17 +258,27 @@ export default function dealRoutes(app) {
     rateLimit('resp:' + req.user.company_id, 60, 3600_000, 'Слишком много откликов за час — попробуйте позже');
     if (q1('SELECT COUNT(*) AS n FROM responses WHERE listing_id = ? AND company_id = ?', l.id, req.user.company_id).n >= 3)
       throw bad('limit', 'На это объявление вы уже откликались несколько раз — продолжите разговор в чате', 409);
-    if (q1(`SELECT 1 FROM trips WHERE listing_id = ? AND status = 'active'`, l.id)) throw bad('in_trip', 'По объявлению уже идёт рейс', 409);
+    const free = freeTrucks(l.id);
+    if (free <= 0 && l.trucks > 1) throw bad('in_trip', 'Все машины по объявлению уже найдены', 409);
+    if (free <= 0) throw bad('in_trip', 'По объявлению уже идёт рейс', 409);
+    if (b.trucks > free) throw L.tbad('trucks', 'По объявлению осталось машин: {n}', { n: free }, 409);
+    if (b.vehicleId && !q1('SELECT 1 FROM vehicles WHERE id = ? AND company_id = ?', b.vehicleId, req.user.company_id)) throw bad('vehicle', 'Машина не найдена в вашем парке', 404);
     if (q1(`SELECT 1 FROM responses WHERE listing_id = ? AND company_id = ? AND status = 'sent'`, l.id, req.user.company_id)) throw bad('duplicate', 'Вы уже откликнулись', 409);
     const out = tx(() => {
-      const id = insert('INSERT INTO responses(listing_id, user_id, company_id, message, price, currency) VALUES(?, ?, ?, ?, ?, ?)',
-        l.id, req.user.id, req.user.company_id, b.message, b.price ?? null, b.currency);
+      const id = insert('INSERT INTO responses(listing_id, user_id, company_id, message, price, currency, trucks, vehicle_id) VALUES(?, ?, ?, ?, ?, ?, ?, ?)',
+        l.id, req.user.id, req.user.company_id, b.message, b.price ?? null, b.currency, l.kind === 'cargo' ? b.trucks : 1, b.vehicleId ?? null);
       let chat = q1('SELECT id FROM chats WHERE listing_id = ? AND peer_company = ?', l.id, req.user.company_id);
       if (!chat) chat = { id: insert('INSERT INTO chats(listing_id, owner_id, peer_id, owner_company, peer_company) VALUES(?, ?, ?, ?, ?)', l.id, l.user_id, req.user.id, l.company_id, req.user.company_id) };
       return { id, chatId: chat.id };
     });
     const sym = { KZT: '₸', USD: '$', RUB: '₽' }[b.currency] || b.currency;
-    postMessage(out.chatId, req.user, b.price ? `${b.message}\n— ${String(Math.round(b.price)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')} ${sym}` : b.message);
+    const v = b.vehicleId ? q1('SELECT brand, plate FROM vehicles WHERE id = ?', b.vehicleId) : null;
+    const extra = [
+      b.price ? `— ${String(Math.round(b.price)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')} ${sym}${b.trucks > 1 ? ' за машину' : ''}` : '',
+      l.kind === 'cargo' && b.trucks > 1 ? `— машин: ${b.trucks}` : '',
+      v ? `— машина: ${v.brand}${v.plate ? `, ${v.plate}` : ''}` : '',
+    ].filter(Boolean);
+    postMessage(out.chatId, req.user, [b.message, ...extra].join('\n'));
     L.push(staffOf(l.company_id), 'response', { listingId: l.id });
     notify(staffOf(l.company_id), { kind: 'response', title: 'Новый отклик: {route}', vars: routeOf(l.id), body: b.message.slice(0, 140), link: `/listing/${l.id}` });
     res.json(out);
@@ -249,12 +287,12 @@ export default function dealRoutes(app) {
   app.get('/api/responses', auth, (req, res) => {
     const rows = (where, p) =>
       q(
-        `SELECT r.id, r.message, r.price, r.currency, r.status, r.created_at AS createdAt, r.listing_id AS listingId,
+        `SELECT r.id, r.message, r.price, r.currency, r.status, r.trucks, r.created_at AS createdAt, r.listing_id AS listingId,
            l.kind, l.from_id AS fromId, l.to_id AS toId, l.status AS listingStatus, u.name AS userName, c.name AS companyName, c.id AS companyId,
            lc.name AS ownerCompany, lc.id AS ownerCompanyId, c.kind AS companyKind, c.verified AS companyVerified,
            (SELECT rating FROM company_stats cs WHERE cs.id = r.company_id) AS companyRating,
            (SELECT id FROM chats ch WHERE ch.listing_id = r.listing_id AND ch.peer_company = r.company_id) AS chatId,
-           (SELECT id FROM trips t WHERE t.response_id = r.id) AS tripId
+           (SELECT id FROM trips t WHERE t.response_id = r.id ORDER BY t.id LIMIT 1) AS tripId
          FROM responses r JOIN listings l ON l.id = r.listing_id JOIN users u ON u.id = r.user_id
          JOIN companies c ON c.id = r.company_id JOIN companies lc ON lc.id = l.company_id
          WHERE ${where} ORDER BY r.id DESC LIMIT 200`,
@@ -272,7 +310,7 @@ export default function dealRoutes(app) {
     // проверка состояния и запись — одной транзакцией, чтобы два одновременных «принять» не создали два рейса
     const r = tx(() => {
       const row = q1(
-        `SELECT r.*, l.company_id AS owner_company, l.user_id AS owner_user, l.kind, l.rate, l.currency AS l_currency, l.status AS l_status
+        `SELECT r.*, l.company_id AS owner_company, l.user_id AS owner_user, l.kind, l.rate, l.currency AS l_currency, l.status AS l_status, l.trucks AS l_trucks
          FROM responses r JOIN listings l ON l.id = r.listing_id WHERE r.id = ?`,
         Number(req.params.id),
       );
@@ -284,7 +322,9 @@ export default function dealRoutes(app) {
       else if (action === 'decline' && isOwner) run(`UPDATE responses SET status = 'declined' WHERE id = ?`, row.id);
       else if (action === 'accept' && isOwner) {
         if (row.l_status !== 'active') throw bad('state', 'Объявление уже закрыто', 409);
-        if (q1(`SELECT 1 FROM trips WHERE listing_id = ? AND status = 'active'`, row.listing_id)) throw bad('in_trip', 'По объявлению уже идёт рейс', 409);
+        const free = freeTrucks(row.listing_id);
+        if (free <= 0 && row.l_trucks > 1) throw bad('in_trip', 'Все машины по объявлению уже найдены', 409);
+        if (free <= 0) throw bad('in_trip', 'По объявлению уже идёт рейс', 409);
         // заказчик — тот, чей груз; перевозчик — тот, чей транспорт
         const owner = { user: row.owner_user, company: row.owner_company };
         const peer = { user: row.user_id, company: row.company_id };
@@ -293,14 +333,22 @@ export default function dealRoutes(app) {
         if (q1('SELECT kind FROM companies WHERE id = ?', carrier.company)?.kind === 'broker')
           throw bad('broker', 'Брокер не перевозит груз — договоритесь об услугах в чате', 409);
         run(`UPDATE responses SET status = 'accepted' WHERE id = ?`, row.id);
-        const li = q1('SELECT points, cargo_type, body_type, weight, volume, distance_km, date_from, date_to, description, loading, pay_terms, brand FROM listings WHERE id = ?', row.listing_id);
-        tripId = insert(
-          `INSERT INTO trips(listing_id, response_id, customer_user, customer_company, carrier_user, carrier_company, price, currency, track_token, driver_token, terms)
-           VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          row.listing_id, row.id, customer.user, customer.company, carrier.user, carrier.company,
-          row.price ?? row.rate ?? null, row.price ? row.currency : row.l_currency, L.token(12), L.token(18), JSON.stringify(li),
-        );
-        run(`INSERT INTO trip_events(trip_id, stage) VALUES(?, 'planned')`, tripId);
+        const terms = JSON.stringify(q1(TERMS_SQL, row.listing_id));
+        // машина, предложенная в отклике, подставляется в рейс; водителя перевозчик назначает при подтверждении
+        const v = row.vehicle_id ? q1('SELECT brand, plate FROM vehicles WHERE id = ? AND company_id = ?', row.vehicle_id, row.company_id) : null;
+        // на груз из нескольких машин — отдельный рейс на каждую машину: у каждой свой водитель, GPS и этапы
+        const n = Math.min(row.trucks || 1, free);
+        for (let i = 0; i < n; i++) {
+          const id = insert(
+            `INSERT INTO trips(listing_id, response_id, customer_user, customer_company, carrier_user, carrier_company, price, currency, track_token, driver_token, terms, vehicle_brand, plate)
+             VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            row.listing_id, row.id, customer.user, customer.company, carrier.user, carrier.company,
+            row.price ?? row.rate ?? null, row.price ? row.currency : row.l_currency, L.token(12), L.token(18), terms,
+            n === 1 && v ? v.brand : '', n === 1 && v ? v.plate : '',
+          );
+          run(`INSERT INTO trip_events(trip_id, stage) VALUES(?, 'planned')`, id);
+          tripId ??= id;
+        }
       } else throw bad('forbidden', 'Действие недоступно', 403);
       return row;
     });
@@ -308,7 +356,10 @@ export default function dealRoutes(app) {
     if (action === 'decline') notify(staffOf(r.company_id), { kind: 'response', title: 'Отклик отклонён: {route}', vars: routeOf(r.listing_id), link: `/listing/${r.listing_id}` });
     if (tripId) {
       L.push(both, 'trip', { tripId });
+      // подтвердить рейс — машину и водителя — должен перевозчик
+      const carrierCompany = r.kind === 'cargo' ? r.company_id : r.owner_company;
       notify(staffOf(r.company_id), { kind: 'trip', title: 'Отклик принят — рейс создан: {route}', vars: routeOf(r.listing_id), link: `/trip/${tripId}` });
+      if (carrierCompany === r.company_id) notify(staffOf(carrierCompany), { kind: 'trip', title: 'Подтвердите рейс: {route}', vars: routeOf(r.listing_id), body: 'Укажите машину и водителя', link: `/trip/${tripId}` });
     }
     L.push(both, 'response', { listingId: r.listing_id });
     res.json({ ok: true, tripId });
@@ -365,10 +416,12 @@ export default function dealRoutes(app) {
 
   // ---------- рейсы ----------
   app.get('/api/trips', auth, (req, res) => {
+    // водитель из команды видит только свои рейсы
+    const driver = req.user.company_role === 'driver';
+    const where = driver ? 't.driver_user = :u' : '(t.customer_company = :c OR t.carrier_company = :c)';
     res.json(
-      q(`${TRIP_SQL} WHERE t.customer_company = :c OR t.carrier_company = :c ORDER BY (t.status = 'active') DESC, t.id DESC LIMIT 200`, {
-        c: req.user.company_id,
-      }).map((t) => tripOut(withTerms(t), req.user)),
+      q(`${TRIP_SQL} WHERE ${where} ORDER BY (t.status = 'active') DESC, t.id DESC LIMIT 200`, driver ? { u: req.user.id } : { c: req.user.company_id })
+        .map((t) => tripOut(withTerms(t), req.user)),
     );
   });
   app.get('/api/trips/:id', auth, (req, res) => res.json(tripOut(tripOf(req), req.user, true)));
@@ -422,6 +475,51 @@ export default function dealRoutes(app) {
     res.json({ driverToken });
   });
 
+  // Перевозчик подтверждает рейс: какая машина поедет и кто за рулём. Пока груз не в пути, машину и водителя можно заменить.
+  const assignSchema = z.object({
+    vehicleId: z.number().int().positive().nullable().optional(),
+    brand: z.string().trim().max(60).default(''),
+    plate: z.string().trim().max(20).default(''),
+    trailerPlate: z.string().trim().max(20).default(''),
+    driverUserId: z.number().int().positive().nullable().optional(),
+    driverName: z.string().trim().max(100).default(''),
+    driverPhone: z.string().trim().max(20).default(''),
+  });
+  app.post('/api/trips/:id/assign', auth, staff, (req, res) => {
+    const t = carrierOnly(req);
+    const b = parse(assignSchema, req.body);
+    if (t.status !== 'active') throw bad('state', 'Рейс уже завершён', 409);
+    if (L.STAGES.indexOf(t.stage) >= L.STAGES.indexOf('in_transit')) throw bad('state', 'Груз уже в пути — машину и водителя заменить нельзя', 409);
+    let { brand, plate } = b;
+    if (b.vehicleId) {
+      const v = q1('SELECT brand, plate FROM vehicles WHERE id = ? AND company_id = ?', b.vehicleId, req.user.company_id);
+      if (!v) throw bad('vehicle', 'Машина не найдена в вашем парке', 404);
+      ({ brand, plate } = v);
+    }
+    let { driverName, driverPhone } = b;
+    let driverUser = null;
+    if (b.driverUserId) {
+      const d = q1('SELECT id, name, phone FROM users WHERE id = ? AND company_id = ?', b.driverUserId, req.user.company_id);
+      if (!d) throw bad('driver', 'Водитель не найден в вашей команде', 404);
+      [driverUser, driverName, driverPhone] = [d.id, d.name, d.phone];
+    }
+    plate = plate.toUpperCase().replace(/\s+/g, ' ');
+    if (plate.length < 4) throw bad('validation', 'Госномер: укажите номер машины', 400);
+    if (!brand) throw bad('validation', 'Марка: укажите марку машины', 400);
+    if (driverName.length < 2) throw bad('validation', 'Водитель: укажите имя водителя', 400);
+    driverPhone = L.normPhone(driverPhone);
+    const first = !t.confirmed_at;
+    run(`UPDATE trips SET vehicle_brand = ?, plate = ?, trailer_plate = ?, driver_user = ?, driver_name = ?, driver_phone = ?, confirmed_at = COALESCE(confirmed_at, ?) WHERE id = ?`,
+      brand, plate, b.trailerPlate.toUpperCase(), driverUser, driverName, driverPhone, L.now(), t.id);
+    L.push(tripUsers(t), 'trip', { tripId: t.id });
+    notify(staffOf(t.customer_company), {
+      kind: 'trip', title: first ? 'Перевозчик подтвердил рейс: {route}' : 'Перевозчик заменил машину или водителя: {route}',
+      vars: routeOf(t.listing_id), body: `${brand}, ${plate} · ${driverName}`, link: `/trip/${t.id}`,
+    });
+    if (driverUser && driverUser !== t.driver_user) notify(driverUser, { kind: 'trip', title: 'Вас назначили на рейс: {route}', vars: routeOf(t.listing_id), link: `/trip/${t.id}` });
+    res.json({ ok: true });
+  });
+
   // Заказчик подтверждает доставку — рейс завершён, объявление уходит в «Закрытые».
   // Если заказчик молчит 72 часа после отметки «Доставлено», завершить может и перевозчик.
   app.post('/api/trips/:id/complete', auth, staff, (req, res) => {
@@ -456,7 +554,8 @@ export default function dealRoutes(app) {
     if (t.status !== 'active') throw bad('state', 'Рейс уже завершён', 409);
     tx(() => {
       run(`UPDATE trips SET status = 'failed', finished_at = ?, share_gps = 0, fail_reason = ?, failed_by = ? WHERE id = ?`, L.now(), reason, req.user.company_id, t.id);
-      run(`UPDATE listings SET status = 'closed', closed_at = ? WHERE id = ?`, L.now(), t.listing_id);
+      // по объявлению на несколько машин остальные рейсы продолжаются
+      closeListingIfDone(t.listing_id, true);
     });
     L.push(tripUsers(t), 'trip', { tripId: t.id });
     notify(staffOf(t.customer_company === req.user.company_id ? t.carrier_company : t.customer_company), {

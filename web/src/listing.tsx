@@ -43,6 +43,7 @@ export function RateBlock({ l }: { l: Listing }) {
   return (
     <div className="rate">
       <b>{money(l.rate, l.currency)}</b>
+      {l.rate && l.trucks > 1 && <small>{t('за одну машину')}</small>}
       {l.rate && l.distanceKm > 0 && l.currency === 'KZT' && <small>{num(Math.round(l.rate / l.distanceKm))} ₸/{t('км')}</small>}
     </div>
   );
@@ -236,6 +237,7 @@ export function ContactButtons({ phone, text, full }: { phone: string; text?: st
 /** Отклик для окна подтверждения: достаточно компании и цены. */
 export interface ResponseBrief {
   id: number; price: number | null; currency: string; message?: string; user?: { name: string }; company: Company;
+  trucks?: number; vehicle?: { brand: string; plate: string } | null;
 }
 /**
  * Подтверждение «Принять отклик» / «Отклонить отклик»: показывает компанию, цену и репутацию.
@@ -279,8 +281,13 @@ export function AcceptResponseModal({ r, mode = 'accept', listingRate, onConfirm
       {c.indicator === 'red' && <div className="form-error">{t('Осторожно: у компании много плохих отзывов или записи в чёрном списке.')}</div>}
       {accept && c.verified !== 'verified' && <p className="muted small">{t('Компания ещё не прошла проверку документов.')}</p>}
       {r.message && <p className="confirm-msg">{r.message}</p>}
+      {r.vehicle && <div className="kv"><span>{t('Машина')}</span><b>{r.vehicle.brand}{r.vehicle.plate ? `, ${r.vehicle.plate}` : ''}</b></div>}
       <p className="muted small">
-        {accept ? t('Будет создан рейс с этой компанией — вы сразу перейдёте на его страницу.') : t('Компания получит уведомление, что отклик отклонён.')}
+        {accept
+          ? (r.trucks || 1) > 1
+            ? t('Будет создано рейсов: {n} — по одному на каждую машину. Перевозчик подтвердит каждый рейс: укажет машину и водителя.', { n: r.trucks! })
+            : t('Будет создан рейс с этой компанией. Перевозчик подтвердит его: укажет машину и водителя.')
+          : t('Компания получит уведомление, что отклик отклонён.')}
       </p>
       <div className="row end wrap">
         <button className="btn ghost" onClick={onClose} disabled={busy} autoFocus={!accept}>{t('Отмена')}</button>
@@ -293,7 +300,7 @@ export function AcceptResponseModal({ r, mode = 'accept', listingRate, onConfirm
 }
 
 /** Можно ли откликнуться на объявление (не своё, активно, не в рейсе, нет ожидающего отклика). */
-export const canRespondTo = (l: Listing) => !l.mine && l.status === 'active' && !l.tripId && l.myResponse?.status !== 'sent';
+export const canRespondTo = (l: Listing) => !l.mine && l.status === 'active' && !l.full && l.myResponse?.status !== 'sent';
 
 export function ListingCard({ l, onChange, footer }: { l: Listing; onChange: () => void; footer?: React.ReactNode }) {
   const { routeName, me } = useApp();
@@ -322,6 +329,7 @@ export function ListingCard({ l, onChange, footer }: { l: Listing; onChange: () 
             {l.mark.marked && <span className="tag marked"><BookmarkCheck size={12} /> {t('Отмечено')}</span>}
             {l.myResponse?.status === 'sent' && <span className="tag sent">{t('Вы откликнулись')}</span>}
             {l.tripId && <span className="tag trip">{t('В рейсе')}</span>}
+            {l.kind === 'cargo' && l.trucks > 1 && <span className="tag">{l.booked > 0 ? t('Машин: {a} из {b}', { a: l.booked, b: l.trucks }) : t('Нужно машин: {n}', { n: l.trucks })}</span>}
           </div>
           <Link to={`/listing/${l.id}`} className="lcard-title"><RouteTitle points={l.points} /></Link>
           <div className="muted small">

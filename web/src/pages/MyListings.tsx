@@ -99,7 +99,7 @@ export default function MyListings() {
               <Empty
                 icon={kind === 'cargo' ? <Package size={26} /> : <Truck size={26} />}
                 title={status === 'active' ? (kind === 'cargo' ? t('У вас нет активных грузов') : t('У вас нет активного транспорта')) : t('Здесь пока пусто')}
-                text={status === 'active' ? t('Разместите объявление — это занимает четыре коротких шага.') : status === 'closed' ? t('Сюда попадают объявления после завершения работы заказчика и перевозчика.') : t('Архив хранит историю закрытых объявлений.')}
+                text={status === 'active' ? t('Разместите объявление — это занимает четыре коротких шага.') : status === 'closed' ? t('Сюда попадают выполненные, истёкшие и закрытые вами объявления. Их можно разместить снова.') : t('Архив хранит историю закрытых объявлений.')}
               />
             </div>
           )}
@@ -114,16 +114,19 @@ interface Form {
   points: (string | null)[]; brand: string; bodyType: string | null; cargoType: string | null; weight: string; volume: string; loading: string[];
   adrClass: string; flags: string[];
   dateFrom: string; dateTo: string; payTerms: string[]; withRate: boolean; rate: string; currency: string; description: string;
+  trucks: string; loadAddress: string; unloadAddress: string; loadTime: string;
 }
 const empty = (): Form => ({
   points: [null, null], brand: '', bodyType: null, cargoType: null, weight: '', volume: '', loading: [], adrClass: '', flags: [],
   dateFrom: todayStr(), dateTo: todayStr(7), payTerms: [], withRate: true, rate: '', currency: 'KZT', description: '',
+  trucks: '1', loadAddress: '', unloadAddress: '', loadTime: '',
 });
 const fromListing = (l: Listing, keepDates: boolean): Form => ({
   points: l.points, brand: l.brand, bodyType: l.bodyType, cargoType: l.cargoType, weight: l.weight?.toString() || '', volume: l.volume?.toString() || '',
   loading: l.loading, adrClass: l.adrClass ? String(l.adrClass) : '', flags: l.flags || [],
   dateFrom: keepDates ? l.dateFrom : todayStr(), dateTo: keepDates ? l.dateTo : todayStr(7), payTerms: l.payTerms,
   withRate: l.rate != null, rate: l.rate?.toString() || '', currency: l.currency, description: l.description,
+  trucks: String(l.trucks || 1), loadAddress: l.loadAddress || '', unloadAddress: l.unloadAddress || '', loadTime: l.loadTime || '',
 });
 
 // Пределы — те же, что проверяет сервер (server/routes/listings.js).
@@ -138,7 +141,8 @@ const toNum = (s: string) => {
 };
 const dmy = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}`;
 
-type FieldKey = 'brand' | 'bodyType' | 'weight' | 'volume' | 'dateFrom' | 'dateTo' | 'rate';
+type FieldKey = 'brand' | 'bodyType' | 'weight' | 'volume' | 'dateFrom' | 'dateTo' | 'rate' | 'trucks';
+const MAX_TRUCKS = 50;
 /** Ошибки по полям: показываются под полем на том шаге, где оно вводится. */
 function validate(f: Form, kind: Kind, isNew: boolean) {
   const e: Partial<Record<FieldKey, string>> = {};
@@ -155,6 +159,11 @@ function validate(f: Form, kind: Kind, isNew: boolean) {
     if (isNaN(v)) e.volume = t('Введите число, например 20 или 1,5');
     else if (v <= 0) e.volume = t('Объём должен быть больше нуля');
     else if (v > MAX_VOLUME) e.volume = t('Объём — не больше {n} м³', { n: MAX_VOLUME });
+  }
+  if (kind === 'cargo') {
+    const n = toNum(f.trucks);
+    if (n === null || isNaN(n) || !Number.isInteger(n) || n < 1) e.trucks = t('Укажите число машин, например 1 или 3');
+    else if (n > MAX_TRUCKS) e.trucks = t('Не больше {n} машин в одном объявлении', { n: MAX_TRUCKS });
   }
   const today = todayStr();
   const last = todayStr(MAX_DAYS);
@@ -177,7 +186,7 @@ function validate(f: Form, kind: Kind, isNew: boolean) {
 
 // На каком шаге вводится поле, которое отклонил сервер.
 const FIELD_STEP: Record<string, number> = {
-  points: 0, brand: 1, bodyType: 1, cargoType: 1, weight: 1, volume: 1, loading: 1, adrClass: 1, flags: 1,
+  points: 0, loadAddress: 0, unloadAddress: 0, loadTime: 0, brand: 1, bodyType: 1, cargoType: 1, weight: 1, volume: 1, loading: 1, adrClass: 1, flags: 1, trucks: 1,
   dateFrom: 2, dateTo: 2, payTerms: 2, rate: 2, currency: 2, description: 3,
 };
 function stepOfError(e: { field?: string; message?: string }) {
@@ -273,6 +282,8 @@ export function ListingForm() {
       adrClass: /^[1-9]$/.test(str(d.adrClass, '')) ? d.adrClass : '', flags: arr(d.flags, meta.flags),
       dateFrom, dateTo, payTerms: arr(d.payTerms, meta.pay), withRate: typeof d.withRate === 'boolean' ? d.withRate : b.withRate,
       rate: str(d.rate, b.rate), currency: one(d.currency, meta.currencies) || b.currency, description: str(d.description, b.description).slice(0, 2000),
+      trucks: str(d.trucks, b.trucks).slice(0, 3), loadAddress: str(d.loadAddress, b.loadAddress).slice(0, 200), unloadAddress: str(d.unloadAddress, b.unloadAddress).slice(0, 200),
+      loadTime: str(d.loadTime, b.loadTime).slice(0, 40),
     };
   };
 
@@ -309,7 +320,7 @@ export function ListingForm() {
   const errs = validate(f, kind, !editId);
   const stepBad = [
     errs.points.some(Boolean),
-    !!(errs.brand || errs.bodyType || errs.weight || errs.volume),
+    !!(errs.brand || errs.bodyType || errs.weight || errs.volume || errs.trucks),
     !!(errs.dateFrom || errs.dateTo || errs.rate),
     false,
   ];
@@ -385,6 +396,8 @@ export function ListingForm() {
       kind, points: pts, brand: f.brand, bodyType: f.bodyType, cargoType: kind === 'cargo' ? f.cargoType : null, weight: toNum(f.weight), volume: toNum(f.volume),
       loading: f.loading, adrClass: f.adrClass ? Number(f.adrClass) : null, flags: f.flags, dateFrom: f.dateFrom, dateTo: f.dateTo, payTerms: f.payTerms,
       rate: f.withRate ? Number(f.rate.replace(/\s+/g, '')) : null, currency: f.currency, description: f.description,
+      trucks: kind === 'cargo' ? Number(toNum(f.trucks)) || 1 : 1,
+      loadAddress: kind === 'cargo' ? f.loadAddress.trim() : '', unloadAddress: kind === 'cargo' ? f.unloadAddress.trim() : '', loadTime: kind === 'cargo' ? f.loadTime.trim() : '',
     };
     try {
       await (editId ? api(`/listings/${editId}`, 'PUT', body) : api('/listings', 'POST', body));
@@ -475,6 +488,25 @@ export function ListingForm() {
               </button>
             )}
             {km > 0 && <div className="info-line">{t('Расстояние по маршруту: ~{n} км', { n: num(km) })}</div>}
+            {kind === 'cargo' && (
+              <details className="opt-block" open={!!(f.loadAddress || f.unloadAddress || f.loadTime)}>
+                <summary>
+                  <span className="opt-title">{t('Адреса и время погрузки')}</span>
+                  <span className="opt-note">{t('необязательно — водитель увидит их в рейсе')}</span>
+                </summary>
+                <div className="opt-body">
+                  <F label={t('Адрес погрузки')} opt>
+                    <input value={f.loadAddress} onChange={(e) => set({ loadAddress: e.target.value })} maxLength={200} placeholder={t('Улица, дом, склад или ориентир')} />
+                  </F>
+                  <F label={t('Адрес выгрузки')} opt>
+                    <input value={f.unloadAddress} onChange={(e) => set({ unloadAddress: e.target.value })} maxLength={200} placeholder={t('Улица, дом, склад или ориентир')} />
+                  </F>
+                  <F label={t('Время погрузки')} opt>
+                    <input value={f.loadTime} onChange={(e) => set({ loadTime: e.target.value })} maxLength={40} placeholder={t('Например: 9:00–13:00')} />
+                  </F>
+                </div>
+              </details>
+            )}
           </>
         )}
 
@@ -500,6 +532,11 @@ export function ListingForm() {
                   <input value={f.brand} onChange={(e) => set({ brand: e.target.value })} placeholder="Volvo FH, DAF XF, КамАЗ…" maxLength={60} aria-required="true" {...inv('brand')} />
                 </F>
               </>
+            )}
+            {kind === 'cargo' && (
+              <F label={t('Сколько машин нужно')} req error={shown('trucks')} errId="lf-trucks-err" hint={t('Если груз везут несколько машин — по каждой будет отдельный рейс')}>
+                <input inputMode="numeric" value={f.trucks} onChange={(e) => set({ trucks: e.target.value.replace(/\D/g, '') })} maxLength={2} aria-required="true" {...inv('trucks')} />
+              </F>
             )}
             {kind === 'cargo' && (
               <F label={t('Тип груза')} opt>
@@ -602,7 +639,8 @@ export function ListingForm() {
             </Field>
             <div className="summary">
               <b>{pts.map(cityName).join(' → ')}</b>
-              <span>{num(km)} {t('км')} · {fmtDates(f.dateFrom, f.dateTo)}</span>
+              <span>{num(km)} {t('км')} · {fmtDates(f.dateFrom, f.dateTo)}{kind === 'cargo' && Number(f.trucks) > 1 ? ` · ${t('Нужно машин: {n}', { n: f.trucks })}` : ''}</span>
+              {kind === 'cargo' && (f.loadAddress || f.unloadAddress) && <span>{[f.loadAddress, f.unloadAddress].filter(Boolean).join(' → ')}{f.loadTime ? ` · ${f.loadTime}` : ''}</span>}
               <span>
                 {[kind === 'truck' ? f.brand : f.cargoType && t(CARGO_L[f.cargoType]), f.bodyType && t(BODY_L[f.bodyType]), f.weight && `${f.weight} ${t('т')}`, f.volume && `${f.volume} ${t('м³')}`,
                   ...f.loading.map((x) => t(LOADING_L[x])), f.adrClass && `ADR ${f.adrClass}`, ...f.flags.map((x) => t(FLAG_L[x] || x))].filter(Boolean).join(' · ')}

@@ -32,6 +32,11 @@ const listingSchema = z
     rate: num(1e9),
     currency: z.enum(L.CURRENCIES).default('KZT'),
     description: z.string().trim().max(2000).default(''),
+    // сколько машин нужно под груз (у объявления о транспорте — всегда одна)
+    trucks: z.number().int().min(1).max(50).default(1),
+    loadAddress: z.string().trim().max(200).default(''),
+    unloadAddress: z.string().trim().max(200).default(''),
+    loadTime: z.string().trim().max(40).default(''),
   })
   .refine((b) => b.dateTo >= b.dateFrom, 'Дата окончания раньше даты начала')
   .refine((b) => b.dateTo <= new Date(Date.now() + 180 * 86400_000).toISOString().slice(0, 10), 'Период размещения — не дальше полугода')
@@ -110,8 +115,7 @@ export function passes(l, f) {
   return true;
 }
 
-const ACTIVE = `l.status = 'active' AND l.date_to >= :today AND cs.banned = 0
-  AND NOT EXISTS (SELECT 1 FROM trips t WHERE t.listing_id = l.id AND t.status = 'active')`;
+const ACTIVE = `l.status = 'active' AND l.date_to >= :today AND cs.banned = 0 AND ${L.BOOKED('l')} < l.trucks`;
 // скрытые пользователем объявления и компании из личного чёрного списка в выдачу не попадают
 const VISIBLE = `COALESCE(m.hidden, 0) = 0
   AND NOT EXISTS (SELECT 1 FROM blocks b WHERE b.company_id = :viewerCompany AND b.blocked_id = l.company_id)`;
@@ -168,20 +172,28 @@ export function priceSamples(kind, { bodyType = null, exceptId = 0 } = {}) {
 const kmBand = (km) => (km < 300 ? 0 : km < 1000 ? 1 : 2);
 const weightBand = (w) => (w == null ? null : w <= 5 ? 0 : 1);
 /**
- * Рыночный ориентир ₸/км (25-й, 50-й и 75-й процентили) по похожим перевозкам: тот же класс расстояния и веса,
- * по возможности тот же кузов. Нужны данные минимум от трёх компаний — иначе ориентира нет.
+ * Рыночный ориентир ₸/км — один расчёт для карточки объявления, «Цен» и калькулятора рейса.
+ * Берутся 25-й, 50-й (обычная цена) и 75-й процентили ставки за километр по похожим перевозкам, по шагам:
+ * то же направление (с тем же кузовом, потом с любым) → тот же класс расстояния, веса и кузов → без кузова → без веса.
+ * Короткие и дальние рейсы не смешиваются: за километр на 200 км платят заметно больше, чем на 2000.
+ * Шаг засчитывается, если в нём не меньше 5 ставок минимум от 3 компаний — иначе ориентира нет.
  */
-export function marketRate(kind, { exceptId = 0, bodyType = null, km = null, weight = null } = {}) {
+export function marketRate(kind, { exceptId = 0, bodyType = null, km = null, weight = null, fromId = null, toId = null } = {}) {
   const all = priceSamples(kind, { exceptId });
-  const pick = (useBody, useWeight, useKm) =>
-    all.filter((r) => (!useBody || !bodyType || r.body_type === bodyType) && (!useKm || km == null || kmBand(r.km) === kmBand(km))
-      && (!useWeight || weight == null || weightBand(r.weight) === weightBand(weight)));
-  for (const args of [[true, true, true], [false, true, true], [false, false, true], [false, false, false]]) {
-    const rows = pick(...args);
+  const steps = [
+    fromId && toId && bodyType && ['direction', (r) => r.from_id === fromId && r.to_id === toId && r.body_type === bodyType],
+    fromId && toId && ['direction', (r) => r.from_id === fromId && r.to_id === toId],
+    km != null && ['similar', (r) => kmBand(r.km) === kmBand(km) && (weight == null || weightBand(r.weight) === weightBand(weight)) && (!bodyType || r.body_type === bodyType)],
+    km != null && ['similar', (r) => kmBand(r.km) === kmBand(km) && (weight == null || weightBand(r.weight) === weightBand(weight))],
+    km != null && ['similar', (r) => kmBand(r.km) === kmBand(km)],
+    km == null && ['similar', (r) => !bodyType || r.body_type === bodyType],
+  ].filter(Boolean);
+  for (const [basis, fit] of steps) {
+    const rows = all.filter(fit);
     if (rows.length < 5 || new Set(rows.map((r) => r.company_id)).size < 3) continue;
     const perKm = rows.map((r) => r.rate / r.km).sort((x, y) => x - y);
     const at = (p) => Math.round(perKm[Math.floor((perKm.length - 1) * p)]);
-    return { low: at(0.25), median: at(0.5), high: at(0.75), sample: perKm.length };
+    return { low: at(0.25), median: at(0.5), high: at(0.75), sample: perKm.length, basis };
   }
   return null;
 }
@@ -340,6 +352,7 @@ export default function listingRoutes(app) {
       JSON.stringify(b.points), b.points[0], b.points[b.points.length - 1], b.brand, b.bodyType ?? null, b.cargoType ?? null,
       b.weight ?? null, b.volume ?? null, JSON.stringify(b.loading), b.dateFrom, b.dateTo, JSON.stringify(b.payTerms),
       b.rate ?? null, b.currency, b.description, km, b.adrClass ?? null, JSON.stringify(b.flags),
+      b.kind === 'cargo' ? b.trucks : 1, b.loadAddress, b.unloadAddress, b.loadTime,
     ];
   };
   app.post('/api/listings', auth, staff, async (req, res) => {
@@ -362,8 +375,8 @@ export default function listingRoutes(app) {
       throw bad('removed', 'Такое объявление недавно снял модератор. Если это ошибка, напишите в поддержку', 409);
     const id = insert(
       `INSERT INTO listings(kind, user_id, company_id, points, from_id, to_id, brand, body_type, cargo_type, weight, volume, loading,
-         date_from, date_to, pay_terms, rate, currency, description, distance_km, adr_class, flags)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         date_from, date_to, pay_terms, rate, currency, description, distance_km, adr_class, flags, trucks, load_address, unload_address, load_time)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       b.kind, req.user.id, req.user.company_id, ...(await save(b)),
     );
     res.json({ id });
@@ -386,9 +399,12 @@ export default function listingRoutes(app) {
     // условия, о которых уже договорились, задним числом не меняются
     if (q1(`SELECT 1 FROM trips WHERE listing_id = ? AND status = 'active'`, l.id)) throw bad('in_trip', 'По объявлению идёт рейс — изменить его нельзя', 409);
     const b = parse(listingSchema, { ...req.body, kind: l.kind });
+    const booked = q1(`SELECT COUNT(*) AS n FROM trips WHERE listing_id = ? AND status = 'completed'`, l.id).n;
+    if (l.kind === 'cargo' && b.trucks < booked) throw bad('validation', `По объявлению уже выполнено рейсов: ${booked} — машин не может быть меньше`);
     run(
       `UPDATE listings SET points = ?, from_id = ?, to_id = ?, brand = ?, body_type = ?, cargo_type = ?, weight = ?, volume = ?, loading = ?,
-         date_from = ?, date_to = ?, pay_terms = ?, rate = ?, currency = ?, description = ?, distance_km = ?, adr_class = ?, flags = ? WHERE id = ?`,
+         date_from = ?, date_to = ?, pay_terms = ?, rate = ?, currency = ?, description = ?, distance_km = ?, adr_class = ?, flags = ?,
+         trucks = ?, load_address = ?, unload_address = ?, load_time = ? WHERE id = ?`,
       ...(await save(b)), l.id,
     );
     res.json({ id: l.id });
@@ -437,16 +453,30 @@ export default function listingRoutes(app) {
       if (first) run('UPDATE listings SET views = views + 1 WHERE id = ?', id);
     }
     const [l] = L.listings(req.user, 'l.id = :id', { id });
-    const out = { ...l, market: marketRate(l.kind, { exceptId: l.id, bodyType: l.bodyType, km: l.distanceKm, weight: l.weight }), matches: l.mine && l.status === 'active' ? matchesFor(req.user, l) : [] };
+    const market = marketRate(l.kind, { exceptId: l.id, bodyType: l.bodyType, km: l.distanceKm, weight: l.weight, fromId: l.fromId, toId: l.toId });
+    // ставка этого объявления в тенге за километр — для сравнения с рынком в любой валюте
+    if (market && l.rate && l.distanceKm) market.perKm = Math.round(toKzt(l.rate, l.currency) / l.distanceKm);
+    const out = { ...l, market, matches: l.mine && l.status === 'active' ? matchesFor(req.user, l) : [] };
+    // рейсы по объявлению: владельцу — все, остальным — только свои
+    out.trips = q(
+      `SELECT t.id, t.status, t.stage, t.plate, t.vehicle_brand AS vehicleBrand, t.driver_name AS driverName, t.confirmed_at IS NOT NULL AS confirmed,
+         cc.name AS carrierName, uc.name AS customerName
+       FROM trips t JOIN companies cc ON cc.id = t.carrier_company JOIN companies uc ON uc.id = t.customer_company
+       WHERE t.listing_id = :l AND (:mine OR t.customer_company = :c OR t.carrier_company = :c) ORDER BY t.id`,
+      { l: l.id, mine: l.mine ? 1 : 0, c: req.user.company_id },
+    ).map((t) => ({ ...t, confirmed: !!t.confirmed }));
     if (l.mine) {
       out.responses = q(
-        `SELECT r.id, r.message, r.price, r.currency, r.status, r.created_at AS createdAt, r.user_id AS userId, u.name AS userName, u.phone, u.settings, u.company_id AS u_company,
+        `SELECT r.id, r.message, r.price, r.currency, r.status, r.trucks, r.created_at AS createdAt, r.user_id AS userId, u.name AS userName, u.phone, u.settings, u.company_id AS u_company,
+           v.brand AS v_brand, v.plate AS v_plate, v.body_type AS v_body, v.weight AS v_weight,
            r.company_id, ${L.COMPANY_COLS('cs', 'c_')},
            (SELECT id FROM chats c WHERE c.listing_id = r.listing_id AND c.peer_id = r.user_id) AS chatId
          FROM responses r JOIN users u ON u.id = r.user_id JOIN company_stats cs ON cs.id = r.company_id
+         LEFT JOIN vehicles v ON v.id = r.vehicle_id AND v.company_id = r.company_id
          WHERE r.listing_id = ? AND r.status != 'withdrawn' ORDER BY r.id DESC`,
         l.id,
-      ).map((r) => ({ id: r.id, message: r.message, price: r.price, currency: r.currency, status: r.status, createdAt: r.createdAt, chatId: r.chatId,
+      ).map((r) => ({ id: r.id, message: r.message, price: r.price, currency: r.currency, status: r.status, trucks: r.trucks, createdAt: r.createdAt, chatId: r.chatId,
+        vehicle: r.v_brand ? { brand: r.v_brand, plate: r.v_plate, bodyType: r.v_body, weight: r.v_weight } : null,
         user: { id: r.userId, name: r.userName, phone: L.phoneFor(req.user, { phone: r.phone, settings: r.settings, company_id: r.u_company }) }, company: L.companyOut(r, 'c_') }));
     } else if (l.myResponse) {
       out.chatId = q1('SELECT id FROM chats WHERE listing_id = ? AND peer_id = ?', l.id, req.user.id)?.id || null;

@@ -22,6 +22,8 @@ export default function TripDoc() {
     </td>
   );
   const row = (label: string, value: React.ReactNode) => (<tr><th>{label}</th><td>{value || '—'}</td></tr>);
+  const blank = '________________';
+  const v = trip.vehicle;
   return (
     <div className="stack">
       <div className="row between wrap no-print">
@@ -37,14 +39,19 @@ export default function TripDoc() {
         <table className="doc-table">
           <tbody>
             {row(t('Маршрут'), trip.points.map(cityName).join(' → '))}
+            {row(t('Адрес погрузки'), trip.loadAddress)}
+            {row(t('Адрес выгрузки'), trip.unloadAddress)}
+            {trip.loadTime && row(t('Время погрузки'), trip.loadTime)}
             {row(t('Расстояние'), `${num(trip.distanceKm)} ${t('км')}`)}
             {row(t('Период перевозки'), `${day(trip.dateFrom)} — ${day(trip.dateTo)}`)}
             {row(t('Груз'), [trip.cargoType && t(CARGO_L[trip.cargoType]), trip.weight && `${trip.weight} ${t('т')}`, trip.volume && `${trip.volume} ${t('м³')}`].filter(Boolean).join(', '))}
-            {row(t('Транспорт'), [trip.brand, trip.bodyType && t(BODY_L[trip.bodyType])].filter(Boolean).join(', '))}
+            {row(t('Транспорт'), [trip.confirmed ? v.brand : trip.brand, trip.bodyType && t(BODY_L[trip.bodyType])].filter(Boolean).join(', '))}
+            {row(t('Госномер'), trip.confirmed ? [v.plate, v.trailerPlate && `${t('прицеп')} ${v.trailerPlate}`].filter(Boolean).join(', ') : blank)}
             {row(t('Способ погрузки'), trip.loading?.map((x) => t(LOADING_L[x])).join(', '))}
             {row(t('Стоимость перевозки'), <b>{money(trip.price ?? null, trip.currency)}</b>)}
             {row(t('Условия оплаты'), trip.payTerms?.map((x) => t(PAY_L[x])).join(', '))}
-            {row(t('Водитель'), `${trip.carrier.userName}, ${trip.carrier.phone}`)}
+            {/* водитель — тот, кого назначил перевозчик; до подтверждения строка остаётся для заполнения от руки */}
+            {row(t('Водитель'), trip.confirmed && trip.driver?.name ? `${trip.driver.name}, ${trip.driver.phone}` : blank)}
             {row(t('Особые условия'), trip.description)}
           </tbody>
         </table>

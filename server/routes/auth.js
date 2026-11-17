@@ -87,7 +87,7 @@ export default function authRoutes(app) {
       `SELECT l.id, l.kind, l.points, l.body_type, l.cargo_type, l.weight, l.volume, l.date_from, l.date_to, l.rate, l.currency, l.distance_km
        FROM listings l JOIN companies c ON c.id = l.company_id
        WHERE l.status = 'active' AND l.date_to >= ? AND c.banned = 0
-         AND NOT EXISTS (SELECT 1 FROM trips t WHERE t.listing_id = l.id AND t.status = 'active')
+         AND ${L.BOOKED('l')} < l.trucks
        ORDER BY l.id DESC LIMIT 12`,
       L.today(),
     );
@@ -183,7 +183,8 @@ export default function authRoutes(app) {
     const user =
       role === 'admin'
         ? q1('SELECT * FROM users WHERE is_admin = 1 AND is_demo = 1 ORDER BY id LIMIT 1')
-        : q1('SELECT * FROM users WHERE role = ? AND is_admin = 0 AND is_demo = 1 ORDER BY id LIMIT 1', String(role));
+        // «Водитель» в демо — водитель из команды перевозчика: главный сценарий для водителя
+        : q1(`SELECT * FROM users WHERE role = ? AND is_admin = 0 AND is_demo = 1 ORDER BY (company_role = 'driver') DESC, id LIMIT 1`, String(role));
     if (!user) throw bad('not_found', 'Демо-аккаунт не найден', 404);
     L.startSession(req, res, user.id);
     res.json(L.meOut(user));

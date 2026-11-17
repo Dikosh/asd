@@ -209,7 +209,9 @@ export default function extraRoutes(app) {
     const bodies = new Map();
     for (const r of rows) if (r.body_type) bodies.set(r.body_type, [...(bodies.get(r.body_type) || []), r.rate / r.km]);
     const byBody = [...bodies.entries()].filter(([, a]) => a.length >= 2).map(([b, a]) => ({ body: b, count: a.length, perKm: Math.round(median(a)) })).sort((x, y) => y.count - x.count);
-    res.json({ sample: rows.length, deals: rows.filter((r) => r.deal).length, overall: marketRate(kind, { bodyType: body }), directions, byBody });
+    // обычная ставка отдельно для коротких, средних и дальних рейсов — тем же расчётом, что в карточке и калькуляторе
+    const bands = [[150, 'short'], [600, 'mid'], [1500, 'long']].map(([km, band]) => ({ band, ...marketRate(kind, { bodyType: body, km }) })).filter((b) => b.median);
+    res.json({ sample: rows.length, deals: rows.filter((r) => r.deal).length, bands, directions, byBody });
   });
 
   // ---------- калькуляторы ----------
@@ -218,12 +220,9 @@ export default function extraRoutes(app) {
     if (points.length < 2 || points.length > 8) throw bad('validation', 'Укажите от двух до восьми пунктов');
     const r = await route(points);
     const body = L.BODY.includes(req.query.body) ? req.query.body : null;
-    // как на странице «Цены»: сначала ставки этого направления, иначе — общая оценка по похожим рейсам
-    const ids = String(req.query.points || '').split(',');
-    const dir = priceSamples('cargo', { bodyType: body }).filter((x) => x.from_id === ids[0] && x.to_id === ids.at(-1) && x.km > 0).map((x) => x.rate / x.km).sort((a, b) => a - b);
-    const at = (p) => Math.round(dir[Math.floor((dir.length - 1) * p)]);
-    const similar = marketRate('cargo', { bodyType: body, km: r.km });
-    const m = dir.length >= 3 ? { low: at(0.25), median: at(0.5), high: at(0.75), sample: dir.length, basis: 'direction' } : similar && { ...similar, basis: 'similar' };
+    const kind = req.query.kind === 'truck' ? 'truck' : 'cargo';
+    const weight = Number(req.query.weight) > 0 ? Number(req.query.weight) : null;
+    const m = marketRate(kind, { bodyType: body, km: r.km, weight, fromId: points[0].id, toId: points[points.length - 1].id });
     res.json({
       ...r,
       hours: Math.round(r.km / 60), // средняя скорость грузовика на трассе с учётом остановок

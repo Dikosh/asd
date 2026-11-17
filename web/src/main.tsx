@@ -1,7 +1,7 @@
 import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Link, BrowserRouter, NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import { Bell, Bookmark, Building2, Calculator, ChevronDown, Home as HomeIcon, LifeBuoy, Menu, MessageSquare, Package, Search as SearchIcon, TrendingUp, Truck, UserRound, Ban } from 'lucide-react';
+import { Bell, Bookmark, Briefcase, Building2, Calculator, ChevronDown, Home as HomeIcon, LifeBuoy, Menu, MessageSquare, Package, Route as RouteIcon, Search as SearchIcon, TrendingUp, Truck, UserRound, Ban } from 'lucide-react';
 import './styles.css';
 import { api, AppCtx, City, connectEvents, Ctx, getLang, Lang, Me, Meta, placeName, storeLang, t, Trip, useApp, useEvent } from './core';
 import { registerWorker } from './push';
@@ -22,19 +22,23 @@ import HelpPage, { RulesPage } from './pages/Help';
 import NotificationsPage from './pages/Notifications';
 import TripDoc from './pages/TripDoc';
 
-/** Платформа обязательно требует отзыв после завершения рейса. */
+/** Платформа требует отзыв после завершения рейса: три дня можно отложить, потом без отзыва работа блокируется. */
+const REVIEW_GRACE_MS = 72 * 3600_000;
 function ReviewGate() {
   const { me, reloadMe, act } = useApp();
   const [rating, setRating] = useState(0);
   const [text, setText] = useState('');
-  const p = me?.pendingReviews[0];
+  const [later, setLater] = useState<number[]>([]);
+  const p = me?.pendingReviews.find((r) => !later.includes(r.tripId) || Date.now() - Date.parse(r.finishedAt) > REVIEW_GRACE_MS);
   const loc = useLocation();
   // на странице того же рейса отзыв оставляют в его карточке; на остальных страницах окно показывается всегда
   if (!p || loc.pathname.startsWith(`/trip/${p.tripId}`) || loc.pathname.startsWith('/d/') || loc.pathname.startsWith('/t/')) return null;
+  const canDefer = Date.now() - Date.parse(p.finishedAt) < REVIEW_GRACE_MS;
   return (
-    <Modal title={t('Оцените завершённый рейс')}>
+    <Modal title={t('Оцените завершённый рейс')} onClose={canDefer ? () => setLater((x) => [...x, p.tripId]) : undefined}>
       <p>
         {t('Рейс с компанией «{name}» завершён. Отзыв обязателен — из отзывов складывается рейтинг компаний.', { name: p.companyName })}
+        {canDefer && ` ${t('Можно отложить: без отзыва работа заблокируется через три дня после рейса.')}`}
       </p>
       <div className="center"><Stars value={rating} onChange={setRating} size={34} /></div>
       <textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} placeholder={t('Что понравилось или не понравилось?')} maxLength={1000} />
@@ -51,6 +55,7 @@ function ReviewGate() {
       >
         {t('Отправить отзыв')}
       </button>
+      {canDefer && <button className="btn ghost block" onClick={() => setLater((x) => [...x, p.tripId])}>{t('Позже')}</button>}
     </Modal>
   );
 }
@@ -87,7 +92,14 @@ function Layout() {
     window.scrollTo(0, 0); // в новых браузерах возвращает Promise — эффект не должен его возвращать
   }, [loc.pathname]);
   const mineKind = me!.user.role === 'carrier' || me!.user.role === 'driver' ? 'truck' : 'cargo';
-  const nav = [
+  // водитель из команды не размещает объявления и не ищет грузы — у него рейсы, работа и помощь
+  const teamDriver = me!.user.companyRole === 'driver';
+  const nav = teamDriver ? [
+    { to: '/', icon: <HomeIcon size={20} />, label: t('Главная'), end: true },
+    { to: '/cabinet/trips', icon: <RouteIcon size={20} />, label: t('Мои рейсы') },
+    { to: '/jobs', icon: <Briefcase size={20} />, label: t('Работа') },
+    { to: '/help', icon: <LifeBuoy size={20} />, label: t('Помощь') },
+  ] : [
     { to: '/', icon: <HomeIcon size={20} />, label: t('Главная'), end: true },
     { to: `/my/${mineKind}`, match: '/my', icon: <Package size={20} />, label: t('Мои объявления') },
     { to: '/search/cargo', icon: <SearchIcon size={20} />, label: t('Найти груз') },
@@ -149,10 +161,12 @@ function Layout() {
               <Bell size={20} />
               {me!.counters.notifications > 0 && <span className="badge">{me!.counters.notifications}</span>}
             </NavLink>
-            <NavLink to="/cabinet/messages" className="icon-btn" aria-label={t('Сообщения')} title={t('Сообщения')}>
-              <MessageSquare size={20} />
-              {me!.counters.unread > 0 && <span className="badge">{me!.counters.unread}</span>}
-            </NavLink>
+            {!teamDriver && (
+              <NavLink to="/cabinet/messages" className="icon-btn" aria-label={t('Сообщения')} title={t('Сообщения')}>
+                <MessageSquare size={20} />
+                {me!.counters.unread > 0 && <span className="badge">{me!.counters.unread}</span>}
+              </NavLink>
+            )}
             <NavLink to="/cabinet" className="user-chip">
               <UserRound size={18} />
               <span className="hide-s">{me!.user.name.split(' ')[0]}</span>

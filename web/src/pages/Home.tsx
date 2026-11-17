@@ -9,7 +9,9 @@ import { TripSummary } from './TripPage';
 export default function HomePage() {
   const { me, meta } = useApp();
   const trips = useLoad(() => api<Trip[]>('/trips'));
-  const rec = useLoad(() => api<{ kind: 'cargo' | 'truck'; items: (Listing & { matchFor?: number })[] }[]>('/recommendations'));
+  const teamDriver = me!.user.companyRole === 'driver';
+  // водителю из команды рекомендации грузов не нужны: откликаются владелец и диспетчеры
+  const rec = useLoad(() => (teamDriver ? Promise.resolve([]) : api<{ kind: 'cargo' | 'truck'; items: (Listing & { matchFor?: number })[] }[]>('/recommendations')), [teamDriver]);
   useEvent('trip position', () => { trips.reload(); });
   const active = trips.data?.find((x) => x.status === 'active');
   const role = me!.user.role;
@@ -67,14 +69,14 @@ export default function HomePage() {
 
       <section>
         <div className="section-head">
-          <h2>{t('Активный рейс')}</h2>
+          <h2>{teamDriver ? t('Ваш рейс') : t('Активный рейс')}</h2>
           <Link to="/cabinet/trips">{t('Все рейсы')} <ArrowRight size={15} /></Link>
         </div>
         {trips.loading ? <Loading /> : active ? (
           <TripSummary trip={active} />
         ) : (
           <div className="card">
-            <Empty icon={<Truck size={26} />} title={t('Активных рейсов нет')} text={t('Рейс появится, когда отклик будет принят.')}>
+            <Empty icon={<Truck size={26} />} title={t('Активных рейсов нет')} text={teamDriver ? t('Рейс появится здесь, когда диспетчер назначит вас водителем.') : t('Рейс появится, когда отклик будет принят.')}>
               <Link to="/cabinet/trips" className="btn soft">{t('Открыть рейсы')}</Link>
             </Empty>
           </div>

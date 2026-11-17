@@ -28,8 +28,9 @@ function Distance() {
   const { city, cityName, meta } = useApp();
   const [points, setPoints] = useState<(string | null)[]>([null, null]);
   const [body, setBody] = useState('');
+  const [weight, setWeight] = useState('');
   const ready = points.every(Boolean) && points.length >= 2;
-  const query = ready ? `points=${points.join(',')}&body=${body}` : '';
+  const query = ready ? `points=${points.join(',')}&body=${body}&weight=${Number(weight.replace(',', '.')) || ''}` : '';
   const res = useLoad<any>(() => (query ? api(`/tools/route?${query}`) : Promise.resolve(null)), [query]);
   const map = useMemo(() => {
     const pts = points.filter(Boolean).map((p) => [city(p)!.lat, city(p)!.lon] as [number, number]);
@@ -59,7 +60,12 @@ function Distance() {
               <div className="mid"><span>{t('обычно')}</span><b>{money(d.cost.median)}</b></div>
               <div><span>{t('дороже обычного')}</span><b>{money(d.cost.high)}</b></div>
             </div>
-            <p className="muted small">{d.cost.basis === 'direction' ? t('Расчёт по ставкам этого направления: {n} ₸/км, {s} объявлений. Это ориентир, а не предложение.', { n: num(d.cost.perKm), s: d.cost.sample }) : t('По этому направлению мало объявлений, поэтому расчёт по похожим рейсам такой же длины: {n} ₸/км, {s} объявлений. Это ориентир, а не предложение.', { n: num(d.cost.perKm), s: d.cost.sample })}</p>
+            <p className="muted small">
+              {d.cost.basis === 'direction'
+                ? t('Обычная ставка {n} ₸/км по этому направлению, ставок в расчёте: {s}.', { n: num(d.cost.perKm), s: d.cost.sample })
+                : t('Обычная ставка {n} ₸/км по похожим рейсам такой же дальности, ставок в расчёте: {s}.', { n: num(d.cost.perKm), s: d.cost.sample })}
+              {' '}{t('Тот же расчёт — в карточке объявления и в разделе «Цены». Это ориентир, а не предложение.')}
+            </p>
           </div>
         )}
       </div>
@@ -80,6 +86,9 @@ function Distance() {
         )}
         <Field label={t('Тип кузова')} hint={t('Влияет на оценку стоимости')}>
           <Select value={body} onChange={setBody} placeholder={t('Любой')} options={opts(meta.body, BODY_L)} />
+        </Field>
+        <Field label={t('Вес груза, т (необязательно)')} hint={t('Лёгкие и тяжёлые грузы стоят по-разному')}>
+          <input inputMode="decimal" value={weight} onChange={(e) => setWeight(e.target.value.replace(/[^\d.,]/g, ''))} maxLength={6} placeholder="20" />
         </Field>
         {!ready && <p className="muted small">{t('Выберите города — расстояние, время и ориентир по цене посчитаются сами.')}</p>}
         {res.loading && ready && <Loading />}

@@ -45,6 +45,11 @@ const T = {
   'О вашей компании появилась запись в чёрном списке': ['Компанияңыз туралы қара тізімде жазба пайда болды', 'Your company was added to the blacklist'],
   'Вы можете ответить на неё на странице своей компании': ['Оған өз компанияңыздың бетінде жауап бере аласыз', 'You can reply to it on your company page'],
   'Компания заблокирована модератором': ['Компанияны модератор бұғаттады', 'Company blocked by a moderator'],
+  'Подтвердите рейс: {route}': ['Рейсті растаңыз: {route}', 'Confirm the trip: {route}'],
+  'Укажите машину и водителя': ['Көлік пен жүргізушіні көрсетіңіз', 'Specify the truck and the driver'],
+  'Перевозчик подтвердил рейс: {route}': ['Тасымалдаушы рейсті растады: {route}', 'The carrier confirmed the trip: {route}'],
+  'Перевозчик заменил машину или водителя: {route}': ['Тасымалдаушы көлікті немесе жүргізушіні ауыстырды: {route}', 'The carrier changed the truck or driver: {route}'],
+  'Вас назначили на рейс: {route}': ['Сізді рейске тағайындады: {route}', 'You were assigned to a trip: {route}'],
 };
 export const TEMPLATES = Object.keys(T);
 

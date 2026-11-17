@@ -22,7 +22,7 @@ export default function Cabinet() {
     { key: 'trips', label: t('Рейсы'), icon: <RouteIcon size={19} />, badge: me!.counters.trips, el: <Trips /> },
     { key: 'vehicles', label: t('Машины'), icon: <Truck size={19} />, el: <Vehicles /> },
     { key: 'team', label: t('Команда'), icon: <UsersRound size={19} />, el: <Team /> },
-    { key: 'employees', label: t('Сотрудники'), icon: <Users size={19} />, el: <Employees /> },
+    { key: 'employees', label: t('Водители и персонал'), icon: <Users size={19} />, el: <Employees /> },
     { key: 'balance', label: t('Баланс и тариф'), icon: <Wallet size={19} />, el: <Balance /> },
     { key: 'catalog', label: t('Каталог компаний'), icon: <Building2 size={19} />, el: <Catalog /> },
     { key: 'partners', label: t('Партнёры'), icon: <Handshake size={19} />, el: <Partners /> },
@@ -34,8 +34,8 @@ export default function Cabinet() {
   // водителю-одиночке не показываем то, что нужно только компаниям
   const visible = me!.user.companyRole === 'driver' ? items.filter((i) => ['profile', 'trips', 'team', 'catalog', 'settings'].includes(i.key))
     : me!.user.role === 'driver' ? items.filter((i) => !['employees', 'balance', 'partners'].includes(i.key))
-    // деньги и тариф — у владельца компании
-    : me!.user.companyRole !== 'owner' ? items.filter((i) => i.key !== 'balance') : items;
+    // заказчику парк машин и список водителей не нужны; деньги и тариф — у владельца компании
+    : items.filter((i) => !(me!.user.role === 'customer' && ['vehicles', 'employees'].includes(i.key)) && !(me!.user.companyRole !== 'owner' && i.key === 'balance'));
   const current = visible.find((i) => i.key === tab);
   if (tab && !current) return <Navigate to="/cabinet" replace />;
   return (
@@ -388,9 +388,10 @@ function Employees() {
   return (
     <div className="stack">
       <div className="page-head">
-        <h1 className="page-title">{t('Сотрудники')}</h1>
+        <h1 className="page-title">{t('Водители и персонал')}</h1>
         <button className="btn primary" onClick={() => setEdit({ name: '', phone: '', position: t('Водитель'), licenseCats: '', experience: '', esutd: 'unknown', esutdNumber: '' })}><Plus size={17} /> {t('Добавить сотрудника')}</button>
       </div>
+      <p className="muted small">{t('Список людей без входа в Jolda: их данные подставляются в рейс и в заявку. Тем, кто должен сам вести рейсы в приложении, отправьте приглашение в разделе «Команда».')}</p>
       <div className="banner slim">
         <ShieldCheck size={18} />
         <div><b>{t('ЕСУТД')}</b><span>{t('Отмечайте, зарегистрирован ли трудовой договор в esutd.gov.kz. Автоматическая сверка появится после подключения API ЕСУТД.')}</span></div>
