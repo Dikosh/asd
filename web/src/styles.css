@@ -475,6 +475,33 @@ div.line:not(.card) { padding: 10px 0; border-top: 1px solid var(--line); }
   .doc { border: 0; box-shadow: none; padding: 0; max-width: none; }
 }
 
+/* ---------- вход: витрина и приглашение; водитель по ссылке; правила ---------- */
+.feed { display: flex; flex-direction: column; gap: 6px; max-width: 640px; }
+.feed > b { font-size: 14px; opacity: 0.85; margin-bottom: 2px; }
+.feed-item { display: grid; grid-template-columns: auto 1fr auto; gap: 2px 10px; align-items: center; text-align: left; border: 0; border-radius: 12px; padding: 9px 12px; background: rgba(255, 255, 255, 0.12); color: #fff; }
+.feed-item:hover { background: rgba(255, 255, 255, 0.2); }
+.feed-item .tag { grid-row: span 2; }
+.feed-route { font-weight: 700; }
+.feed-rate { font-weight: 700; white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; grid-row: span 2; }
+.feed-meta { grid-column: 2; font-size: 12px; opacity: 0.8; }
+.invite-box { background: var(--blue-l); border-radius: 12px; padding: 12px; display: flex; flex-direction: column; gap: 10px; color: var(--blue-d); }
+.center-link { align-self: center; font-size: 13px; }
+.switch.small a { font-weight: 600; }
+.btn.big { min-height: 56px; font-size: 17px; border-radius: 14px; }
+.gps-state { display: flex; gap: 12px; align-items: center; padding: 12px 14px; border-radius: 12px; background: var(--amber-l); color: #6b4300; }
+.gps-state div { display: flex; flex-direction: column; }
+.gps-state span { font-size: 13px; }
+.gps-state.ok { background: var(--green-l); color: #0d6b36; }
+.gps-state.bad { background: var(--red-l); color: #a61d20; }
+.eta .lost { color: #a61d20; font-weight: 600; display: inline-flex; align-items: center; gap: 5px; }
+.drive { max-width: 560px; }
+.msg-author { display: block; font-size: 12px; color: var(--blue-d); }
+.msg.mine .msg-author { color: rgba(255, 255, 255, 0.85); }
+.bl-reply { background: #fff; border-left: 3px solid var(--blue); padding: 6px 10px; border-radius: 0 8px 8px 0; font-size: 14px; }
+.rules { gap: 16px; }
+.rules section { display: flex; flex-direction: column; gap: 4px; }
+.rules p { color: var(--ink2); max-width: 760px; }
+
 /* ---------- телефон ---------- */
 @media (max-width: 900px) {
   .only-s { display: inline-flex !important; }

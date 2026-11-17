@@ -13,12 +13,12 @@ import SearchPage from './pages/Search';
 import ListingPage from './pages/ListingPage';
 import MarkedPage from './pages/Marked';
 import Cabinet from './pages/Cabinet';
-import TripPage, { PublicTrack, simulating } from './pages/TripPage';
+import TripPage, { DrivePage, PublicTrack, sharesFromThisDevice, TripBeacon } from './pages/TripPage';
 import CompanyPage from './pages/CompanyPage';
 import JobsPage from './pages/Jobs';
 import ToolsPage from './pages/Tools';
 import PricesPage from './pages/Prices';
-import HelpPage from './pages/Help';
+import HelpPage, { RulesPage } from './pages/Help';
 import NotificationsPage from './pages/Notifications';
 import TripDoc from './pages/TripDoc';
 
@@ -54,43 +54,21 @@ function ReviewGate() {
   );
 }
 
-/** Передача GPS-позиции, пока приложение открыто у перевозчика в активном рейсе. */
+/** Передача GPS-позиции: только для рейсов, включённых на этом устройстве (телефон в машине, а не компьютер в офисе). */
 function GpsBeacon() {
   const { me } = useApp();
   const [trips, setTrips] = useState<Trip[]>([]);
+  const [, bump] = useState(0);
   const load = useCallback(() => api<Trip[]>('/trips').then(setTrips).catch(() => {}), []);
   useEffect(() => { load(); }, [load, me?.counters.trips]);
   useEvent('trip', load);
-  const ids = trips.filter((x) => x.status === 'active' && x.shareGps && x.myRole === 'carrier').map((x) => x.id).join(',');
-  // Пока идёт передача позиции, просим телефон не гасить экран: в фоне браузер перестаёт отдавать геолокацию.
   useEffect(() => {
-    if (!ids || !('wakeLock' in navigator)) return;
-    let lock: any = null;
-    const take = () => (navigator as any).wakeLock.request('screen').then((l: any) => { lock = l; }).catch(() => {});
-    const onVisible = () => document.visibilityState === 'visible' && take();
-    take();
-    document.addEventListener('visibilitychange', onVisible);
-    return () => {
-      document.removeEventListener('visibilitychange', onVisible);
-      lock?.release?.().catch(() => {});
-    };
-  }, [ids]);
-  useEffect(() => {
-    if (!ids || !navigator.geolocation) return;
-    let last = 0;
-    const watch = navigator.geolocation.watchPosition(
-      (pos) => {
-        if (simulating.on || Date.now() - last < 15000) return;
-        last = Date.now();
-        const body = { lat: pos.coords.latitude, lon: pos.coords.longitude, speed: pos.coords.speed != null ? Math.round(pos.coords.speed * 3.6) : null };
-        for (const id of ids.split(',')) api(`/trips/${id}/position`, 'POST', body).catch(() => {});
-      },
-      () => {},
-      { enableHighAccuracy: true, maximumAge: 10000 },
-    );
-    return () => navigator.geolocation.clearWatch(watch);
-  }, [ids]);
-  return null;
+    const on = () => bump((x) => x + 1);
+    window.addEventListener('gps-device', on);
+    return () => window.removeEventListener('gps-device', on);
+  }, []);
+  const mine = trips.filter((x) => x.status === 'active' && x.shareGps && x.myRole === 'carrier' && sharesFromThisDevice(x.id));
+  return <>{mine.map((x) => <TripBeacon key={x.id} tripId={x.id} />)}</>;
 }
 
 function Layout() {
@@ -292,6 +270,8 @@ function App() {
       <div key={lang} className="root">
         <Routes>
           <Route path="/t/:token" element={<PublicTrack />} />
+          <Route path="/d/:token" element={<DrivePage />} />
+          <Route path="/rules" element={<RulesPage />} />
           <Route path="*" element={ctx.me ? <Layout /> : <AuthPage />} />
         </Routes>
       </div>

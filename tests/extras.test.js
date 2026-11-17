@@ -49,7 +49,7 @@ async function signIn(phone, extra) {
   const v = await c.post('/api/auth/verify', { phone, code: devCode });
   if (v.registered) return Object.assign(c, { me: v });
   c.invite = v.invite;
-  c.me = await c.post('/api/auth/register', { regToken: v.regToken, ...extra });
+  c.me = await c.post('/api/auth/register', { regToken: v.regToken, accept: true, ...extra });
   return c;
 }
 const day = (n) => new Date(Date.now() + n * 86400_000).toISOString().slice(0, 10);
@@ -117,7 +117,7 @@ test('подписка на поиск присылает уведомление
   const list = await carrier.get('/api/notifications');
   assert.equal(list[0].kind, 'match');
   assert.equal(list[0].title, 'Новый груз: {route}');
-  assert.deepEqual(list[0].vars, { route: ['oral', 'samara'], name: 'Уральск, тент' });
+  assert.deepEqual(list[0].vars, { route: ['oral', 'samara'], name: 'Уральск, тент', by: customer.me.company.id });
   assert.equal(list[0].link, `/listing/${l.id}`);
   assert.equal((await customer.get('/api/me')).counters.notifications >= 0, true);
   await carrier.post('/api/notifications/read', { id: list[0].id });
@@ -134,8 +134,10 @@ test('подписка на поиск присылает уведомление
   assert.equal((await customer.get('/api/notifications'))[0].title, 'Новый отклик: {route}');
   assert.ok(resp.id);
   assert.match((await carrier.get('/api/push/key')).key, /^[\w-]{80,}$/);
-  const sub = { endpoint: 'https://push.example.test/abc', keys: { p256dh: 'BKey', auth: 'auth' } };
+  const sub = { endpoint: 'https://fcm.googleapis.com/fcm/send/abc', keys: { p256dh: 'BKey', auth: 'auth' } };
   await carrier.post('/api/push/subscribe', sub);
+  for (const endpoint of ['https://127.0.0.1:9443/internal', 'http://169.254.169.254/latest/meta-data/', 'https://evil.example/push'])
+    assert.equal((await carrier.call('POST', '/api/push/subscribe', { ...sub, endpoint })).status, 400, 'push уходит только на серверы браузеров');
   assert.equal((await carrier.call('POST', '/api/push/subscribe', { endpoint: 'not a url', keys: {} })).status, 400);
   await carrier.post('/api/push/unsubscribe', { endpoint: sub.endpoint });
 });
@@ -145,21 +147,23 @@ test('команда, тариф Pro и роли в компании', async () 
   assert.equal(owner.me.user.companyRole, 'owner');
   await owner.post('/api/team/invite', { phone: '+7 705 111 00 02', name: 'Айдос', role: 'manager' });
   assert.equal((await owner.call('POST', '/api/team/invite', { phone: '+77051110003' })).status, 402, 'на бесплатном тарифе два места');
-  assert.equal((await owner.call('POST', '/api/team/invite', { phone: '+77010000001' })).status, 409, 'номер уже на платформе');
 
-  const mate = await signIn('+77051110002', { name: 'Айдос Сотрудник', email: 'a@example.com' });
+  // приглашённый сам решает: присоединиться или создать свою компанию
+  const mate = await signIn('+77051110002', { name: 'Айдос Сотрудник', email: 'a@example.com', joinInvite: true });
   assert.equal(mate.invite.companyName, 'Команда Тест');
   assert.equal(mate.me.company.id, owner.me.company.id);
-  assert.equal(mate.me.user.companyRole, 'manager');
-  assert.equal(mate.me.user.role, 'carrier');
+  assert.deepEqual([mate.me.user.companyRole, mate.me.user.role], ['manager', 'carrier']);
   const team = await owner.get('/api/team');
   assert.deepEqual([team.members.length, team.invites.length, team.seats], [2, 0, 2]);
   assert.equal((await mate.call('POST', '/api/team/invite', { phone: '+77051110009' })).status, 403, 'приглашает только владелец');
   assert.equal((await mate.call('POST', '/api/plan/buy')).status, 403);
+  assert.equal((await mate.call('PATCH', '/api/company', { about: 'взлом' })).status, 403, 'данные компании меняет только владелец');
+  assert.equal((await mate.call('GET', '/api/documents')).status, 403, 'документы компании видит только владелец');
 
   // сотрудник размещает объявление от имени компании, владелец им управляет
   const l = await mate.post('/api/listings', { kind: 'truck', points: ['astana', 'almaty'], brand: 'MAN', dateFrom: day(0), dateTo: day(3) });
   assert.equal((await owner.get('/api/listings/mine?kind=truck'))[0].id, l.id);
+  assert.equal((await mate.call('POST', '/api/listings', { kind: 'truck', points: ['astana', 'almaty'], brand: 'MAN', dateFrom: day(0), dateTo: day(3) })).status, 409, 'повтор объявления не размещается');
 
   // тариф
   assert.equal((await owner.call('POST', '/api/plan/buy')).status, 402);
@@ -170,16 +174,76 @@ test('команда, тариф Pro и роли в компании', async () 
   assert.equal(pro.company.balance, 20000 - 9900);
   await owner.post(`/api/listings/${l.id}/boost`);
   assert.equal((await owner.get('/api/balance')).balance, 20000 - 9900, 'на Pro поднятие в топ бесплатно');
-  await owner.post('/api/team/invite', { phone: '+77051110003', role: 'driver' });
   assert.equal((await owner.get('/api/team')).seats, 10);
 
-  // удаление сотрудника: он остаётся на платформе в собственной компании
+  // водитель из команды: ведёт рейсы, но не управляет компанией
+  await owner.post('/api/team/invite', { phone: '+77051110003', role: 'driver' });
+  const driver = await signIn('+77051110003', { name: 'Марат Водитель', email: 'm@example.com', joinInvite: true });
+  assert.deepEqual([driver.me.user.companyRole, driver.me.company.id], ['driver', owner.me.company.id]);
+  assert.equal((await driver.call('GET', '/api/trips')).status, 200);
+  for (const [method, url, body] of [['POST', '/api/listings', { kind: 'truck', points: ['astana', 'oral'], brand: 'DAF', dateFrom: day(0), dateTo: day(3) }],
+    ['POST', `/api/listings/${l.id}/status`, { status: 'archived' }], ['POST', `/api/listings/${l.id}/boost`], ['POST', '/api/blacklist', { companyId: 2, reason: 'обман' }],
+    ['GET', '/api/balance'], ['GET', '/api/chats'], ['GET', '/api/documents'], ['POST', '/api/balance/topup', { amount: 1000 }]])
+    assert.equal((await driver.call(method, url, body)).status, 403, `водителю закрыто: ${method} ${url}`);
+
+  // приглашение человеку, у которого уже есть аккаунт: он принимает его сам
+  const solo = await signIn('+77051110004', { name: 'Ержан Сам', email: 'e@example.com', companyName: 'Сам по себе', companyForm: 'ИП', role: 'driver' });
+  assert.equal((await owner.post('/api/team/invite', { phone: '+77051110004', role: 'driver' })).existing, true);
+  assert.equal((await solo.get('/api/me')).company.name, 'Сам по себе', 'без согласия человек остаётся в своей компании');
+  assert.equal((await solo.get('/api/team')).myInvite.companyName, 'Команда Тест');
+  assert.equal((await solo.get('/api/notifications'))[0].title, 'Вас пригласили в компанию «{name}»');
+  await solo.post('/api/team/accept', { accept: true });
+  assert.equal((await solo.get('/api/me')).company.id, owner.me.company.id);
+
+  // приглашение можно не принимать: человек регистрирует свою компанию
+  await owner.post('/api/team/invite', { phone: '+77051110005', role: 'manager' });
+  const free = await signIn('+77051110005', { name: 'Данияр Свой', email: 'd@example.com', companyName: 'Своя компания', companyForm: 'ТОО', role: 'customer' });
+  assert.equal(free.invite.companyName, 'Команда Тест');
+  assert.notEqual(free.me.company.id, owner.me.company.id);
+
+  // удаление сотрудника: он остаётся на платформе в собственной компании, объявления остаются у компании
   const mateId = team.members.find((m) => !m.me).id;
   await owner.del(`/api/team/members/${mateId}`);
   assert.equal(await mate.get('/api/me'), null, 'сессия удалённого сотрудника закрыта');
   const again = await signIn('+77051110002');
   assert.notEqual(again.me.company.id, owner.me.company.id);
+  assert.equal((await owner.get(`/api/listings/${l.id}`)).user.id, owner.me.user.id, 'контактом по объявлению стал владелец');
   assert.equal((await owner.call('DELETE', `/api/team/members/${owner.me.user.id}`)).status, 400);
+});
+
+test('защита: настройки, чёрный список, блокировка компании, вход', async () => {
+  const customer = await demo('customer');
+  const admin = await demo('admin');
+  // в настройки нельзя записать произвольные данные
+  assert.equal((await customer.call('PATCH', '/api/me', { settings: { junk: 'x'.repeat(1000) } })).status, 400);
+  assert.equal((await customer.call('PATCH', '/api/me', { settings: { showPhone: false, lang: 'kz' } })).status, 200);
+  const stranger = await signIn('+77052220001', { name: 'Чужой Человек', email: 's@example.com', companyName: 'Без сделок', companyForm: 'ИП', role: 'carrier' });
+  // скрытый телефон не виден ни в объявлениях, ни на странице компании
+  const page = await stranger.get(`/api/companies/${customer.me.company.id}`);
+  assert.equal(page.contacts[0].phone, null);
+  assert.equal(page.hadDeal, false);
+  await customer.patch('/api/me', { settings: { showPhone: true } });
+  // чёрный список — только после сделки
+  assert.equal((await stranger.call('POST', '/api/blacklist', { companyId: customer.me.company.id, reason: 'Мошенники' })).data.error, 'no_deal');
+  // БИН чужой компании занять нельзя
+  assert.equal((await stranger.call('PATCH', '/api/company', { bin: customer.me.company.bin })).data.error, 'bin_taken');
+  // неверный код: после десяти ошибок вход по номеру закрыт, даже с новым кодом
+  const c = client();
+  for (let i = 0; i < 2; i++) {
+    const { devCode } = await c.post('/api/auth/request-code', { phone: '+77052220009' });
+    for (let k = 0; k < 5; k++) assert.equal((await c.call('POST', '/api/auth/verify', { phone: '+77052220009', code: devCode === '000000' ? '111111' : '000000' })).status, 400);
+  }
+  const { devCode } = await c.post('/api/auth/request-code', { phone: '+77052220009' });
+  assert.equal((await c.call('POST', '/api/auth/verify', { phone: '+77052220009', code: devCode })).status, 429, 'после десяти ошибок не помогает и верный код');
+  // испорченная cookie и «опасные» имена параметров не дают ошибку сервера
+  assert.equal((await fetch(base + '/api/meta', { headers: { Cookie: 'sid=%' } })).status, 200);
+  assert.equal((await customer.call('GET', '/api/listings?kind=cargo&sort=__proto__')).status, 200);
+  assert.equal((await customer.call('POST', '/api/documents', { kind: 'other', filename: 'x', mime: 'constructor', data: 'AAAAAAAAAAAAAAAA' })).status, 400);
+  // блокировка компании модератором
+  await admin.post(`/api/admin/companies/${stranger.me.company.id}/ban`, { banned: true });
+  assert.equal(await stranger.get('/api/me'), null, 'сессии заблокированной компании закрыты');
+  const back = await signIn('+77052220001');
+  assert.equal((await back.call('POST', '/api/listings', cargo())).data.error, 'banned');
 });
 
 test('жалобы, поддержка, новости и сводка модератора', async () => {
@@ -197,7 +261,8 @@ test('жалобы, поддержка, новости и сводка моде�
   assert.equal(c.reason, 'fraud');
   assert.equal(o.feedback[0].text, 'Не приходит код из SMS');
   await admin.post(`/api/admin/complaints/${c.id}`, { action: 'close_listing' });
-  assert.equal((await customer.get(`/api/listings/${l.id}`)).status, 'archived');
+  assert.equal((await customer.get(`/api/listings/${l.id}`)).status, 'removed');
+  assert.equal((await customer.call('POST', `/api/listings/${l.id}/status`, { status: 'active' })).status, 403, 'снятое модератором объявление владелец не вернёт');
   assert.equal((await customer.get('/api/notifications'))[0].title, 'Объявление №{n} снято модератором');
   await admin.post(`/api/admin/feedback/${o.feedback[0].id}`);
   assert.equal((await admin.get('/api/admin/overview')).feedback.length, 0);

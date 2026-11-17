@@ -45,12 +45,14 @@ function client() {
 async function register(phone, role, companyName) {
   const c = client();
   const { devCode } = await c.post('/api/auth/request-code', { phone });
-  assert.match(devCode, /^\d{4}$/);
-  const wrong = await c.call('POST', '/api/auth/verify', { phone, code: '0000' === devCode ? '1111' : '0000' });
+  assert.match(devCode, /^\d{6}$/);
+  const wrong = await c.call('POST', '/api/auth/verify', { phone, code: '000000' === devCode ? '111111' : '000000' });
   assert.equal(wrong.status, 400);
   const v = await c.post('/api/auth/verify', { phone, code: devCode });
   assert.equal(v.registered, false);
-  const me = await c.post('/api/auth/register', { regToken: v.regToken, name: 'Тест Тестов', email: 't@example.com', companyName, companyForm: 'ТОО', role });
+  const noConsent = await c.call('POST', '/api/auth/register', { regToken: v.regToken, name: 'Тест Тестов', email: 't@example.com', companyName, companyForm: 'ТОО', role });
+  assert.equal(noConsent.status, 400, 'без согласия с правилами регистрация невозможна');
+  const me = await c.post('/api/auth/register', { regToken: v.regToken, name: 'Тест Тестов', email: 't@example.com', companyName, companyForm: 'ТОО', role, accept: true });
   assert.equal(me.user.role, role);
   return c;
 }
@@ -87,6 +89,7 @@ test('защита: без входа API закрыт, демо-данные н
   const pub = await anon.get('/api/track/demo-track-jolda');
   assert.ok(pub.position && pub.track.length > 10 && pub.etaHours > 0);
   assert.equal(pub.carrier.phone, undefined, 'публичная ссылка не раскрывает телефоны');
+  assert.deepEqual([pub.price, pub.listingId, pub.carrier.userName, pub.customer.companyId], [undefined, undefined, undefined, undefined], 'и не раскрывает цену, имена и ссылки на объявление');
   assert.equal((await demo.call('GET', '/api/admin/queue')).status, 403);
 });
 
@@ -153,17 +156,32 @@ test('полный цикл сделки', async () => {
   assert.equal((await carrier.call('POST', `/api/trips/${tripId}/stage`, { stage: 'to_loading' })).status, 409, 'без GPS рейс не начать');
   await carrier.post(`/api/trips/${tripId}/gps`, { share: true });
   assert.equal((await customer.call('POST', `/api/trips/${tripId}/stage`, { stage: 'to_loading' })).status, 403);
-  await carrier.post(`/api/trips/${tripId}/stage`, { stage: 'in_transit' });
-  assert.equal((await carrier.call('POST', `/api/trips/${tripId}/gps`, { share: false })).status, 409, 'в пути GPS не отключить');
+  assert.equal((await carrier.call('POST', `/api/trips/${tripId}/stage`, { stage: 'in_transit' })).status, 409, 'этапы — по порядку');
+  await carrier.post(`/api/trips/${tripId}/stage`, { stage: 'to_loading' });
+  await carrier.post(`/api/trips/${tripId}/stage`, { stage: 'loading' });
+  assert.equal((await carrier.call('POST', `/api/trips/${tripId}/stage`, { stage: 'in_transit' })).data.error, 'gps_stale', 'в путь — только с GPS-позицией');
+  assert.equal((await carrier.call('POST', `/api/trips/${tripId}/gps`, { share: false })).status, 409, 'после начала рейса GPS не отключить');
   await carrier.post(`/api/trips/${tripId}/position`, { lat: 54.0, lon: 69.3, speed: 80 });
+  await carrier.post(`/api/trips/${tripId}/stage`, { stage: 'in_transit' });
+  // точка, до которой машина не могла доехать за секунды, отбрасывается
+  await new Promise((r) => setTimeout(r, 1600));
+  assert.equal((await carrier.post(`/api/trips/${tripId}/position`, { lat: 43.2, lon: 76.9 })).reason, 'jump');
+  // правка объявления после сделки не меняет условия рейса
+  assert.equal((await customer.call('PUT', `/api/listings/${cargo.id}`, { points: ['astana', 'moscow'], dateFrom: day(0), dateTo: day(3) })).status, 409);
   const trip = await customer.get(`/api/trips/${tripId}`);
   assert.equal(trip.myRole, 'customer');
   assert.equal(trip.price, 190000);
   assert.ok(trip.position && trip.remainingKm > 100 && trip.etaHours >= 1);
   assert.equal((await carrier.get('/api/listings?kind=cargo&from=petropavl')).items.some((l) => l.id === cargo.id), false, 'груз в рейсе скрыт из поиска');
   assert.equal((await customer.call('POST', `/api/trips/${tripId}/complete`)).status, 409);
+  await carrier.post(`/api/trips/${tripId}/stage`, { stage: 'unloading' });
+  assert.equal((await carrier.call('POST', `/api/trips/${tripId}/stage`, { stage: 'delivered' })).data.error, 'gps_far', 'доставку не отметить вдали от пункта выгрузки');
+  await new Promise((r) => setTimeout(r, 1600));
+  await carrier.post(`/api/trips/${tripId}/position`, { lat: 51.15, lon: 71.45, sim: true });
   await carrier.post(`/api/trips/${tripId}/stage`, { stage: 'delivered' });
+  assert.equal((await carrier.call('POST', `/api/trips/${tripId}/complete`)).status, 403, 'перевозчик сам завершить не может, пока не прошло трое суток');
   await customer.post(`/api/trips/${tripId}/complete`);
+  assert.equal((await customer.call('POST', `/api/listings/${cargo.id}/status`, { status: 'active' })).status, 409, 'объявление с состоявшимся рейсом заново не открыть');
   assert.equal((await customer.get('/api/listings/mine?kind=cargo'))[0].status, 'closed');
 
   // отзыв обязателен
@@ -172,11 +190,14 @@ test('полный цикл сделки', async () => {
   assert.equal(blocked.status, 409);
   assert.equal(blocked.data.error, 'review_required');
   await customer.post(`/api/trips/${tripId}/review`, { rating: 5, text: 'Отлично' });
+  assert.equal((await carrier.get('/api/me')).company.rating, null, 'отзыв не считается, пока вторая сторона не оставила свой');
+  assert.equal((await carrier.get(`/api/trips/${tripId}`)).reviews.length, 0);
   await carrier.post(`/api/trips/${tripId}/review`, { rating: 4, text: '' });
+  assert.equal((await carrier.get(`/api/trips/${tripId}`)).reviews.length, 2);
   assert.equal((await customer.call('POST', `/api/trips/${tripId}/review`, { rating: 1 })).status, 409);
   const me = await carrier.get('/api/me');
   assert.equal(me.company.rating, 5);
-  assert.equal(me.company.indicator, 'green');
+  assert.equal(me.company.indicator, 'gray', 'один отзыв цвет индикатора не меняет');
   assert.equal(me.pendingReviews.length, 0);
 
   // кабинет: БИН, машины, сотрудники, баланс, чёрный список, работа

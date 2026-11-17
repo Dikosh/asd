@@ -29,7 +29,9 @@ export default function Cabinet() {
     { key: 'settings', label: t('Настройки'), icon: <Settings size={19} />, el: <SettingsTab /> },
     ...(me!.user.isAdmin ? [{ key: 'admin', label: t('Модерация'), icon: <ShieldCheck size={19} />, el: <Admin /> }] : []),
   ];
-  const current = items.find((i) => i.key === tab);
+  // водитель из команды ведёт рейсы; сделки, деньги и документы — у владельца и сотрудников
+  const visible = me!.user.companyRole === 'driver' ? items.filter((i) => ['profile', 'trips', 'team', 'catalog', 'settings'].includes(i.key)) : items;
+  const current = visible.find((i) => i.key === tab);
   return (
     <div className={`cabinet ${current ? 'has-tab' : ''}`}>
       <aside className="card cab-menu">
@@ -37,7 +39,7 @@ export default function Cabinet() {
           <b>{me!.user.name}</b>
           <span className="muted small">{t(ROLE_L[me!.user.role])} · {me!.company.form} «{me!.company.name}»</span>
         </div>
-        {items.map((i) => (
+        {visible.map((i) => (
           <Link key={i.key} to={`/cabinet/${i.key}`} className={(current?.key ?? 'profile') === i.key ? 'on' : ''}>
             {i.icon}<span>{i.label}</span>
             {!!i.badge && <span className="badge inline">{i.badge}</span>}
@@ -54,7 +56,7 @@ export default function Cabinet() {
       </aside>
       <section className="cab-body">
         <Link to="/cabinet" className="link back only-s"><ArrowLeft size={16} /> {t('Кабинет')}</Link>
-        {(current ?? items[0]).el}
+        {(current ?? visible[0]).el}
       </section>
     </div>
   );
@@ -118,6 +120,7 @@ function Profile() {
         <Field label={t('О компании')}><textarea rows={3} value={comp.about} onChange={(e) => setComp({ ...comp, about: e.target.value })} maxLength={1000} /></Field>
         <div className="row end wrap">
           <button className="btn soft" onClick={() => act(async () => setMe(await api<Me>('/company', 'PATCH', comp)), t('Сохранено'))}>{t('Сохранить')}</button>
+          {c.verified === 'rejected' && c.verifyNote && <div className="form-error"><b>{t('Причина отказа')}:</b> {c.verifyNote}</div>}
           {c.verified !== 'verified' && c.verified !== 'pending' && (
             <button className="btn primary" onClick={() => act(async () => { await api('/company/verify-request', 'POST'); setMe(await api<Me>('/me')); }, t('Заявка на проверку отправлена'))}>
               <ShieldCheck size={16} /> {t('Отправить на проверку')}
@@ -259,6 +262,8 @@ function Messages({ chatId }: { chatId: number | null }) {
           <div className="chat-msgs">
             {msgs.data?.map((m) => (
               <div key={m.id} className={`msg ${m.mine ? 'mine' : ''}`}>
+                {/* чат общий для компании: подписываем, кто из коллег или партнёров написал */}
+                {!m.me && <b className="msg-author">{m.senderName}</b>}
                 <p>{m.text}</p>
                 <span>{fmtWhen(m.createdAt)}{m.mine && (m.isRead ? ' ✓✓' : ' ✓')}</span>
               </div>
@@ -533,10 +538,12 @@ function SettingsTab() {
       <div className="card form">
         <h3>{t('Согласия')}</h3>
         <label className="switch">{toggle('showPhone', true)}<span>{t('Показывать мой телефон в объявлениях')}</span></label>
-        <label className="switch">{toggle('gpsConsent', true)}<span>{t('Согласен передавать GPS-позицию во время рейса')}</span></label>
         <label className="switch">{toggle('news', false)}<span>{t('Получать новости платформы')}</span></label>
       </div>
-      <button className="btn ghost danger" onClick={() => act(async () => { await api('/auth/logout', 'POST'); setMe(null); })}><LogOut size={16} /> {t('Выйти из аккаунта')}</button>
+      <div className="row wrap">
+        <button className="btn ghost danger" onClick={() => act(async () => { await api('/auth/logout', 'POST', {}); setMe(null); })}><LogOut size={16} /> {t('Выйти из аккаунта')}</button>
+        <button className="btn ghost" onClick={() => confirm(t('Выйти на всех устройствах?')) && act(async () => { await api('/auth/logout', 'POST', { everywhere: true }); setMe(null); })}>{t('Выйти на всех устройствах')}</button>
+      </div>
     </div>
   );
 }
@@ -545,7 +552,12 @@ function SettingsTab() {
 function Admin() {
   const { act } = useApp();
   const { data, loading, reload } = useLoad(() => api<{ companies: any[]; documents: any[] }>('/admin/queue'));
-  const decide = async (path: string, approve: boolean) => (await act(() => api(path, 'POST', { approve }), approve ? t('Одобрено') : t('Отклонено'))) && reload();
+  const decide = async (path: string, approve: boolean) => {
+    // при отказе модератор объясняет причину — компания увидит её в кабинете
+    const note = approve ? '' : prompt(t('Причина отказа — её увидит компания')) ?? null;
+    if (note === null) return;
+    if (await act(() => api(path, 'POST', { approve, note }), approve ? t('Одобрено') : t('Отклонено'))) reload();
+  };
   if (loading) return <Loading />;
   return (
     <div className="stack">

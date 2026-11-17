@@ -9,7 +9,15 @@ import { CompanyBadge, Empty, Field, Loading, Modal, Select, Tabs } from '../ui'
 const TEAM_ROLE: Record<string, string> = { owner: 'Владелец', manager: 'Сотрудник', driver: 'Водитель' };
 export function Team() {
   const { me, act } = useApp();
-  const { data, loading, reload } = useLoad(() => api<{ seats: number; members: any[]; invites: any[] }>('/team'));
+  const { data, loading, reload } = useLoad(() => api<{ seats: number; members: any[]; invites: any[]; myInvite: { companyName: string; companyForm: string; role: string } | null }>('/team'));
+  const { setMe } = useApp();
+  const answer = async (accept: boolean) => {
+    if (accept && !confirm(t('Перейти в эту компанию? Ваши активные объявления уйдут в архив.'))) return;
+    if (await act(() => api('/team/accept', 'POST', { accept }), accept ? t('Вы присоединились к компании') : t('Приглашение отклонено'))) {
+      setMe(await api<Me>('/me'));
+      reload();
+    }
+  };
   const [invite, setInvite] = useState<{ phone: string; name: string; role: string } | null>(null);
   const owner = me!.user.companyRole === 'owner';
   const used = (data?.members.length || 0) + (data?.invites.length || 0);
@@ -19,6 +27,14 @@ export function Team() {
         <h1 className="page-title">{t('Команда')}</h1>
         {owner && <button className="btn primary" onClick={() => setInvite({ phone: '', name: '', role: 'manager' })}><UserPlus size={17} /> {t('Пригласить')}</button>}
       </div>
+      {data?.myInvite && (
+        <div className="banner">
+          <UserPlus size={20} />
+          <div><b>{t('Вас пригласили в компанию «{name}»', { name: `${data.myInvite.companyForm} ${data.myInvite.companyName}` })}</b><span>{t('Если согласитесь, вы будете работать от имени этой компании.')}</span></div>
+          <button className="btn ghost" onClick={() => answer(false)}>{t('Отклонить')}</button>
+          <button className="btn primary" onClick={() => answer(true)}>{t('Принять')}</button>
+        </div>
+      )}
       <p className="muted">{t('У каждого сотрудника свой вход по номеру телефона. Все работают от имени одной компании: общие объявления, рейсы, рейтинг и баланс.')}</p>
       {data && <div className="info-line">{t('Занято мест: {n} из {m}', { n: used, m: data.seats })}{used >= data.seats ? ` · ${t('на тарифе Pro мест больше')}` : ''}</div>}
       {loading ? <Loading /> : (
@@ -157,6 +173,7 @@ export function AdminExtra() {
               <div className="muted small">{c.author} · {fmtWhen(c.createdAt)} · {t('всего жалоб на компанию: {n}', { n: c.total })}</div>
             </div>
             <button className="btn ghost" onClick={async () => (await act(() => api(`/admin/complaints/${c.id}`, 'POST', { action: 'dismiss' }), t('Жалоба закрыта'))) && reload()}>{t('Отклонить')}</button>
+            <button className="btn ghost danger" onClick={async () => confirm(t('Заблокировать компанию «{name}»? Её объявления пропадут из поиска, размещать и откликаться она не сможет.', { name: c.companyName })) && (await act(() => api(`/admin/companies/${c.companyId}/ban`, 'POST', { banned: true }), t('Компания заблокирована'))) && reload()}>{t('Заблокировать компанию')}</button>
             {c.listingId && <button className="btn danger" onClick={async () => confirm(t('Снять объявление с публикации?')) && (await act(() => api(`/admin/complaints/${c.id}`, 'POST', { action: 'close_listing' }), t('Объявление снято'))) && reload()}>{t('Снять объявление')}</button>}
           </div>
         ))}

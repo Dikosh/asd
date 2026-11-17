@@ -7,10 +7,14 @@ import { cityById, isValidBin } from '../geo.js';
 import * as L from '../lib.js';
 import { notify } from '../notify.js';
 
-const { bad, parse, auth } = L;
+const { bad, parse, auth, owner, staff } = L;
 const MIME = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 const id = (req) => Number(req.params.id);
 const optNum = (max) => z.number().min(0).max(max).nullable().optional();
+
+/** Был ли между компаниями рейс (в любом статусе) — основание для записи в чёрный список. */
+const dealBetween = (a, b) =>
+  q1('SELECT id FROM trips WHERE (customer_company = :a AND carrier_company = :b) OR (customer_company = :b AND carrier_company = :a) LIMIT 1', { a, b });
 
 export default function companyRoutes(app) {
   // ---------- каталог компаний ----------
@@ -37,18 +41,21 @@ export default function companyRoutes(app) {
       cityId: c.city_id,
       since: c.created_at,
       mine: c.id === req.user.company_id,
+      // запись в чёрный список может оставить только тот, у кого с компанией была сделка
+      hadDeal: !!dealBetween(req.user.company_id, c.id),
       isPartner: !!q1('SELECT 1 FROM partners WHERE company_id = ? AND partner_id = ?', req.user.company_id, c.id),
       isBlocked: !!q1('SELECT 1 FROM blocks WHERE company_id = ? AND blocked_id = ?', req.user.company_id, c.id),
-      contacts: q('SELECT name, phone, role FROM users WHERE company_id = ? AND is_admin = 0 LIMIT 5', c.id),
+      contacts: q(`SELECT name, phone, role, settings, company_id FROM users WHERE company_id = ? AND is_admin = 0 AND company_role != 'driver' LIMIT 5`, c.id)
+        .map((u) => ({ name: u.name, role: u.role, phone: L.phoneFor(req.user, u) })),
       vehicles: q1('SELECT COUNT(*) AS n FROM vehicles WHERE company_id = ?', c.id).n,
       documents: q(`SELECT kind FROM documents WHERE company_id = ? AND status = 'approved' GROUP BY kind`, c.id).map((d) => d.kind),
       reviewList: q(
-        `SELECT r.rating, r.text, r.created_at AS createdAt, a.name AS author, a.id AS authorId
-         FROM reviews r JOIN companies a ON a.id = r.author_company WHERE r.target_company = ? ORDER BY r.id DESC LIMIT 50`,
+        `SELECT r.rating, r.text, r.created_at AS createdAt, a.name AS author, a.id AS authorId, t.status AS tripStatus
+         FROM visible_reviews r JOIN companies a ON a.id = r.author_company JOIN trips t ON t.id = r.trip_id WHERE r.target_company = ? ORDER BY r.id DESC LIMIT 50`,
         c.id,
       ),
       blacklist: q(
-        `SELECT b.reason, b.review, b.created_at AS createdAt, a.name AS author, a.id AS authorId
+        `SELECT b.id, b.reason, b.review, b.reply, b.created_at AS createdAt, a.name AS author, a.id AS authorId
          FROM blacklist b JOIN companies a ON a.id = b.author_company WHERE b.company_id = ? ORDER BY b.id DESC`,
         c.id,
       ),
@@ -68,30 +75,47 @@ export default function companyRoutes(app) {
       ).map((b) => ({ ...b, mine: !!b.mine })),
     );
   });
-  app.post('/api/blacklist', auth, (req, res) => {
+  app.post('/api/blacklist', auth, owner, (req, res) => {
     const b = parse(z.object({ companyId: z.number().int(), reason: z.string().trim().min(3).max(200), review: z.string().trim().max(1000).default('') }), req.body);
     if (b.companyId === req.user.company_id) throw bad('own', 'Нельзя добавить свою компанию');
     if (!q1('SELECT 1 FROM companies WHERE id = ?', b.companyId)) throw bad('not_found', 'Компания не найдена', 404);
+    if (!dealBetween(req.user.company_id, b.companyId))
+      throw bad('no_deal', 'В чёрный список можно внести только компанию, с которой у вас был рейс. Если это мошенники — нажмите «Пожаловаться модератору»', 403);
     run(
       `INSERT INTO blacklist(company_id, author_user, author_company, reason, review) VALUES(?, ?, ?, ?, ?)
        ON CONFLICT(company_id, author_company) DO UPDATE SET reason = excluded.reason, review = excluded.review`,
       b.companyId, req.user.id, req.user.company_id, b.reason, b.review,
     );
+    notify(q('SELECT id FROM users WHERE company_id = ?', b.companyId).map((u) => u.id), {
+      kind: 'system', title: 'О вашей компании появилась запись в чёрном списке', body: 'Вы можете ответить на неё на странице своей компании', link: `/company/${b.companyId}`,
+    });
+    res.json({ ok: true });
+  });
+  // Компания вправе один раз ответить на запись о себе.
+  app.post('/api/blacklist/:id/reply', auth, owner, (req, res) => {
+    const { reply } = parse(z.object({ reply: z.string().trim().min(3).max(1000) }), req.body);
+    const changed = run('UPDATE blacklist SET reply = ? WHERE id = ? AND company_id = ?', reply, id(req), req.user.company_id).changes;
+    if (!changed) throw bad('not_found', 'Запись не найдена', 404);
     res.json({ ok: true });
   });
   app.delete('/api/blacklist/:id', auth, (req, res) => {
-    run('DELETE FROM blacklist WHERE id = ? AND author_company = ?', id(req), req.user.company_id);
+    // автор убирает свою запись, модератор — любую
+    if (req.user.is_admin) run('DELETE FROM blacklist WHERE id = ?', id(req));
+    else {
+      if (req.user.company_role !== 'owner') throw bad('forbidden', 'Доступно только владельцу компании', 403);
+      run('DELETE FROM blacklist WHERE id = ? AND author_company = ?', id(req), req.user.company_id);
+    }
     res.json({ ok: true });
   });
 
   // ---------- документы и проверка ----------
-  app.get('/api/documents', auth, (req, res) => {
+  app.get('/api/documents', auth, owner, (req, res) => {
     res.json(q('SELECT id, kind, filename, status, created_at AS createdAt FROM documents WHERE company_id = ? ORDER BY id DESC', req.user.company_id));
   });
   const docSchema = z.object({ kind: z.enum(L.DOC_KINDS), filename: z.string().trim().min(1).max(120), mime: z.string(), data: z.string().min(10) });
-  app.post('/api/documents', auth, (req, res) => {
+  app.post('/api/documents', auth, owner, (req, res) => {
     const b = parse(docSchema, req.body);
-    const ext = MIME[b.mime];
+    const ext = Object.hasOwn(MIME, b.mime) ? MIME[b.mime] : null;
     if (!ext) throw bad('file_type', 'Допустимы PDF, JPG, PNG или WEBP');
     const buf = Buffer.from(b.data, 'base64');
     if (buf.length > 5 * 1024 * 1024) throw bad('file_size', 'Файл больше 5 МБ');
@@ -103,13 +127,17 @@ export default function companyRoutes(app) {
   });
   app.get('/api/documents/:id/file', auth, (req, res) => {
     const d = q1('SELECT * FROM documents WHERE id = ?', id(req));
-    if (!d || (d.company_id !== req.user.company_id && !req.user.is_admin)) throw bad('not_found', 'Документ не найден', 404);
+    const mineAsOwner = d && d.company_id === req.user.company_id && req.user.company_role === 'owner';
+    if (!d || (!mineAsOwner && !req.user.is_admin)) throw bad('not_found', 'Документ не найден', 404);
+    const file = path.join(UPLOAD_DIR, path.basename(d.path));
+    if (!fs.existsSync(file)) throw bad('not_found', 'Файл документа не найден', 404);
     res.setHeader('Content-Type', d.mime);
     res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(d.filename)}`);
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    fs.createReadStream(path.join(UPLOAD_DIR, path.basename(d.path))).pipe(res);
+    // файл могут удалить, пока он читается: ошибка потока не должна ронять сервер
+    fs.createReadStream(file).on('error', () => res.destroy()).pipe(res);
   });
-  app.delete('/api/documents/:id', auth, (req, res) => {
+  app.delete('/api/documents/:id', auth, owner, (req, res) => {
     const d = q1('SELECT * FROM documents WHERE id = ? AND company_id = ?', id(req), req.user.company_id);
     if (d) {
       fs.rmSync(path.join(UPLOAD_DIR, path.basename(d.path)), { force: true });
@@ -117,12 +145,13 @@ export default function companyRoutes(app) {
     }
     res.json({ ok: true });
   });
-  app.post('/api/company/verify-request', auth, (req, res) => {
+  app.post('/api/company/verify-request', auth, owner, (req, res) => {
     const c = q1('SELECT * FROM companies WHERE id = ?', req.user.company_id);
     if (!isValidBin(c.bin)) throw bad('bin', 'Сначала укажите корректный БИН/ИИН');
-    if (!q1('SELECT 1 FROM documents WHERE company_id = ?', c.id)) throw bad('documents', 'Загрузите хотя бы один документ');
+    if (!q1(`SELECT 1 FROM documents WHERE company_id = ? AND kind IN ('registration', 'id_card')`, c.id))
+      throw bad('documents', 'Загрузите свидетельство о регистрации или удостоверение личности');
     if (c.verified === 'verified') throw bad('state', 'Компания уже проверена', 409);
-    run(`UPDATE companies SET verified = 'pending' WHERE id = ?`, c.id);
+    run(`UPDATE companies SET verified = 'pending', verify_note = '' WHERE id = ?`, c.id);
     res.json({ ok: true });
   });
 
@@ -136,13 +165,14 @@ export default function companyRoutes(app) {
       ),
     });
   });
-  const decision = z.object({ approve: z.boolean() });
+  const decision = z.object({ approve: z.boolean(), note: z.string().trim().max(300).default('') });
   app.post('/api/admin/companies/:id', auth, L.admin, (req, res) => {
-    const ok = parse(decision, req.body).approve;
-    run('UPDATE companies SET verified = ? WHERE id = ?', ok ? 'verified' : 'rejected', id(req));
+    const d = parse(decision, req.body);
+    const ok = d.approve;
+    run('UPDATE companies SET verified = ?, verify_note = ? WHERE id = ?', ok ? 'verified' : 'rejected', ok ? '' : d.note, id(req));
     notify(q('SELECT id FROM users WHERE company_id = ?', id(req)).map((u) => u.id), {
       kind: 'system', title: ok ? 'Компания проверена' : 'Проверка компании не пройдена',
-      body: ok ? 'В объявлениях появилась отметка «Проверена».' : 'Проверьте БИН и документы и отправьте заявку заново.', link: '/cabinet/profile',
+      body: ok ? 'В объявлениях появилась отметка «Проверена».' : d.note || 'Проверьте БИН и документы и отправьте заявку заново.', link: '/cabinet/profile',
     });
     res.json({ ok: true });
   });
@@ -221,7 +251,7 @@ export default function companyRoutes(app) {
     });
   });
   // Пополнение без платёжного провайдера доступно только в демо-режиме.
-  app.post('/api/balance/topup', auth, (req, res) => {
+  app.post('/api/balance/topup', auth, owner, (req, res) => {
     if (!L.DEMO) throw bad('payments_off', 'Онлайн-оплата ещё не подключена', 501);
     const { amount } = parse(z.object({ amount: z.number().int().min(100).max(1_000_000) }), req.body);
     tx(() => {
@@ -248,7 +278,7 @@ export default function companyRoutes(app) {
     res.json(
       q(
         `SELECT j.id, j.kind, j.title, j.city_id AS cityId, j.vehicle, j.license_cats AS licenseCats, j.experience, j.salary, j.date_from AS dateFrom,
-           j.description, j.phone, j.created_at AS createdAt, j.user_id = :u AS mine, u.name AS userName, c.name AS companyName, c.id AS companyId
+           j.description, CASE WHEN j.user_id = :u OR COALESCE(json_extract(u.settings, '$.showPhone'), 1) THEN j.phone END AS phone, j.created_at AS createdAt, j.user_id = :u AS mine, u.name AS userName, c.name AS companyName, c.id AS companyId
          FROM jobs j JOIN users u ON u.id = j.user_id JOIN companies c ON c.id = j.company_id
          WHERE j.kind = :k AND j.status = 'active' AND (:city IS NULL OR j.city_id = :city) ORDER BY j.id DESC LIMIT 200`,
         { u: req.user.id, k: kind, city: cityById.has(req.query.city) ? req.query.city : null },

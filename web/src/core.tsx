@@ -7,10 +7,10 @@ import { EN } from './en';
 export interface City { id: string; ru: string; kz: string; en: string; country: string; lat: number; lon: number; region: string }
 export interface Company {
   id: number; name: string; form: string; kind: string; verified: string; rating: number | null;
-  reviews: number; trips: number; blacklisted: number; pro?: boolean; indicator: 'green' | 'red' | 'gray';
+  reviews: number; trips: number; blacklisted: number; pro?: boolean; banned?: boolean; indicator: 'green' | 'red' | 'gray';
 }
 export interface Listing {
-  id: number; kind: 'cargo' | 'truck'; status: 'active' | 'closed' | 'archived'; points: string[]; fromId: string; toId: string;
+  id: number; kind: 'cargo' | 'truck'; status: 'active' | 'closed' | 'archived' | 'removed'; points: string[]; fromId: string; toId: string;
   brand: string; bodyType: string | null; cargoType: string | null; weight: number | null; volume: number | null; loading: string[];
   dateFrom: string; dateTo: string; payTerms: string[]; rate: number | null; currency: string; description: string; distanceKm: number;
   international: boolean; boosted: boolean; createdAt: string; tripId: number | null; company: Company;
@@ -20,18 +20,19 @@ export interface Listing {
 }
 export interface Me {
   user: { id: number; name: string; phone: string; email: string; role: string; isAdmin: boolean; companyRole: string; settings: Record<string, any> };
-  company: Company & { bin: string | null; binValid: boolean; about: string; cityId: string | null; balance: number; planUntil: string | null };
+  company: Company & { bin: string | null; binValid: boolean; about: string; cityId: string | null; balance: number; planUntil: string | null; verifyNote: string; banned?: boolean };
   counters: { notifications: number; unread: number; responses: number; trips: number };
   pendingReviews: { tripId: number; companyName: string }[];
 }
 export interface Meta {
   demo: boolean; cities: City[]; roles: string[]; body: string[]; cargo: string[]; loading: string[]; pay: string[]; currencies: string[];
   stages: string[]; docKinds: string[]; boostPrice: number; flags: string[]; places: number;
+  support: { phone: string; telegram: string; hours: string }; limits: { activeFree: number; activePro: number; perHour: number; boostsPro: number };
   plan: { price: number; days: number; free: { seats: number; alerts: number }; pro: { seats: number; alerts: number } }; stats: { cargo: number; truck: number; companies: number; trips: number };
 }
 export interface Trip {
-  id: number; status: 'active' | 'completed' | 'cancelled'; stage: string; shareGps: boolean; points: string[]; listingId: number;
-  cargoType: string | null; bodyType: string | null; weight: number | null; volume: number | null; distanceKm: number; price: number | null; currency: string;
+  id: number; status: 'active' | 'completed' | 'cancelled' | 'failed'; stage: string; signalLost?: boolean; failReason?: string; driverToken?: string; autoCompleteAt?: string | null; shareGps: boolean; points: string[]; listingId: number;
+  cargoType: string | null; bodyType: string | null; weight: number | null; volume: number | null; distanceKm: number; price?: number | null; currency: string;
   createdAt: string; finishedAt: string | null; carrier: { companyId: number; name: string; userName: string; phone?: string; form?: string; bin?: string | null };
   customer: { companyId: number; name: string; userName?: string; phone?: string; form?: string; bin?: string | null };
   dateFrom?: string; dateTo?: string; description?: string; loading?: string[]; payTerms?: string[]; brand?: string;

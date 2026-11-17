@@ -30,13 +30,24 @@ const T = {
   'Уведомления включены': ['Ескертулер қосылды', 'Notifications are on'],
   'Так будут приходить новые отклики и подходящие грузы.': ['Жаңа өтінімдер мен сәйкес жүктер осылай келеді.', 'This is how new responses and matching loads will arrive.'],
   'Вас пригласили в компанию «{name}»': ['Сізді «{name}» компаниясына шақырды', 'You were invited to “{name}”'],
+  'Откройте «Команда», чтобы принять или отклонить приглашение': ['Шақыруды қабылдау немесе одан бас тарту үшін «Команда» бөлімін ашыңыз', 'Open “Team” to accept or decline the invitation'],
+  'Рейс завершён автоматически: {route}': ['Рейс автоматты түрде аяқталды: {route}', 'Trip completed automatically: {route}'],
+  'Оставьте отзыв о партнёре': ['Серіктес туралы пікір қалдырыңыз', 'Leave a review of your counterparty'],
+  'Рейс закрыт как сорванный: {route}': ['Рейс үзілген деп жабылды: {route}', 'Trip closed as failed: {route}'],
+  'Сорванный рейс №{n}': ['Үзілген рейс №{n}', 'Failed trip No. {n}'],
+  'О вашей компании оставили отзыв': ['Компанияңыз туралы пікір қалдырылды', 'Your company received a review'],
+  'Он станет виден, когда вы оставите свой отзыв по этому рейсу, или через 7 дней': ['Ол осы рейс бойынша өз пікіріңізді қалдырғанда немесе 7 күннен кейін көрінеді', 'It becomes visible once you leave your own review for this trip, or after 7 days'],
+  'О вашей компании появилась запись в чёрном списке': ['Компанияңыз туралы қара тізімде жазба пайда болды', 'Your company was added to the blacklist'],
+  'Вы можете ответить на неё на странице своей компании': ['Оған өз компанияңыздың бетінде жауап бере аласыз', 'You can reply to it on your company page'],
+  'Компания заблокирована модератором': ['Компанияны модератор бұғаттады', 'Company blocked by a moderator'],
 };
 export const TEMPLATES = Object.keys(T);
 
 /** Текст на языке пользователя; {route} собирается из названий городов. Неизвестная строка (текст человека) возвращается как есть. */
 export function render(text, vars = {}, lang = 'ru') {
   const idx = lang === 'kz' ? 0 : lang === 'en' ? 1 : -1;
-  let out = idx >= 0 && T[text] ? T[text][idx] : text;
+  // текст может быть написан человеком — ищем только среди собственных шаблонов
+  let out = idx >= 0 && Object.hasOwn(T, text) ? T[text][idx] : String(text ?? '');
   const name = (id) => {
     const c = cityById.get(id);
     return c ? (lang === 'kz' ? c.kz : lang === 'en' ? c.en : c.ru) : '—';

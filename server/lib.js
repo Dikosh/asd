@@ -3,7 +3,9 @@ import crypto from 'node:crypto';
 import { q, q1, run } from './db.js';
 import { cityById, isValidBin } from './geo.js';
 
-export const DEMO = process.env.DEMO_MODE ? process.env.DEMO_MODE !== '0' : process.env.NODE_ENV !== 'production';
+// Демо-режим включается только явно: он показывает код входа на экране и даёт вход одним нажатием под любой ролью.
+export const DEMO = process.env.DEMO_MODE === '1';
+export const PROD = process.env.NODE_ENV === 'production';
 
 export const ROLES = ['customer', 'carrier', 'logist', 'broker', 'driver'];
 export const BODY = [
@@ -21,6 +23,12 @@ export const CURRENCIES = ['KZT', 'USD', 'RUB'];
 export const STAGES = ['planned', 'to_loading', 'loading', 'in_transit', 'unloading', 'delivered'];
 export const DOC_KINDS = ['id_card', 'selfie', 'registration', 'license', 'driver_license', 'other'];
 export const BOOST_PRICE = 500;
+export const MAX_SPEED = 160; // км/ч: быстрее грузовик не едет, такие точки GPS отбрасываются
+// Отзыв другой стороны виден, когда отзывы оставили обе стороны рейса или прошло 7 дней (для запросов с псевдонимом r).
+export const REVIEW_VISIBLE = `(EXISTS (SELECT 1 FROM reviews o WHERE o.trip_id = r.trip_id AND o.author_company = r.target_company)
+  OR r.created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-7 days'))`;
+// Ограничения на объявления одной компании — чтобы один участник не занял всю выдачу и не исказил статистику цен.
+export const LIMITS = { activeFree: 30, activePro: 200, perHour: 20, boostsPro: 10 };
 
 export class HttpError extends Error {
   constructor(status, code, message) {
@@ -55,12 +63,17 @@ export function normPhone(raw) {
 // ---------- сессии ----------
 function cookie(req, name) {
   const m = (req.headers.cookie || '').match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
-  return m ? decodeURIComponent(m[1]) : null;
+  if (!m) return null;
+  try {
+    return decodeURIComponent(m[1]);
+  } catch {
+    return null; // испорченная cookie — считаем, что её нет
+  }
 }
 export function startSession(req, res, userId) {
   const sid = token(32);
   run('INSERT INTO sessions(token, user_id) VALUES(?, ?)', sid, userId);
-  const secure = req.secure ? '; Secure' : '';
+  const secure = req.secure || (PROD && process.env.INSECURE_COOKIES !== '1') ? '; Secure' : '';
   res.setHeader('Set-Cookie', `sid=${sid}; HttpOnly; Path=/; SameSite=Lax; Max-Age=2592000${secure}`);
 }
 export function endSession(req, res) {
@@ -70,8 +83,13 @@ export function endSession(req, res) {
 }
 export function loadUser(req, _res, next) {
   const sid = cookie(req, 'sid');
-  req.user = sid ? q1('SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?', sid) || null : null;
+  // сессия живёт 30 дней
+  req.user = sid ? q1(`SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.created_at > strftime('%Y-%m-%dT%H:%M:%fZ','now','-30 days')`, sid) || null : null;
   next();
+}
+/** Телефон человека для стороннего зрителя: скрыт, если владелец так настроил. Своя компания видит всегда. */
+export function phoneFor(viewer, u) {
+  return viewer.company_id === u.company_id || j(u.settings, {}).showPhone !== false ? u.phone : null;
 }
 export function auth(req, _res, next) {
   if (!req.user) throw bad('unauthorized', 'Требуется вход', 401);
@@ -82,6 +100,14 @@ export function owner(req, _res, next) {
   if (req.user?.company_role !== 'owner') throw bad('forbidden', 'Доступно только владельцу компании', 403);
   next();
 }
+/** Сотрудник с правом вести сделки. Водитель из команды видит рейсы и делится GPS, но не управляет объявлениями и деньгами. */
+export function staff(req, _res, next) {
+  if (req.user?.company_role === 'driver') throw bad('forbidden', 'Водителю это действие недоступно — обратитесь к владельцу компании', 403);
+  next();
+}
+export function requireActiveCompany(user) {
+  if (q1('SELECT banned FROM companies WHERE id = ?', user.company_id)?.banned) throw bad('banned', 'Компания заблокирована модератором. Напишите в поддержку', 403);
+}
 export function admin(req, _res, next) {
   if (!req.user?.is_admin) throw bad('forbidden', 'Только для администратора', 403);
   next();
@@ -91,7 +117,14 @@ export function admin(req, _res, next) {
 const streams = new Map();
 export function subscribe(userId, res) {
   if (!streams.has(userId)) streams.set(userId, new Set());
-  streams.get(userId).add(res);
+  const set = streams.get(userId);
+  // не больше пяти вкладок на пользователя: самая старая закрывается
+  if (set.size >= 5) {
+    const oldest = set.values().next().value;
+    set.delete(oldest);
+    oldest.end();
+  }
+  set.add(res);
   res.on('close', () => streams.get(userId)?.delete(res));
 }
 export function push(userIds, type, data = {}) {
@@ -104,9 +137,14 @@ setInterval(() => {
 }, 25000).unref();
 
 // ---------- компании ----------
-export function indicator(rating, reviews, bl) {
-  if (bl >= 2 || (reviews >= 1 && rating < 3)) return 'red';
-  if (reviews >= 1 && rating >= 4 && bl === 0) return 'green';
+/**
+ * Индикатор репутации. Зелёный — отзывы минимум от трёх разных компаний со средней от 4 и без записей в чёрном списке;
+ * красный — средняя ниже 3 по отзывам минимум двух компаний либо две записи в чёрном списке.
+ * Один отзыв или одна жалоба цвет не меняют — иначе репутацию можно сделать или сломать за минуту.
+ */
+export function indicator(rating, reviews, bl, reviewers = reviews) {
+  if (bl >= 2 || (reviewers >= 2 && rating < 3)) return 'red';
+  if (reviewers >= 3 && rating >= 4 && bl === 0) return 'green';
   return 'gray';
 }
 /** Компания из строки company_stats (prefix — если поля выбраны с префиксом, например c_). */
@@ -123,15 +161,16 @@ export function companyOut(r, prefix = '') {
     trips: g('trips'),
     blacklisted: g('bl'),
     pro: !!g('pro'),
-    indicator: indicator(g('rating'), g('reviews'), g('bl')),
+    banned: !!g('banned'),
+    indicator: indicator(g('rating'), g('reviews'), g('bl'), g('reviewers')),
   };
 }
 export const COMPANY_COLS = (a, p) =>
-  ['name', 'form', 'kind', 'verified', 'rating', 'reviews', 'trips', 'bl', 'pro'].map((k) => `${a}.${k} AS ${p}${k}`).join(', ');
+  ['name', 'form', 'kind', 'verified', 'rating', 'reviews', 'reviewers', 'trips', 'bl', 'pro', 'banned'].map((k) => `${a}.${k} AS ${p}${k}`).join(', ');
 
 // ---------- объявления ----------
 const LISTING_SQL = `
-SELECT l.*, u.name AS user_name, u.phone AS user_phone, u.settings AS user_settings, ${COMPANY_COLS('cs', 'c_')},
+SELECT l.*, u.name AS user_name, u.phone AS user_phone, COALESCE(json_extract(u.settings, '$.showPhone'), 1) AS user_show_phone, ${COMPANY_COLS('cs', 'c_')},
   m.marked AS m_marked, m.note AS m_note, m.hidden AS m_hidden,
   (SELECT COUNT(*) FROM responses r WHERE r.listing_id = l.id AND r.status IN ('sent', 'accepted')) AS responses_count,
   (SELECT r.id || ':' || r.status FROM responses r WHERE r.listing_id = l.id AND r.user_id = :viewer ORDER BY r.id DESC LIMIT 1) AS my_response,
@@ -184,7 +223,7 @@ export function listingOut(r, viewer) {
     tripId: r.trip_id || null,
     company: companyOut(r, 'c_'),
     // владелец может скрыть телефон в настройках — тогда связь только через отклик и чат
-    user: { id: r.user_id, name: r.user_name, phone: mine || j(r.user_settings, {}).showPhone !== false ? r.user_phone : null },
+    user: { id: r.user_id, name: r.user_name, phone: mine || r.user_show_phone ? r.user_phone : null },
     mine,
     mark: { marked: !!r.m_marked, note: r.m_note || '', hidden: !!r.m_hidden },
     responsesCount: r.responses_count,
@@ -203,10 +242,10 @@ export function pendingReviews(user) {
   );
 }
 export function requireNoPendingReviews(user) {
-  if (pendingReviews(user).length) throw bad('review_required', 'Сначала оставьте отзыв о завершённом рейсе', 409);
+  if (user.company_role !== 'driver' && pendingReviews(user).length) throw bad('review_required', 'Сначала оставьте отзыв о завершённом рейсе', 409);
 }
 export function meOut(user) {
-  const c = q1('SELECT cs.*, c.balance, c.plan_until FROM company_stats cs JOIN companies c ON c.id = cs.id WHERE cs.id = ?', user.company_id);
+  const c = q1('SELECT cs.*, c.balance, c.plan_until, c.verify_note FROM company_stats cs JOIN companies c ON c.id = cs.id WHERE cs.id = ?', user.company_id);
   return {
     user: {
       id: user.id,
@@ -218,13 +257,13 @@ export function meOut(user) {
       companyRole: user.company_role,
       settings: j(user.settings, {}),
     },
-    company: { ...companyOut(c), bin: c.bin, binValid: isValidBin(c.bin), about: c.about, cityId: c.city_id, balance: c.balance, planUntil: c.pro ? c.plan_until : null },
+    company: { ...companyOut(c), bin: c.bin, binValid: isValidBin(c.bin), about: c.about, cityId: c.city_id, balance: c.balance, verifyNote: c.verify_note, planUntil: c.pro ? c.plan_until : null },
     counters: {
       notifications: q1('SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND is_read = 0', user.id).n,
-      unread: q1(
-        `SELECT COUNT(*) AS n FROM messages m JOIN chats c ON c.id = m.chat_id
-         WHERE m.is_read = 0 AND m.sender_id != :u AND (c.owner_id = :u OR c.peer_id = :u)`,
-        { u: user.id },
+      unread: user.company_role === 'driver' ? 0 : q1(
+        `SELECT COUNT(*) AS n FROM messages m JOIN chats c ON c.id = m.chat_id JOIN users s ON s.id = m.sender_id
+         WHERE m.is_read = 0 AND s.company_id != :c AND (c.owner_company = :c OR c.peer_company = :c)`,
+        { c: user.company_id },
       ).n,
       responses: q1(
         `SELECT COUNT(*) AS n FROM responses r JOIN listings l ON l.id = r.listing_id WHERE l.company_id = ? AND r.status = 'sent'`,
@@ -234,6 +273,7 @@ export function meOut(user) {
         c: user.company_id,
       }).n,
     },
-    pendingReviews: pendingReviews(user),
+    // отзыв о партнёре оставляет тот, кто ведёт сделки, — водителя из команды не блокируем
+    pendingReviews: user.company_role === 'driver' ? [] : pendingReviews(user),
   };
 }

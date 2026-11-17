@@ -4,29 +4,13 @@ import { z } from 'zod';
 import { q, q1, run, insert, tx } from '../db.js';
 import { cityById } from '../geo.js';
 import { route } from '../routing.js';
-import { notify, pushPublicKey } from '../notify.js';
-import { marketRate } from './listings.js';
+import { isPushEndpoint, notify, pushPublicKey } from '../notify.js';
+import { marketRate, priceSamples } from './listings.js';
+import { loadRates } from '../rates.js';
 import * as L from '../lib.js';
 
 const { bad, parse, auth } = L;
 const id = (req) => Number(req.params.id);
-
-// ---------- курсы Национального банка ----------
-let rates = { at: 0, data: null };
-async function loadRates() {
-  if (Date.now() - rates.at < 6 * 3600_000) return rates.data;
-  try {
-    const xml = await (await fetch('https://nationalbank.kz/rss/rates_all.xml', { signal: AbortSignal.timeout(6000) })).text();
-    const out = {};
-    for (const m of xml.matchAll(/<item>\s*<title>([A-Z]{3})<\/title>\s*<pubDate>([^<]*)<\/pubDate>\s*<description>([\d.]+)<\/description>\s*<quant>(\d+)<\/quant>/g)) {
-      out[m[1]] = { rate: Number(m[3]) / Number(m[4]), date: m[2] };
-    }
-    if (out.USD) rates = { at: Date.now(), data: out };
-  } catch {
-    rates.at = Date.now() - 6 * 3600_000 + 10 * 60_000; // не вышло — повторим через 10 минут
-  }
-  return rates.data;
-}
 
 export default function extraRoutes(app) {
   // ---------- уведомления ----------
@@ -46,6 +30,9 @@ export default function extraRoutes(app) {
   const subSchema = z.object({ endpoint: z.string().url().max(1000), keys: z.object({ p256dh: z.string().max(200), auth: z.string().max(100) }) });
   app.post('/api/push/subscribe', auth, (req, res) => {
     const b = parse(subSchema, req.body);
+    if (!isPushEndpoint(b.endpoint)) throw bad('validation', 'Неизвестный сервер уведомлений');
+    // не больше пяти устройств на человека: старые подписки вытесняются
+    run('DELETE FROM push_subs WHERE user_id = ? AND id NOT IN (SELECT id FROM push_subs WHERE user_id = ? ORDER BY id DESC LIMIT 4)', req.user.id, req.user.id);
     run(
       `INSERT INTO push_subs(user_id, endpoint, keys) VALUES(?, ?, ?)
        ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, keys = excluded.keys`,
@@ -57,7 +44,10 @@ export default function extraRoutes(app) {
     run('DELETE FROM push_subs WHERE endpoint = ? AND user_id = ?', String(req.body?.endpoint || ''), req.user.id);
     res.json({ ok: true });
   });
+  const lastTest = new Map();
   app.post('/api/push/test', auth, (req, res) => {
+    if (Date.now() - (lastTest.get(req.user.id) || 0) < 30_000) throw bad('rate_limit', 'Проверочное уведомление можно отправлять раз в полминуты', 429);
+    lastTest.set(req.user.id, Date.now());
     notify(req.user.id, { kind: 'system', title: 'Уведомления включены', body: 'Так будут приходить новые отклики и подходящие грузы.', link: '/notifications' });
     res.json({ ok: true });
   });
@@ -71,17 +61,48 @@ export default function extraRoutes(app) {
         c: req.user.company_id, u: req.user.id,
       }).map((m) => ({ ...m, me: !!m.me })),
       invites: q('SELECT id, phone, name, role, created_at AS createdAt FROM invites WHERE company_id = ? ORDER BY id DESC', req.user.company_id),
+      // приглашение в другую компанию, адресованное мне
+      myInvite: q1('SELECT i.id, i.role, c.name AS companyName, c.form AS companyForm FROM invites i JOIN companies c ON c.id = i.company_id WHERE i.phone = ?', req.user.phone) || null,
     });
+  });
+  // Принять приглашение: человек переходит в компанию, его прежняя пустая компания остаётся в истории.
+  app.post('/api/team/accept', auth, (req, res) => {
+    const { accept } = parse(z.object({ accept: z.boolean() }), req.body);
+    const inv = q1('SELECT * FROM invites WHERE phone = ?', req.user.phone);
+    if (!inv) throw bad('not_found', 'Приглашение не найдено', 404);
+    if (!accept) {
+      run('DELETE FROM invites WHERE id = ?', inv.id);
+      return res.json({ ok: true });
+    }
+    const mine = req.user.company_id;
+    if (q1('SELECT COUNT(*) AS n FROM users WHERE company_id = ?', mine).n > 1 && req.user.company_role === 'owner')
+      throw bad('state', 'Вы владелец компании с сотрудниками — сначала удалите их из команды', 409);
+    if (q1(`SELECT 1 FROM trips WHERE status = 'active' AND (customer_company = :c OR carrier_company = :c)`, { c: mine }))
+      throw bad('state', 'У вашей компании есть активные рейсы — сначала завершите их', 409);
+    tx(() => {
+      run(`UPDATE listings SET status = 'archived', closed_at = ? WHERE company_id = ? AND status = 'active'`, L.now(), mine);
+      run('UPDATE users SET company_id = ?, company_role = ?, role = CASE WHEN ? = \'driver\' THEN \'driver\' ELSE role END WHERE id = ?',
+        inv.company_id, inv.role === 'driver' ? 'driver' : 'manager', inv.role, req.user.id);
+      run('DELETE FROM invites WHERE id = ?', inv.id);
+    });
+    res.json({ ok: true });
   });
   app.post('/api/team/invite', auth, L.owner, (req, res) => {
     const b = parse(z.object({ phone: z.string(), name: z.string().trim().max(100).default(''), role: z.enum(['manager', 'driver']).default('manager') }), req.body);
     const phone = L.normPhone(b.phone);
-    if (q1('SELECT 1 FROM users WHERE phone = ?', phone)) throw bad('exists', 'Этот номер уже зарегистрирован на платформе', 409);
+    const existing = q1('SELECT id, company_id FROM users WHERE phone = ?', phone);
+    if (existing?.company_id === req.user.company_id) throw bad('exists', 'Этот человек уже в вашей команде', 409);
     const used = q1('SELECT (SELECT COUNT(*) FROM users WHERE company_id = :c) + (SELECT COUNT(*) FROM invites WHERE company_id = :c) AS n', { c: req.user.company_id }).n;
     const limit = seats(req.user.company_id);
     if (used >= limit) throw bad('seats', `На вашем тарифе доступно мест: ${limit}. Тариф Pro расширяет команду до ${L.PLAN.pro.seats}.`, 402);
     if (q1('SELECT 1 FROM invites WHERE phone = ?', phone)) throw bad('exists', 'Этот номер уже приглашён', 409);
-    res.json({ id: insert('INSERT INTO invites(company_id, phone, name, role) VALUES(?, ?, ?, ?)', req.user.company_id, phone, b.name, b.role) });
+    const inviteId = insert('INSERT INTO invites(company_id, phone, name, role, user_id) VALUES(?, ?, ?, ?, ?)', req.user.company_id, phone, b.name, b.role, existing?.id ?? null);
+    // у человека уже есть аккаунт — он сам решает, переходить ли в компанию
+    if (existing) {
+      const c = q1('SELECT name, form FROM companies WHERE id = ?', req.user.company_id);
+      notify(existing.id, { kind: 'system', title: 'Вас пригласили в компанию «{name}»', vars: { name: `${c.form} ${c.name}` }, body: 'Откройте «Команда», чтобы принять или отклонить приглашение', link: '/cabinet/team' });
+    }
+    res.json({ id: inviteId, existing: !!existing });
   });
   app.delete('/api/team/invites/:id', auth, L.owner, (req, res) => {
     run('DELETE FROM invites WHERE id = ? AND company_id = ?', id(req), req.user.company_id);
@@ -94,6 +115,8 @@ export default function extraRoutes(app) {
     if (m.id === req.user.id) throw bad('self', 'Нельзя удалить самого себя');
     tx(() => {
       const companyId = insert(`INSERT INTO companies(name, form, kind) VALUES(?, 'ИП', ?)`, m.name, m.role);
+      // объявления остаются у компании: контактом по ним становится владелец
+      run('UPDATE listings SET user_id = ? WHERE user_id = ? AND company_id = ?', req.user.id, m.id, req.user.company_id);
       run(`UPDATE users SET company_id = ?, company_role = 'owner' WHERE id = ?`, companyId, m.id);
       run('DELETE FROM sessions WHERE user_id = ?', m.id);
     });
@@ -159,12 +182,7 @@ export default function extraRoutes(app) {
   app.get('/api/stats/prices', auth, (req, res) => {
     const body = L.BODY.includes(req.query.body) ? req.query.body : null;
     const kind = req.query.kind === 'truck' ? 'truck' : 'cargo';
-    const rows = q(
-      `SELECT from_id, to_id, rate, distance_km, body_type FROM listings
-       WHERE kind = :kind AND currency = 'KZT' AND rate > 0 AND distance_km > 50 AND (:body IS NULL OR body_type = :body)
-         AND created_at > :since`,
-      { kind, body, since: new Date(Date.now() - 180 * 86400_000).toISOString() },
-    );
+    const rows = priceSamples(kind, { bodyType: body });
     const groups = new Map();
     for (const r of rows) {
       const key = `${r.from_id}>${r.to_id}`;
@@ -176,19 +194,16 @@ export default function extraRoutes(app) {
       .map(([key, list]) => {
         const [fromId, toId] = key.split('>');
         return {
-          fromId, toId, count: list.length, distanceKm: list[0].distance_km,
-          rate: Math.round(median(list.map((r) => r.rate)) / 1000) * 1000,
-          perKm: Math.round(median(list.map((r) => r.rate / r.distance_km))),
+          fromId, toId, count: list.length, companies: new Set(list.map((r) => r.company_id)).size, deals: list.filter((r) => r.deal).length,
+          distanceKm: list[0].km, rate: Math.round(median(list.map((r) => r.rate)) / 1000) * 1000, perKm: Math.round(median(list.map((r) => r.rate / r.km))),
         };
       })
       .sort((a, b) => b.count - a.count || b.rate - a.rate)
       .slice(0, 60);
-    const byBody = q(
-      `SELECT body_type AS body, COUNT(*) AS count, ROUND(AVG(rate / distance_km)) AS perKm FROM listings
-       WHERE kind = ? AND currency = 'KZT' AND rate > 0 AND distance_km > 50 AND body_type IS NOT NULL GROUP BY body_type HAVING COUNT(*) >= 2 ORDER BY count DESC`,
-      kind,
-    );
-    res.json({ sample: rows.length, overall: marketRate(kind, 0, body), directions, byBody });
+    const bodies = new Map();
+    for (const r of rows) if (r.body_type) bodies.set(r.body_type, [...(bodies.get(r.body_type) || []), r.rate / r.km]);
+    const byBody = [...bodies.entries()].filter(([, a]) => a.length >= 2).map(([b, a]) => ({ body: b, count: a.length, perKm: Math.round(median(a)) })).sort((x, y) => y.count - x.count);
+    res.json({ sample: rows.length, deals: rows.filter((r) => r.deal).length, overall: marketRate(kind, { bodyType: body }), directions, byBody });
   });
 
   // ---------- калькуляторы ----------
@@ -197,7 +212,7 @@ export default function extraRoutes(app) {
     if (points.length < 2 || points.length > 8) throw bad('validation', 'Укажите от двух до восьми пунктов');
     const r = await route(points);
     const body = L.BODY.includes(req.query.body) ? req.query.body : null;
-    const m = marketRate('cargo', 0, body);
+    const m = marketRate('cargo', { bodyType: body, km: r.km });
     res.json({
       ...r,
       hours: Math.round(r.km / 60), // средняя скорость грузовика на трассе с учётом остановок
@@ -268,10 +283,18 @@ export default function extraRoutes(app) {
     if (!c) throw bad('not_found', 'Жалоба не найдена', 404);
     if (action === 'close_listing' && c.listing_id) {
       const l = q1('SELECT user_id FROM listings WHERE id = ?', c.listing_id);
-      run(`UPDATE listings SET status = 'archived', closed_at = ? WHERE id = ?`, L.now(), c.listing_id);
+      run(`UPDATE listings SET status = 'removed', closed_at = ? WHERE id = ?`, L.now(), c.listing_id);
       if (l) notify(l.user_id, { kind: 'system', title: 'Объявление №{n} снято модератором', vars: { n: c.listing_id }, body: 'Причина: жалоба пользователей. Если это ошибка, напишите в поддержку.', link: '/help' });
     }
     run(`UPDATE complaints SET status = 'closed' WHERE id = ?`, c.id);
+    res.json({ ok: true });
+  });
+  // Блокировка компании: её объявления пропадают из поиска, размещать и откликаться она не может.
+  app.post('/api/admin/companies/:id/ban', auth, L.admin, (req, res) => {
+    const { banned } = parse(z.object({ banned: z.boolean() }), req.body);
+    if (q1('SELECT 1 FROM users WHERE company_id = ? AND is_admin = 1', id(req))) throw bad('forbidden', 'Нельзя заблокировать компанию модератора', 403);
+    run('UPDATE companies SET banned = ? WHERE id = ?', banned ? 1 : 0, id(req));
+    if (banned) run('DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE company_id = ?)', id(req));
     res.json({ ok: true });
   });
   app.post('/api/admin/feedback/:id', auth, L.admin, (req, res) => {

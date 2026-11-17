@@ -4,11 +4,13 @@ import { q, q1, run, insert, tx } from '../db.js';
 import { cityById, haversine, routeFit } from '../geo.js';
 import { route } from '../routing.js';
 import { notify } from '../notify.js';
+import { toKzt } from '../rates.js';
 import * as L from '../lib.js';
 
-const { bad, parse, auth } = L;
+const { bad, parse, auth, staff } = L;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
-const dateStr = z.string().regex(DATE);
+// настоящая календарная дата, а не просто цифры по шаблону
+const dateStr = z.string().regex(DATE).refine((d) => !isNaN(Date.parse(d)) && new Date(d).toISOString().slice(0, 10) === d, 'нет такой даты');
 const num = (max) => z.number().positive().max(max).nullable().optional();
 const cityId = z.string().refine((id) => cityById.has(id), 'неизвестный город');
 
@@ -32,6 +34,7 @@ const listingSchema = z
     description: z.string().trim().max(2000).default(''),
   })
   .refine((b) => b.dateTo >= b.dateFrom, 'дата окончания раньше даты начала')
+  .refine((b) => b.dateTo <= new Date(Date.now() + 180 * 86400_000).toISOString().slice(0, 10), 'период размещения — не дальше полугода')
   .refine((b) => b.points.every((p, i) => i === 0 || p !== b.points[i - 1]), 'соседние пункты маршрута совпадают');
 
 const pts = (l) => l.points.map((id) => cityById.get(id)).filter(Boolean);
@@ -45,8 +48,9 @@ export function matchScore(cargo, truck) {
   if (cargo.dateFrom > truck.dateTo || truck.dateFrom > cargo.dateTo) return null;
   if (cargo.weight && truck.weight && cargo.weight > truck.weight) return null;
   if (cargo.volume && truck.volume && cargo.volume > truck.volume) return null;
+  // груз требует определённый кузов — машина с другим кузовом не подходит
+  if (cargo.bodyType && truck.bodyType && cargo.bodyType !== truck.bodyType) return null;
   let score = 100 - detour / 3;
-  if (cargo.bodyType && truck.bodyType && cargo.bodyType !== truck.bodyType) score -= 30;
   if (cargo.loading.length && truck.loading.length && !cargo.loading.some((x) => truck.loading.includes(x))) score -= 15;
   return score >= 40 ? { score: Math.round(score), detourKm: detour } : null;
 }
@@ -63,11 +67,11 @@ export function passes(l, f) {
   if (n(f.wMax) !== undefined && !(l.weight <= n(f.wMax))) return false;
   if (n(f.vMin) !== undefined && !(l.volume >= n(f.vMin))) return false;
   if (n(f.vMax) !== undefined && !(l.volume <= n(f.vMax))) return false;
-  const byRate = n(f.rateMin) !== undefined || n(f.rateMax) !== undefined || String(f.sort || '').startsWith('rate');
-  const currency = L.CURRENCIES.includes(f.currency) ? f.currency : byRate ? 'KZT' : null;
-  if (currency && l.currency !== currency) return false;
-  if (n(f.rateMin) !== undefined && !(l.rate >= n(f.rateMin))) return false;
-  if (n(f.rateMax) !== undefined && !(l.rate <= n(f.rateMax))) return false;
+  if (L.CURRENCIES.includes(f.currency) && l.currency !== f.currency) return false;
+  // границы ставки задаются в тенге; объявления в другой валюте пересчитываются по курсу Нацбанка
+  const kzt = toKzt(l.rate, l.currency);
+  if (n(f.rateMin) !== undefined && !(kzt >= n(f.rateMin))) return false;
+  if (n(f.rateMax) !== undefined && !(l.rate && kzt <= n(f.rateMax))) return false;
   if (DATE.test(f.dateFrom || '') && l.dateTo < f.dateFrom) return false;
   if (DATE.test(f.dateTo || '') && l.dateFrom > f.dateTo) return false;
   const loading = String(f.loading || '').split(',').filter((x) => L.LOADING.includes(x));
@@ -79,6 +83,7 @@ export function passes(l, f) {
   if (f.adr === '1' && !l.adrClass && l.cargoType !== 'adr') return false;
   if (f.withRate === '1' && !l.rate) return false;
   if (f.verified === '1' && l.company.verified !== 'verified') return false;
+  if (f.noRed === '1' && l.company.indicator === 'red') return false;
   // «прямые» — объявления самих владельцев груза или машин, без посредников
   if (f.direct === '1' && !['customer', 'carrier', 'driver'].includes(l.company.kind)) return false;
   if (f.partners === '1' && !l.partner) return false;
@@ -88,7 +93,8 @@ export function passes(l, f) {
 
   const from = cityById.get(f.from);
   const to = cityById.get(f.to);
-  const radius = Math.min(n(f.radius) ?? 0, 500);
+  // по умолчанию ищем город с окрестностями: груз из Каскелена должен находиться по запросу «Алматы»
+  const radius = Math.min(n(f.radius) ?? 50, 500);
   const route = pts(l);
   if (has(f.fromCountry) && route[0]?.country !== f.fromCountry) return false;
   if (has(f.toCountry) && route[route.length - 1]?.country !== f.toCountry) return false;
@@ -104,7 +110,7 @@ export function passes(l, f) {
   return true;
 }
 
-const ACTIVE = `l.status = 'active' AND l.date_to >= :today
+const ACTIVE = `l.status = 'active' AND l.date_to >= :today AND cs.banned = 0
   AND NOT EXISTS (SELECT 1 FROM trips t WHERE t.listing_id = l.id AND t.status = 'active')`;
 // скрытые пользователем объявления и компании из личного чёрного списка в выдачу не попадают
 const VISIBLE = `COALESCE(m.hidden, 0) = 0
@@ -117,24 +123,66 @@ function matchesFor(user, listing, limit = 10) {
     kind: otherKind,
     today: L.today(),
     company: listing.company.id,
-  })
+  }, 'ORDER BY l.id DESC LIMIT 1500')
     .map((o) => ({ ...o, match: listing.kind === 'cargo' ? matchScore(listing, o) : matchScore(o, listing) }))
     .filter((o) => o.match)
     .sort((a, b) => b.match.score - a.match.score)
     .slice(0, limit);
 }
 
-/** Рыночный ориентир: ставка ₸/км по похожим объявлениям (25-й, 50-й и 75-й процентили). */
-export function marketRate(kind, exceptId = 0, bodyType = null) {
+/**
+ * Выборка цен для статистики и ориентира. Одна компания даёт по одному значению на направление (самое свежее) —
+ * иначе рынок можно «нарисовать» пачкой одинаковых объявлений. Цены состоявшихся рейсов добавляются отдельно.
+ */
+export function priceSamples(kind, { bodyType = null, exceptId = 0 } = {}) {
+  const since = new Date(Date.now() - 180 * 86400_000).toISOString();
   const rows = q(
-    `SELECT rate, distance_km FROM listings WHERE kind = :kind AND currency = 'KZT' AND rate > 0 AND distance_km > 50 AND id != :id
-       AND (:body IS NULL OR body_type = :body) ORDER BY id DESC LIMIT 400`,
-    { kind, id: exceptId, body: bodyType },
+    `SELECT l.id, l.company_id, l.from_id, l.to_id, l.rate, l.currency, l.distance_km AS km, l.body_type, l.weight, 0 AS deal
+     FROM listings l JOIN companies c ON c.id = l.company_id
+     WHERE l.kind = :kind AND l.rate > 0 AND l.distance_km > 50 AND l.status != 'removed' AND c.banned = 0 AND l.id != :id
+       AND (:body IS NULL OR l.body_type = :body) AND l.created_at > :since
+     ORDER BY l.id DESC LIMIT 5000`,
+    { kind, id: exceptId, body: bodyType, since },
   );
-  const perKm = rows.map((r) => r.rate / r.distance_km).sort((a, b) => a - b);
-  if (perKm.length < 5) return bodyType ? marketRate(kind, exceptId, null) : null;
-  const at = (p) => Math.round(perKm[Math.floor((perKm.length - 1) * p)]);
-  return { low: at(0.25), median: at(0.5), high: at(0.75), sample: perKm.length };
+  const seen = new Set();
+  const out = [];
+  for (const r of rows) {
+    const key = `${r.company_id}:${r.from_id}:${r.to_id}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ ...r, rate: toKzt(r.rate, r.currency) });
+  }
+  // цена, по которой рейс действительно состоялся, весомее объявления
+  const deals = q(
+    `SELECT t.carrier_company AS company_id, l.from_id, l.to_id, t.price AS rate, t.currency, l.distance_km AS km, l.body_type, l.weight, 1 AS deal
+     FROM trips t JOIN listings l ON l.id = t.listing_id
+     WHERE t.status = 'completed' AND t.price > 0 AND l.distance_km > 50 AND l.kind = :kind AND (:body IS NULL OR l.body_type = :body) AND t.finished_at > :since
+     ORDER BY t.id DESC LIMIT 2000`,
+    { kind, body: bodyType, since },
+  );
+  for (const r of deals) out.push({ ...r, rate: toKzt(r.rate, r.currency) });
+  return out;
+}
+
+const kmBand = (km) => (km < 300 ? 0 : km < 1000 ? 1 : 2);
+const weightBand = (w) => (w == null ? null : w <= 5 ? 0 : 1);
+/**
+ * Рыночный ориентир ₸/км (25-й, 50-й и 75-й процентили) по похожим перевозкам: тот же класс расстояния и веса,
+ * по возможности тот же кузов. Нужны данные минимум от трёх компаний — иначе ориентира нет.
+ */
+export function marketRate(kind, { exceptId = 0, bodyType = null, km = null, weight = null } = {}) {
+  const all = priceSamples(kind, { exceptId });
+  const pick = (useBody, useWeight, useKm) =>
+    all.filter((r) => (!useBody || !bodyType || r.body_type === bodyType) && (!useKm || km == null || kmBand(r.km) === kmBand(km))
+      && (!useWeight || weight == null || weightBand(r.weight) === weightBand(weight)));
+  for (const args of [[true, true, true], [false, true, true], [false, false, true], [false, false, false]]) {
+    const rows = pick(...args);
+    if (rows.length < 5 || new Set(rows.map((r) => r.company_id)).size < 3) continue;
+    const perKm = rows.map((r) => r.rate / r.km).sort((x, y) => x - y);
+    const at = (p) => Math.round(perKm[Math.floor((perKm.length - 1) * p)]);
+    return { low: at(0.25), median: at(0.5), high: at(0.75), sample: perKm.length };
+  }
+  return null;
 }
 
 /** Сообщить подписчикам сохранённых поисков о новом объявлении. */
@@ -146,8 +194,11 @@ function alertSubscribers(listingId, author) {
     author.company_id,
   );
   const sent = new Set();
+  const hourAgo = new Date(Date.now() - 3600_000).toISOString();
   for (const s of subs) {
     if (sent.has(s.user_id)) continue;
+    // не больше одного уведомления в час от одной компании — пачка объявлений не превращается в спам
+    if (q1(`SELECT 1 FROM notifications n WHERE n.user_id = ? AND n.kind = 'match' AND n.created_at > ? AND json_extract(n.vars, '$.by') = ?`, s.user_id, hourAgo, author.company_id)) continue;
     const viewer = { id: s.user_id, company_id: s.company_id };
     const [l] = L.listings(viewer, `l.id = :id AND ${VISIBLE}`, { id: listingId });
     if (!l || !passes(l, L.j(s.params, {}))) continue;
@@ -156,10 +207,19 @@ function alertSubscribers(listingId, author) {
       kind: 'match',
       title: l.kind === 'cargo' ? 'Новый груз: {route}' : 'Новая машина: {route}',
       body: 'По вашему поиску «{name}»',
-      vars: { route: l.points, name: s.name },
+      vars: { route: l.points, name: s.name, by: author.company_id },
       link: `/listing/${l.id}`,
     });
   }
+}
+
+const FILTER_KEYS = ['from', 'to', 'radius', 'fromCountry', 'toCountry', 'dateFrom', 'dateTo', 'body', 'cargoType', 'wMin', 'wMax', 'vMin', 'vMax', 'loading',
+  'rateMin', 'rateMax', 'currency', 'pay', 'flags', 'adr', 'withRate', 'verified', 'noRed', 'direct', 'partners', 'fresh', 'intl', 'sort'];
+
+/** Истёкшие объявления сами уходят в «Закрытые». */
+export function expireListings() {
+  run(`UPDATE listings SET status = 'closed', closed_at = ? WHERE status = 'active' AND date_to < ?
+       AND NOT EXISTS (SELECT 1 FROM trips t WHERE t.listing_id = listings.id AND t.status = 'active')`, L.now(), L.today());
 }
 
 export default function listingRoutes(app) {
@@ -167,31 +227,32 @@ export default function listingRoutes(app) {
   app.get('/api/listings', auth, (req, res) => {
     const f = req.query;
     const kind = f.kind === 'truck' ? 'truck' : 'cargo';
-    const items = L.listings(req.user, `l.kind = :kind AND ${ACTIVE} AND ${VISIBLE}`, { kind, today: L.today() }).filter((l) => passes(l, f));
-    const perKm = (l) => (l.rate && l.distanceKm ? l.rate / l.distanceKm : 0);
+    const items = L.listings(req.user, `l.kind = :kind AND ${ACTIVE} AND ${VISIBLE}`, { kind, today: L.today() }, 'ORDER BY l.id DESC LIMIT 5000').filter((l) => passes(l, f));
+    const kzt = (l) => toKzt(l.rate, l.currency);
+    const perKm = (l) => (l.rate && l.distanceKm ? kzt(l) / l.distanceKm : 0);
     const sorters = {
       new: (a, b) => Number(b.boosted) - Number(a.boosted) || b.id - a.id,
-      rate_desc: (a, b) => (b.rate || 0) - (a.rate || 0),
-      rate_asc: (a, b) => (a.rate || Infinity) - (b.rate || Infinity),
+      rate_desc: (a, b) => kzt(b) - kzt(a),
+      rate_asc: (a, b) => (kzt(a) || Infinity) - (kzt(b) || Infinity),
       rate_km: (a, b) => perKm(b) - perKm(a),
       weight_desc: (a, b) => (b.weight || 0) - (a.weight || 0),
       date_asc: (a, b) => a.dateFrom.localeCompare(b.dateFrom),
       distance_asc: (a, b) => a.distanceKm - b.distanceKm,
     };
-    items.sort(sorters[f.sort] || sorters.new);
+    items.sort(Object.hasOwn(sorters, f.sort) ? sorters[f.sort] : sorters.new);
     res.json({ total: items.length, items: items.slice(0, 200) });
   });
 
   app.get('/api/listings/mine', auth, (req, res) => {
     const kind = req.query.kind === 'truck' ? 'truck' : 'cargo';
-    res.json(L.listings(req.user, 'l.kind = :kind AND l.company_id = :c', { kind, c: req.user.company_id }));
+    res.json(L.listings(req.user, 'l.kind = :kind AND l.company_id = :c', { kind, c: req.user.company_id }, 'ORDER BY l.id DESC LIMIT 500'));
   });
 
   // Рекомендации на главной — зависят от роли.
   app.get('/api/recommendations', auth, (req, res) => {
     const role = req.user.role;
     const wants = role === 'customer' ? ['truck'] : role === 'logist' ? ['cargo', 'truck'] : ['cargo'];
-    const mine = L.listings(req.user, `l.company_id = :c AND l.status = 'active'`, { c: req.user.company_id });
+    const mine = L.listings(req.user, `l.company_id = :c AND l.status = 'active'`, { c: req.user.company_id }, 'ORDER BY l.id DESC LIMIT 8');
     const out = [];
     for (const kind of wants) {
       const seen = new Set();
@@ -249,7 +310,7 @@ export default function listingRoutes(app) {
     );
   });
   app.post('/api/searches', auth, (req, res) => {
-    const b = parse(z.object({ kind: z.enum(['cargo', 'truck']), name: z.string().trim().min(1).max(80), params: z.record(z.string()), notify: z.boolean().default(false) }), req.body);
+    const b = parse(z.object({ kind: z.enum(['cargo', 'truck']), name: z.string().trim().min(1).max(80), params: z.record(z.enum(FILTER_KEYS), z.string().max(120)), notify: z.boolean().default(false) }), req.body);
     if (q1('SELECT COUNT(*) AS n FROM searches WHERE user_id = ?', req.user.id).n >= 30) throw bad('limit', 'Не более 30 сохранённых поисков');
     if (b.notify && q1('SELECT COUNT(*) AS n FROM searches WHERE user_id = ? AND notify = 1', req.user.id).n >= alertLimit(req.user)) b.notify = false;
     res.json({ id: insert('INSERT INTO searches(user_id, kind, name, params, notify) VALUES(?, ?, ?, ?, ?)', req.user.id, b.kind, b.name, JSON.stringify(b.params), b.notify ? 1 : 0), notify: b.notify });
@@ -276,10 +337,20 @@ export default function listingRoutes(app) {
       b.rate ?? null, b.currency, b.description, km, b.adrClass ?? null, JSON.stringify(b.flags),
     ];
   };
-  app.post('/api/listings', auth, async (req, res) => {
+  app.post('/api/listings', auth, staff, async (req, res) => {
+    L.requireActiveCompany(req.user);
     L.requireNoPendingReviews(req.user);
     const b = parse(listingSchema, req.body);
     if (b.dateTo < L.today()) throw bad('validation', 'Период размещения уже прошёл');
+    const c = req.user.company_id;
+    const cap = q1('SELECT pro FROM company_stats WHERE id = ?', c).pro ? L.LIMITS.activePro : L.LIMITS.activeFree;
+    if (q1(`SELECT COUNT(*) AS n FROM listings WHERE company_id = ? AND status = 'active'`, c).n >= cap)
+      throw bad('limit', `Активных объявлений может быть не больше ${cap}. Закройте неактуальные`, 429);
+    if (q1('SELECT COUNT(*) AS n FROM listings WHERE company_id = ? AND created_at > ?', c, new Date(Date.now() - 3600_000).toISOString()).n >= L.LIMITS.perHour)
+      throw bad('rate_limit', 'Слишком много объявлений за час — попробуйте позже', 429);
+    if (q1(`SELECT 1 FROM listings WHERE company_id = ? AND status = 'active' AND kind = ? AND points = ? AND date_from = ? AND date_to = ?
+              AND COALESCE(weight, 0) = ? AND COALESCE(body_type, '') = ?`, c, b.kind, JSON.stringify(b.points), b.dateFrom, b.dateTo, b.weight ?? 0, b.bodyType ?? ''))
+      throw bad('duplicate', 'Такое объявление у вас уже размещено', 409);
     const id = insert(
       `INSERT INTO listings(kind, user_id, company_id, points, from_id, to_id, brand, body_type, cargo_type, weight, volume, loading,
          date_from, date_to, pay_terms, rate, currency, description, distance_km, adr_class, flags)
@@ -300,8 +371,11 @@ export default function listingRoutes(app) {
     if (l.company_id !== req.user.company_id) throw bad('forbidden', 'Это не ваше объявление', 403);
     return l;
   };
-  app.put('/api/listings/:id', auth, async (req, res) => {
+  app.put('/api/listings/:id', auth, staff, async (req, res) => {
     const l = own(req);
+    if (l.status === 'removed') throw bad('removed', 'Объявление снято модератором', 403);
+    // условия, о которых уже договорились, задним числом не меняются
+    if (q1(`SELECT 1 FROM trips WHERE listing_id = ? AND status = 'active'`, l.id)) throw bad('in_trip', 'По объявлению идёт рейс — изменить его нельзя', 409);
     const b = parse(listingSchema, { ...req.body, kind: l.kind });
     run(
       `UPDATE listings SET points = ?, from_id = ?, to_id = ?, brand = ?, body_type = ?, cargo_type = ?, weight = ?, volume = ?, loading = ?,
@@ -310,19 +384,29 @@ export default function listingRoutes(app) {
     );
     res.json({ id: l.id });
   });
-  app.post('/api/listings/:id/status', auth, (req, res) => {
+  app.post('/api/listings/:id/status', auth, staff, (req, res) => {
     const l = own(req);
+    if (l.status === 'removed') throw bad('removed', 'Объявление снято модератором — вернуть его нельзя', 403);
     const { status } = parse(z.object({ status: z.enum(['active', 'closed', 'archived']) }), req.body);
     if (q1(`SELECT 1 FROM trips WHERE listing_id = ? AND status = 'active'`, l.id)) throw bad('in_trip', 'По объявлению идёт рейс — сначала завершите его', 409);
+    if (status === 'active') {
+      L.requireActiveCompany(req.user);
+      // по объявлению уже был рейс — это история сделки; для новой перевозки объявление размещают заново
+      if (q1(`SELECT 1 FROM trips WHERE listing_id = ? AND status IN ('completed', 'failed')`, l.id)) throw bad('state', 'По этому объявлению уже был рейс. Нажмите «Разместить снова»', 409);
+      if (l.date_to < L.today()) throw bad('state', 'Срок объявления истёк. Нажмите «Разместить снова»', 409);
+    }
     run('UPDATE listings SET status = ?, closed_at = ? WHERE id = ?', status, status === 'active' ? null : L.now(), l.id);
     if (status !== 'active') run(`UPDATE responses SET status = 'declined' WHERE listing_id = ? AND status = 'sent'`, l.id);
     res.json({ ok: true });
   });
-  app.post('/api/listings/:id/boost', auth, (req, res) => {
+  app.post('/api/listings/:id/boost', auth, staff, (req, res) => {
     const l = own(req);
+    if (l.status !== 'active') throw bad('state', 'Поднять можно только активное объявление', 409);
     tx(() => {
       const c = q1('SELECT cs.pro, c.balance FROM companies c JOIN company_stats cs ON cs.id = c.id WHERE c.id = ?', req.user.company_id);
-      // на тарифе Pro поднятие в топ входит в подписку
+      // на тарифе Pro поднятие в топ входит в подписку, но не безлимитно — иначе одна компания займёт всю первую страницу
+      if (c.pro && q1('SELECT COUNT(*) AS n FROM listings WHERE company_id = ? AND boosted_until > ?', req.user.company_id, L.now()).n >= L.LIMITS.boostsPro)
+        throw bad('limit', `Одновременно в топе может быть не больше ${L.LIMITS.boostsPro} объявлений`, 429);
       if (!c.pro) {
         if (c.balance < L.BOOST_PRICE) throw bad('balance', 'Недостаточно средств на балансе', 402);
         run('UPDATE companies SET balance = balance - ? WHERE id = ?', L.BOOST_PRICE, req.user.company_id);
@@ -344,7 +428,7 @@ export default function listingRoutes(app) {
       if (first) run('UPDATE listings SET views = views + 1 WHERE id = ?', id);
     }
     const [l] = L.listings(req.user, 'l.id = :id', { id });
-    const out = { ...l, market: marketRate(l.kind, l.id, l.bodyType), matches: l.mine && l.status === 'active' ? matchesFor(req.user, l) : [] };
+    const out = { ...l, market: marketRate(l.kind, { exceptId: l.id, bodyType: l.bodyType, km: l.distanceKm, weight: l.weight }), matches: l.mine && l.status === 'active' ? matchesFor(req.user, l) : [] };
     if (l.mine) {
       out.responses = q(
         `SELECT r.id, r.message, r.price, r.currency, r.status, r.created_at AS createdAt, r.user_id AS userId, u.name AS userName, u.phone,

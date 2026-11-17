@@ -7,10 +7,10 @@ import { CompanyBadge, Empty, Field, Loading, Modal, Stars } from '../ui';
 import { ComplaintModal, ContactButtons, ListingCard } from '../listing';
 
 type Full = Company & {
-  bin: string | null; binValid: boolean; about: string; cityId: string | null; since: string; mine: boolean; isPartner: boolean; isBlocked: boolean; vehicles: number; documents: string[];
+  bin: string | null; binValid: boolean; about: string; cityId: string | null; since: string; mine: boolean; isPartner: boolean; isBlocked: boolean; hadDeal: boolean; vehicles: number; documents: string[];
   contacts: { name: string; phone: string; role: string }[];
   reviewList: { rating: number; text: string; createdAt: string; author: string; authorId: number }[];
-  blacklist: { reason: string; review: string; createdAt: string; author: string; authorId: number }[];
+  blacklist: { id: number; reason: string; review: string; reply: string; createdAt: string; author: string; authorId: number }[];
   listings: Listing[];
 };
 const IND: Record<string, [string, string]> = {
@@ -26,6 +26,11 @@ export default function CompanyPage() {
   const { data: c, loading, reload } = useLoad(() => api<Full>(`/companies/${id}`), [id]);
   const [bl, setBl] = useState<{ reason: string; review: string } | null>(null);
   const [complain, setComplain] = useState(false);
+  const { me } = useApp();
+  const reply = async (entryId: number) => {
+    const text = prompt(t('Ваш ответ на запись — его увидят все участники'));
+    if (text && (await act(() => api(`/blacklist/${entryId}/reply`, 'POST', { reply: text }), t('Ответ опубликован')))) reload();
+  };
   const relate = async (kind: 'partner' | 'block', on: boolean, ok: string) => (await act(() => api(`/companies/${id}/${kind}`, 'POST', { on }), ok)) && reload();
   if (loading) return <Loading />;
   if (!c) return <div className="card"><Empty title={t('Компания не найдена')} /></div>;
@@ -47,6 +52,7 @@ export default function CompanyPage() {
               <div><b>{c.reviews}</b><span>{t('отзывов')}</span></div>
               <div><b>{c.vehicles}</b><span>{t('машин')}</span></div>
             </div>
+            {c.banned && <div className="form-error">{t('Компания заблокирована модератором')}</div>}
             {c.about && <p>{c.about}</p>}
           </div>
 
@@ -84,8 +90,13 @@ export default function CompanyPage() {
           {c.blacklist.length > 0 && (
             <div className="card stack-s danger-card">
               <b><Ban size={16} /> {t('Чёрный список')}</b>
-              {c.blacklist.map((b, i) => (
-                <div key={i} className="review"><b>{b.reason}</b>{b.review && <p>{b.review}</p>}<span className="muted small">{b.author} · {fmtDate(b.createdAt)}</span></div>
+              {c.blacklist.map((b) => (
+                <div key={b.id} className="review">
+                  <b>{b.reason}</b>{b.review && <p>{b.review}</p>}
+                  <span className="muted small">{b.author} · {fmtDate(b.createdAt)}</span>
+                  {b.reply && <p className="bl-reply"><b>{t('Ответ компании')}:</b> {b.reply}</p>}
+                  {c.mine && !b.reply && me!.user.companyRole === 'owner' && <button className="link" onClick={() => reply(b.id)}>{t('Ответить')}</button>}
+                </div>
               ))}
             </div>
           )}
@@ -110,7 +121,11 @@ export default function CompanyPage() {
                 <EyeOff size={16} /> {c.isBlocked ? t('Показывать объявления компании') : t('Скрыть все объявления компании')}
               </button>
               <button className="btn ghost" onClick={() => setComplain(true)}><Flag size={16} /> {t('Пожаловаться модератору')}</button>
-              <button className="btn ghost danger" onClick={() => setBl({ reason: '', review: '' })}><Ban size={16} /> {t('Добавить в чёрный список')}</button>
+              {c.hadDeal ? (
+                <button className="btn ghost danger" onClick={() => setBl({ reason: '', review: '' })}><Ban size={16} /> {t('Добавить в чёрный список')}</button>
+              ) : (
+                <p className="muted small">{t('В чёрный список можно внести компанию, с которой у вас был рейс. Если это мошенники — пожалуйтесь модератору.')}</p>
+              )}
             </div>
           )}
         </aside>

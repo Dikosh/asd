@@ -42,7 +42,7 @@ export default function TripDoc() {
             {row(t('Груз'), [trip.cargoType && t(CARGO_L[trip.cargoType]), trip.weight && `${trip.weight} ${t('т')}`, trip.volume && `${trip.volume} ${t('м³')}`].filter(Boolean).join(', '))}
             {row(t('Транспорт'), [trip.brand, trip.bodyType && t(BODY_L[trip.bodyType])].filter(Boolean).join(', '))}
             {row(t('Способ погрузки'), trip.loading?.map((x) => t(LOADING_L[x])).join(', '))}
-            {row(t('Стоимость перевозки'), <b>{money(trip.price, trip.currency)}</b>)}
+            {row(t('Стоимость перевозки'), <b>{money(trip.price ?? null, trip.currency)}</b>)}
             {row(t('Условия оплаты'), trip.payTerms?.map((x) => t(PAY_L[x])).join(', '))}
             {row(t('Водитель'), `${trip.carrier.userName}, ${trip.carrier.phone}`)}
             {row(t('Особые условия'), trip.description)}

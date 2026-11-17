@@ -1,9 +1,9 @@
 // «Помощь»: вопросы и ответы, как не попасться мошенникам, справка по документам, новости, поддержка.
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ChevronDown, LifeBuoy, Newspaper, ShieldAlert } from 'lucide-react';
-import { api, fmtDate, getLang, t, useApp, useLoad } from '../core';
-import { Empty, Loading, Tabs } from '../ui';
+import { ChevronDown, LifeBuoy, MessageCircle, Newspaper, Phone, Send, ShieldAlert } from 'lucide-react';
+import { api, fmtDate, getLang, t, useApp, useLoad, waLink } from '../core';
+import { Empty, Loading, Logo, Tabs } from '../ui';
 
 // Тексты — обычные строки интерфейса: переводятся тем же словарём.
 const FAQ: [string, string][] = [
@@ -41,6 +41,35 @@ const REFERENCE: [string, string][] = [
   ['Разрешения на проезд', 'Для рейсов в другие страны могут понадобиться разовые разрешения, а для негабарита и тяжёлых грузов — специальные. Требования меняются: уточняйте перед рейсом.'],
 ];
 
+// Правила платформы: коротко и простыми словами. Перед запуском текст утверждает юрист компании-владельца.
+const RULES: [string, string][] = [
+  ['Что такое Jolda', 'Jolda — площадка, где заказчики и перевозчики находят друг друга и договариваются напрямую. Платформа не перевозит грузы, не является стороной сделки и не отвечает за исполнение договорённостей между участниками.'],
+  ['Кто может пользоваться', 'Совершеннолетние граждане и компании, которые указывают о себе правдивые данные. Один человек — один аккаунт; передавать код входа другим нельзя.'],
+  ['Объявления', 'Размещайте только настоящие грузы и свободные машины с честными условиями. Повторы, заведомо неверные данные и реклама запрещены — такие объявления снимает модератор.'],
+  ['Сделки и расчёты', 'Условия перевозки и оплату стороны согласуют сами. Оформляйте заявку-договор: она защищает обе стороны. Платформа не принимает и не хранит деньги за перевозку.'],
+  ['Передача местоположения', 'Во время рейса перевозчик передаёт положение машины с телефона водителя. Его видят заказчик и те, кому отправлена ссылка для получателя. Передача прекращается, когда рейс закрыт.'],
+  ['Отзывы и чёрный список', 'Отзыв оставляют только по рейсу, который был между компаниями, и пишут о том, что произошло на самом деле. За заведомо ложные отзывы и записи аккаунт блокируется.'],
+  ['Блокировка', 'Модератор вправе снять объявление и заблокировать компанию за обман, спам, оскорбления и нарушение этих правил. Решение можно оспорить через поддержку.'],
+  ['Персональные данные', 'Мы храним имя, телефон, почту, данные компании, загруженные документы, переписку и историю рейсов — это нужно для работы сервиса и проверки участников. Документы видит только модератор. Данные не продаются и не передаются третьим лицам, кроме случаев, предусмотренных законом.'],
+  ['Удаление данных', 'Вы можете попросить удалить аккаунт и данные, написав в поддержку. История состоявшихся рейсов и отзывы о компании при этом сохраняются в обезличенном виде.'],
+  ['Изменение правил', 'Об изменениях мы сообщаем в разделе «Новости». Продолжая пользоваться платформой, вы соглашаетесь с актуальной редакцией.'],
+];
+
+/** Правила платформы — открыты и без входа: на них ссылается форма регистрации. */
+export function RulesPage() {
+  return (
+    <div className="public">
+      <header className="row between"><a href="/"><Logo /></a><span className="muted small">{t('Правила платформы')}</span></header>
+      <div className="card rules">
+        <h1 className="page-title">{t('Правила платформы и обработка данных')}</h1>
+        {RULES.map(([title, body], i) => (
+          <section key={title}><h3>{i + 1}. {t(title)}</h3><p>{t(body)}</p></section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Accordion({ items }: { items: [string, string][] }) {
   const [open, setOpen] = useState<number | null>(0);
   return (
@@ -61,7 +90,7 @@ function Accordion({ items }: { items: [string, string][] }) {
 export default function HelpPage() {
   const tab = useParams().tab || 'faq';
   const nav = useNavigate();
-  const { act } = useApp();
+  const { act, meta } = useApp();
   const news = useLoad(() => api<any[]>('/news'));
   const [text, setText] = useState('');
   const lang = getLang();
@@ -74,7 +103,7 @@ export default function HelpPage() {
         onChange={(v) => nav(`/help/${v}`)}
         items={[
           { value: 'faq', label: t('Вопросы и ответы') }, { value: 'safety', label: t('Безопасность') }, { value: 'docs', label: t('Справка') },
-          { value: 'news', label: t('Новости') }, { value: 'support', label: t('Поддержка') },
+          { value: 'news', label: t('Новости') }, { value: 'support', label: t('Поддержка') }, { value: 'rules', label: t('Правила') },
         ]}
       />
       {tab === 'faq' && <Accordion items={FAQ} />}
@@ -115,8 +144,24 @@ export default function HelpPage() {
           {news.data?.length === 0 && <div className="card"><Empty icon={<Newspaper size={26} />} title={t('Новостей пока нет')} /></div>}
         </div>
       ))}
+      {tab === 'rules' && (
+        <div className="card rules">
+          {RULES.map(([title, body], i) => (<section key={title}><h3>{i + 1}. {t(title)}</h3><p>{t(body)}</p></section>))}
+        </div>
+      )}
       {tab === 'support' && (
         <div className="narrow card form">
+          {(meta.support.phone || meta.support.telegram) && (
+            <div className="stack-s">
+              <b>{t('Связаться сразу')}</b>
+              <div className="row wrap">
+                {meta.support.phone && <a className="btn soft" href={`tel:${meta.support.phone}`}><Phone size={16} /> {meta.support.phone}</a>}
+                {meta.support.phone && <a className="btn soft wa" href={waLink(meta.support.phone)} target="_blank" rel="noreferrer"><MessageCircle size={16} /> WhatsApp</a>}
+                {meta.support.telegram && <a className="btn soft" href={meta.support.telegram} target="_blank" rel="noreferrer"><Send size={16} /> Telegram</a>}
+              </div>
+              {meta.support.hours && <span className="muted small">{t('Часы работы')}: {meta.support.hours}</span>}
+            </div>
+          )}
           <b><LifeBuoy size={18} /> {t('Написать в поддержку')}</b>
           <p className="muted small">{t('Опишите, что случилось или чего не хватает. Ответим по телефону, который указан в вашем профиле.')}</p>
           <textarea rows={5} value={text} onChange={(e) => setText(e.target.value)} maxLength={2000} placeholder={t('Например: не могу загрузить документ, пишет ошибку')} />

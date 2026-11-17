@@ -38,14 +38,14 @@ export default function MyListings() {
         items={[
           { value: 'active', label: t('Активные'), count: by('active').length },
           { value: 'closed', label: t('Закрытые'), count: by('closed').length },
-          { value: 'archived', label: t('Архив'), count: by('archived').length },
+          { value: 'archived', label: t('Архив'), count: by('archived').length + by('removed').length },
         ]}
         value={status}
         onChange={setStatus}
       />
       {loading ? <Loading /> : (
         <div className="list">
-          {by(status).map((l) => (
+          {(status === 'archived' ? [...by('removed'), ...by('archived')] : by(status)).map((l) => (
             <ListingCard
               key={l.id}
               l={l}
@@ -73,11 +73,12 @@ export default function MyListings() {
                     </>
                   )}
                   {l.status === 'archived' && <button className="btn soft" onClick={() => nav(`/my/${kind}/new?copy=${l.id}`)}><RotateCcw size={16} /> {t('Разместить снова')}</button>}
+                  {l.status === 'removed' && <span className="status declined">{t('Снято модератором')}</span>}
                 </>
               }
             />
           ))}
-          {by(status).length === 0 && (
+          {(status === 'archived' ? by('archived').length + by('removed').length : by(status).length) === 0 && (
             <div className="card">
               <Empty
                 icon={kind === 'cargo' ? <Package size={26} /> : <Truck size={26} />}

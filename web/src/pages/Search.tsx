@@ -65,8 +65,8 @@ export default function SearchPage() {
       <button className="swap" onClick={() => setF(clean({ ...f, from: f.to || '', to: f.from || '' }))} aria-label={t('Поменять местами')}><ArrowLeftRight size={15} /></button>
       <Field label={t('Место разгрузки')}><CitySelect value={f.to || null} onChange={(v) => set('to', v)} placeholder={t('Любой город')} /></Field>
       <Field label={t('Радиус от города')}>
-        <Select value={f.radius || ''} onChange={(v) => set('radius', v)} placeholder={t('Только этот город')}
-          options={[50, 100, 200, 300].map((r) => ({ value: String(r), label: `+ ${r} ${t('км')}` }))} />
+        <Select value={f.radius || '50'} onChange={(v) => set('radius', v === '50' ? '' : v)}
+          options={[{ value: '0', label: t('Только этот город') }, ...[50, 100, 200, 300].map((r) => ({ value: String(r), label: r === 50 ? t('Город и окрестности, 50 км') : `+ ${r} ${t('км')}` }))]} />
       </Field>
       <div className="grid2">
         <Field label={t('Дата с')}><input type="date" value={f.dateFrom || ''} onChange={(e) => set('dateFrom', e.target.value)} /></Field>
@@ -104,6 +104,7 @@ export default function SearchPage() {
       <div className="field checks">
         <span className="field-label">{t('Показывать только')}</span>
         {flag('verified', t('от проверенных компаний'))}
+        {flag('noRed', t('без компаний с плохой репутацией'))}
         {flag('direct', kind === 'cargo' ? t('от прямых заказчиков') : t('от владельцев машин'))}
         {flag('partners', t('от моих партнёров'))}
         {flag('fresh', t('новые за сутки'))}

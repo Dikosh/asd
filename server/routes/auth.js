@@ -1,30 +1,50 @@
 // Вход по номеру телефона с одноразовым кодом, регистрация, профиль, события.
+import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import { z } from 'zod';
-import { q1, run, insert, tx } from '../db.js';
-import { CITIES, isValidBin } from '../geo.js';
+import { q, q1, run, insert, tx } from '../db.js';
+import { CITIES, cityById, isValidBin } from '../geo.js';
 import * as L from '../lib.js';
 import { sendSms } from '../sms.js';
-import zlib from 'node:zlib';
 
 const PLACES_JSON = Buffer.from(JSON.stringify(CITIES.map((c) => [c.id, c.ru, c.kz, c.en, c.country, c.lat, c.lon, c.region])));
 const PLACES_GZ = zlib.gzipSync(PLACES_JSON);
 
 const { bad, parse } = L;
+
+// Ограничение частоты: сколько раз за окно времени. Устаревшие записи вычищаются, чтобы таблица не росла.
 const attempts = new Map();
-function rateLimit(key, max, windowMs) {
+export function rateLimit(key, max, windowMs, message = 'Слишком много попыток, попробуйте позже') {
   const t = Date.now();
   const list = (attempts.get(key) || []).filter((x) => t - x < windowMs);
-  if (list.length >= max) throw bad('rate_limit', 'Слишком много попыток, попробуйте позже', 429);
+  if (list.length >= max) throw bad('rate_limit', message, 429);
   list.push(t);
   attempts.set(key, list);
 }
+setInterval(() => {
+  const t = Date.now();
+  for (const [k, list] of attempts) if (!list.some((x) => t - x < 3600_000)) attempts.delete(k);
+}, 10 * 60_000).unref();
+
+const MAX_FAILS = 10; // неверных кодов на номер в час — потом вход по номеру закрыт на час
+const ADMIN_PHONE = process.env.ADMIN_PHONE ? L.normPhone(process.env.ADMIN_PHONE) : null;
+const INVITE_DAYS = 14;
+const inviteFor = (phone) =>
+  q1(
+    `SELECT i.id, i.name, i.role, i.company_id, c.name AS companyName, c.form AS companyForm, c.kind FROM invites i JOIN companies c ON c.id = i.company_id
+     WHERE i.phone = ? AND i.created_at > ?`,
+    phone, new Date(Date.now() - INVITE_DAYS * 86400_000).toISOString(),
+  );
 
 export default function authRoutes(app) {
   app.get('/api/meta', (_req, res) => {
+    const active = (kind) =>
+      q1(`SELECT COUNT(*) AS n FROM listings l JOIN companies c ON c.id = l.company_id WHERE l.kind = ? AND l.status = 'active' AND l.date_to >= ? AND c.banned = 0`, kind, L.today()).n;
     res.json({
       demo: L.DEMO,
       flags: L.FLAGS,
       plan: L.PLAN,
+      limits: L.LIMITS,
       places: CITIES.length,
       roles: L.ROLES,
       body: L.BODY,
@@ -35,10 +55,12 @@ export default function authRoutes(app) {
       stages: L.STAGES,
       docKinds: L.DOC_KINDS,
       boostPrice: L.BOOST_PRICE,
+      // контакты поддержки задаются при установке; без них остаётся форма обращения
+      support: { phone: process.env.SUPPORT_PHONE || '', telegram: process.env.TELEGRAM_URL || '', hours: process.env.SUPPORT_HOURS || '' },
       stats: {
-        cargo: q1(`SELECT COUNT(*) AS n FROM listings WHERE kind = 'cargo' AND status = 'active'`).n,
-        truck: q1(`SELECT COUNT(*) AS n FROM listings WHERE kind = 'truck' AND status = 'active'`).n,
-        companies: q1('SELECT COUNT(*) AS n FROM companies').n,
+        cargo: active('cargo'),
+        truck: active('truck'),
+        companies: q1('SELECT COUNT(*) AS n FROM companies WHERE banned = 0').n,
         trips: q1(`SELECT COUNT(*) AS n FROM trips WHERE status = 'completed'`).n,
       },
     });
@@ -54,17 +76,34 @@ export default function authRoutes(app) {
     res.end(PLACES_JSON);
   });
 
+  // Витрина для гостей: свежие объявления без контактов и названий компаний. Контакты — после входа.
+  app.get('/api/public/listings', (req, res) => {
+    rateLimit('pub:' + req.ip, 60, 60_000);
+    const rows = q(
+      `SELECT l.id, l.kind, l.points, l.body_type, l.cargo_type, l.weight, l.volume, l.date_from, l.date_to, l.rate, l.currency, l.distance_km
+       FROM listings l JOIN companies c ON c.id = l.company_id
+       WHERE l.status = 'active' AND l.date_to >= ? AND c.banned = 0
+         AND NOT EXISTS (SELECT 1 FROM trips t WHERE t.listing_id = l.id AND t.status = 'active')
+       ORDER BY l.id DESC LIMIT 12`,
+      L.today(),
+    );
+    res.json(rows.map((r) => ({
+      id: r.id, kind: r.kind, points: L.j(r.points, []).filter((p) => cityById.has(p)), bodyType: r.body_type, cargoType: r.cargo_type, weight: r.weight, volume: r.volume,
+      dateFrom: r.date_from, dateTo: r.date_to, rate: r.rate, currency: r.currency, distanceKm: r.distance_km,
+    })));
+  });
+
   app.post('/api/auth/request-code', async (req, res) => {
     const phone = L.normPhone(req.body?.phone);
     rateLimit('code:' + phone, 5, 10 * 60_000);
     rateLimit('ip:' + req.ip, 30, 10 * 60_000);
-    const code = String(Math.floor(1000 + Math.random() * 9000));
+    // учётные записи из демо-данных вне демо-режима не действуют
+    if (!L.DEMO && q1('SELECT 1 FROM users WHERE phone = ? AND is_demo = 1', phone)) throw bad('forbidden', 'Этот номер недоступен', 403);
+    const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
     run(
       `INSERT INTO otps(phone, code, expires, attempts, reg_token) VALUES(?, ?, ?, 0, NULL)
-       ON CONFLICT(phone) DO UPDATE SET code = excluded.code, expires = excluded.expires, attempts = 0, reg_token = NULL`,
-      phone,
-      code,
-      Date.now() + 5 * 60_000,
+       ON CONFLICT(phone) DO UPDATE SET code = excluded.code, expires = excluded.expires, reg_token = NULL`,
+      phone, code, Date.now() + 5 * 60_000,
     );
     await sendSms(phone, `Jolda: код входа ${code}`);
     res.json({ ok: true, devCode: L.DEMO ? code : undefined });
@@ -72,24 +111,32 @@ export default function authRoutes(app) {
 
   app.post('/api/auth/verify', (req, res) => {
     const phone = L.normPhone(req.body?.phone);
+    rateLimit('verify:' + req.ip, 40, 10 * 60_000);
     const otp = q1('SELECT * FROM otps WHERE phone = ?', phone);
     if (!otp || otp.expires < Date.now()) throw bad('code_expired', 'Код устарел, запросите новый');
-    if (otp.attempts >= 5) throw bad('rate_limit', 'Слишком много попыток, запросите новый код', 429);
-    if (otp.code !== String(req.body?.code || '').trim()) {
-      run('UPDATE otps SET attempts = attempts + 1 WHERE phone = ?', phone);
+    // счётчик неверных кодов не сбрасывается новым кодом — перебор не обойти повторным запросом
+    const hour = Math.floor(Date.now() / 3600_000);
+    const fails = otp.fail_hour === hour ? otp.attempts : 0;
+    if (fails >= MAX_FAILS) throw bad('rate_limit', 'Слишком много неверных кодов. Вход по этому номеру закрыт на час', 429);
+    const given = String(req.body?.code || '').trim();
+    const same = given.length === otp.code.length && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(otp.code));
+    if (!same) {
+      run('UPDATE otps SET attempts = ?, fail_hour = ? WHERE phone = ?', fails + 1, hour, phone);
       throw bad('code_wrong', 'Неверный код');
     }
     const user = q1('SELECT * FROM users WHERE phone = ?', phone);
     if (user) {
+      if (user.is_demo && !L.DEMO) throw bad('forbidden', 'Этот номер недоступен', 403);
       run('DELETE FROM otps WHERE phone = ?', phone);
+      if (ADMIN_PHONE === phone && !user.is_admin) run('UPDATE users SET is_admin = 1 WHERE id = ?', user.id);
       L.startSession(req, res, user.id);
-      return res.json({ ...L.meOut(user), registered: true });
+      return res.json({ ...L.meOut(q1('SELECT * FROM users WHERE id = ?', user.id)), registered: true });
     }
     const regToken = L.token();
-    run('UPDATE otps SET reg_token = ?, expires = ? WHERE phone = ?', regToken, Date.now() + 30 * 60_000, phone);
-    // если компания уже пригласила этот номер, достаточно имени и почты
-    const invite = q1('SELECT i.name, c.name AS companyName, c.form AS companyForm FROM invites i JOIN companies c ON c.id = i.company_id WHERE i.phone = ?', phone);
-    res.json({ registered: false, regToken, invite: invite || null });
+    run('UPDATE otps SET reg_token = ?, expires = ?, code = ? WHERE phone = ?', regToken, Date.now() + 30 * 60_000, L.token(8), phone);
+    // если компания пригласила этот номер, человек сам выбирает: присоединиться или создать свою компанию
+    const inv = inviteFor(phone);
+    res.json({ registered: false, regToken, invite: inv ? { name: inv.name, companyName: inv.companyName, companyForm: inv.companyForm, role: inv.role } : null });
   });
 
   const regSchema = z.object({
@@ -99,23 +146,27 @@ export default function authRoutes(app) {
     companyName: z.string().trim().min(2).max(120).optional(),
     companyForm: z.enum(['ИП', 'ТОО']).optional(),
     role: z.enum(L.ROLES).optional(),
+    joinInvite: z.boolean().default(false),
+    accept: z.literal(true, { errorMap: () => ({ message: 'нужно принять правила платформы' }) }),
   });
   app.post('/api/auth/register', (req, res) => {
     const b = parse(regSchema, req.body);
     const otp = q1('SELECT * FROM otps WHERE reg_token = ?', b.regToken);
     if (!otp || otp.expires < Date.now()) throw bad('code_expired', 'Сессия регистрации истекла, подтвердите номер заново');
-    const invite = q1('SELECT i.*, c.kind FROM invites i JOIN companies c ON c.id = i.company_id WHERE i.phone = ?', otp.phone);
+    const invite = b.joinInvite ? inviteFor(otp.phone) : null;
+    if (b.joinInvite && !invite) throw bad('not_found', 'Приглашение не найдено или устарело', 404);
     if (!invite && (!b.companyName || !b.companyForm || !b.role)) throw bad('validation', 'Укажите компанию и роль');
     const userId = tx(() => {
       run('DELETE FROM otps WHERE phone = ?', otp.phone);
+      const isAdmin = ADMIN_PHONE === otp.phone ? 1 : 0;
       if (invite) {
         // сотрудник присоединяется к компании, которая его пригласила
         run('DELETE FROM invites WHERE id = ?', invite.id);
-        return insert('INSERT INTO users(name, phone, email, role, company_id, company_role) VALUES(?, ?, ?, ?, ?, ?)',
-          b.name, otp.phone, b.email, invite.role === 'driver' ? 'driver' : invite.kind, invite.company_id, invite.role === 'driver' ? 'driver' : 'manager');
+        return insert('INSERT INTO users(name, phone, email, role, company_id, company_role, accepted_terms, is_admin) VALUES(?, ?, ?, ?, ?, ?, ?, ?)',
+          b.name, otp.phone, b.email, invite.role === 'driver' ? 'driver' : invite.kind, invite.company_id, invite.role === 'driver' ? 'driver' : 'manager', L.now(), isAdmin);
       }
       const companyId = insert('INSERT INTO companies(name, form, kind) VALUES(?, ?, ?)', b.companyName, b.companyForm, b.role);
-      return insert('INSERT INTO users(name, phone, email, role, company_id) VALUES(?, ?, ?, ?, ?)', b.name, otp.phone, b.email, b.role, companyId);
+      return insert('INSERT INTO users(name, phone, email, role, company_id, accepted_terms, is_admin) VALUES(?, ?, ?, ?, ?, ?, ?)', b.name, otp.phone, b.email, b.role, companyId, L.now(), isAdmin);
     });
     L.startSession(req, res, userId);
     res.json(L.meOut(q1('SELECT * FROM users WHERE id = ?', userId)));
@@ -127,14 +178,16 @@ export default function authRoutes(app) {
     const role = req.body?.role;
     const user =
       role === 'admin'
-        ? q1('SELECT * FROM users WHERE is_admin = 1 ORDER BY id LIMIT 1')
-        : q1('SELECT * FROM users WHERE role = ? AND is_admin = 0 ORDER BY id LIMIT 1', String(role));
+        ? q1('SELECT * FROM users WHERE is_admin = 1 AND is_demo = 1 ORDER BY id LIMIT 1')
+        : q1('SELECT * FROM users WHERE role = ? AND is_admin = 0 AND is_demo = 1 ORDER BY id LIMIT 1', String(role));
     if (!user) throw bad('not_found', 'Демо-аккаунт не найден', 404);
     L.startSession(req, res, user.id);
     res.json(L.meOut(user));
   });
 
   app.post('/api/auth/logout', (req, res) => {
+    // «выйти везде» закрывает сессии на всех устройствах
+    if (req.user && req.body?.everywhere) run('DELETE FROM sessions WHERE user_id = ?', req.user.id);
     L.endSession(req, res);
     res.json({ ok: true });
   });
@@ -144,31 +197,38 @@ export default function authRoutes(app) {
     res.json(L.meOut(req.user));
   });
 
+  // Настройки — строго известные ключи: произвольные данные в профиль записать нельзя.
   const meSchema = z.object({
     name: z.string().trim().min(2).max(100).optional(),
     email: z.string().trim().email().max(120).optional(),
-    settings: z.record(z.union([z.boolean(), z.string()])).optional(),
+    settings: z.object({ showPhone: z.boolean(), news: z.boolean(), lang: z.enum(['ru', 'kz', 'en']) }).partial().strict().optional(),
   });
   app.patch('/api/me', L.auth, (req, res) => {
     const b = parse(meSchema, req.body);
     if (b.name) run('UPDATE users SET name = ? WHERE id = ?', b.name, req.user.id);
     if (b.email) run('UPDATE users SET email = ? WHERE id = ?', b.email, req.user.id);
-    if (b.settings) run('UPDATE users SET settings = ? WHERE id = ?', JSON.stringify({ ...L.j(req.user.settings, {}), ...b.settings }), req.user.id);
+    if (b.settings) {
+      const cur = L.j(req.user.settings, {});
+      const next = { showPhone: cur.showPhone, news: cur.news, lang: cur.lang, ...b.settings };
+      run('UPDATE users SET settings = ? WHERE id = ?', JSON.stringify(next), req.user.id);
+    }
     res.json(L.meOut(q1('SELECT * FROM users WHERE id = ?', req.user.id)));
   });
 
+  // Данные компании меняет только владелец.
   const companySchema = z.object({
     about: z.string().max(1000).optional(),
-    cityId: z.string().nullable().optional(),
-    bin: z.string().trim().optional(),
+    cityId: z.string().refine((c) => cityById.has(c), 'неизвестный город').nullable().optional(),
+    bin: z.string().trim().max(12).optional(),
   });
-  app.patch('/api/company', L.auth, (req, res) => {
+  app.patch('/api/company', L.auth, L.owner, (req, res) => {
     const b = parse(companySchema, req.body);
     const id = req.user.company_id;
     if (b.about !== undefined) run('UPDATE companies SET about = ? WHERE id = ?', b.about, id);
     if (b.cityId !== undefined) run('UPDATE companies SET city_id = ? WHERE id = ?', b.cityId, id);
     if (b.bin !== undefined) {
       if (b.bin && !isValidBin(b.bin)) throw bad('bin', 'БИН/ИИН не прошёл проверку контрольного разряда');
+      if (b.bin && q1('SELECT 1 FROM companies WHERE bin = ? AND id != ?', b.bin, id)) throw bad('bin_taken', 'Компания с таким БИН/ИИН уже зарегистрирована. Если это ваша компания, напишите в поддержку', 409);
       // смена БИН сбрасывает подтверждение компании
       run(`UPDATE companies SET bin = ?, verified = CASE WHEN bin IS ? THEN verified ELSE 'none' END WHERE id = ?`, b.bin || null, b.bin || null, id);
     }

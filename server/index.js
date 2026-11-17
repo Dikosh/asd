@@ -3,26 +3,50 @@ import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { q1 } from './db.js';
-import { DEMO, HttpError, loadUser } from './lib.js';
-import authRoutes from './routes/auth.js';
-import listingRoutes from './routes/listings.js';
-import dealRoutes from './routes/deals.js';
+import { q1, run } from './db.js';
+import { DEMO, HttpError, PROD, loadUser } from './lib.js';
+import authRoutes, { rateLimit } from './routes/auth.js';
+import listingRoutes, { expireListings } from './routes/listings.js';
+import dealRoutes, { autoCompleteTrips } from './routes/deals.js';
 import companyRoutes from './routes/company.js';
 import extraRoutes from './routes/extras.js';
+import { loadRates } from './rates.js';
 import { seed } from './seed.js';
+
+// Что может менять водитель из команды: вести рейс и свои личные настройки. Остальное — сотрудники и владелец.
+const DRIVER_WRITE = [/^\/trips\/\d+\/(stage|gps|position)$/, /^\/notifications\/read$/, /^\/push\//, /^\/me$/, /^\/auth\//, /^\/feedback$/, /^\/team\/accept$/];
+const DRIVER_HIDDEN = [/^\/balance/, /^\/documents/, /^\/responses/, /^\/chats/, /^\/vehicles/, /^\/employees/, /^\/partners/, /^\/blocks/];
 
 export function createApp() {
   const app = express();
-  app.set('trust proxy', 1);
+  // Заголовкам X-Forwarded-* верим, только если сервер действительно стоит за прокси (TRUST_PROXY=1).
+  app.set('trust proxy', process.env.TRUST_PROXY === '1' ? 1 : false);
   app.disable('x-powered-by');
   app.use((_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Referrer-Policy', 'same-origin');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader(
+      'Content-Security-Policy',
+      "default-src 'self'; img-src 'self' data: blob: https://*.tile.openstreetmap.org; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+    );
+    if (PROD) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
     next();
   });
-  app.use(express.json({ limit: '8mb' }));
-  app.use('/api', loadUser);
+  // большое тело запроса нужно только для загрузки документа
+  app.use('/api/documents', express.json({ limit: '8mb' }));
+  app.use(express.json({ limit: '100kb' }));
+  app.use('/api', loadUser, (req, res, next) => {
+    res.setHeader('Cache-Control', 'no-store');
+    // общий предел частоты запросов: защищает от перебора и случайных циклов в клиенте
+    rateLimit(req.user ? `u:${req.user.id}` : `a:${req.ip}`, 600, 60_000, 'Слишком много запросов, подождите минуту');
+    const u = req.user;
+    if (u?.company_role === 'driver') {
+      const blocked = req.method === 'GET' ? DRIVER_HIDDEN.some((r) => r.test(req.path)) : !DRIVER_WRITE.some((r) => r.test(req.path));
+      if (blocked) return next(new HttpError(403, 'forbidden', 'Водителю это действие недоступно — обратитесь к владельцу компании'));
+    }
+    next();
+  });
 
   authRoutes(app);
   listingRoutes(app);
@@ -37,11 +61,12 @@ export function createApp() {
     // сервис-воркер должен обновляться сразу, остальное можно кэшировать
     app.get('/sw.js', (_req, res) => res.sendFile(path.join(dist, 'sw.js'), { headers: { 'Cache-Control': 'no-cache' } }));
     app.use(express.static(dist, { index: false, maxAge: '1h' }));
-    app.get(/.*/, (_req, res) => res.sendFile(path.join(dist, 'index.html')));
+    app.get(/.*/, (_req, res) => res.sendFile(path.join(dist, 'index.html'), { headers: { 'Cache-Control': 'no-cache' } }));
   }
 
   // eslint-disable-next-line no-unused-vars
   app.use((err, _req, res, _next) => {
+    if (res.headersSent) return res.destroy();
     if (err instanceof HttpError) return res.status(err.status).json({ error: err.code, message: err.message });
     if (err.type === 'entity.too.large') return res.status(413).json({ error: 'too_large', message: 'Слишком большой запрос' });
     if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'bad_json', message: 'Некорректный JSON' });
@@ -51,8 +76,34 @@ export function createApp() {
   return app;
 }
 
+/** Фоновые работы: истёкшие объявления, зависшие рейсы, старые сессии, курсы валют. */
+export function housekeeping() {
+  try {
+    expireListings();
+    autoCompleteTrips();
+    run(`DELETE FROM sessions WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-30 days')`);
+    run('DELETE FROM otps WHERE expires < ?', Date.now() - 3600_000);
+    run(`DELETE FROM invites WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-14 days')`);
+    run(`DELETE FROM route_cache WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-90 days')`);
+  } catch (e) {
+    console.error('[housekeeping]', e);
+  }
+  loadRates();
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  if (DEMO && PROD) console.warn('ВНИМАНИЕ: демо-режим включён на боевом сервере — вход под любой ролью открыт всем. Уберите DEMO_MODE=1.');
   if (DEMO && !q1('SELECT 1 FROM users LIMIT 1')) seed();
   const port = Number(process.env.PORT || 3000);
-  createApp().listen(port, () => console.log(`Jolda: http://localhost:${port}${DEMO ? ' (демо-режим)' : ''}`));
+  housekeeping();
+  setInterval(housekeeping, 15 * 60_000).unref();
+  const server = createApp().listen(port);
+  server.on('listening', () => console.log(`Jolda: http://localhost:${port}${DEMO ? ' (демо-режим)' : ''}`));
+  server.on('error', (e) => {
+    console.error(`Не удалось запустить сервер на порту ${port}: ${e.code === 'EADDRINUSE' ? 'порт занят' : e.message}`);
+    process.exit(1);
+  });
+  // необработанная ошибка в одном запросе не должна останавливать сервер для всех
+  process.on('uncaughtException', (e) => console.error('[uncaught]', e));
+  process.on('unhandledRejection', (e) => console.error('[unhandled]', e));
 }

@@ -111,13 +111,48 @@ addColumn('listings', 'views', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('searches', 'notify', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('companies', 'plan', `TEXT NOT NULL DEFAULT 'free'`);
 addColumn('companies', 'plan_until', 'TEXT');
+addColumn('companies', 'banned', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('companies', 'verify_note', `TEXT NOT NULL DEFAULT ''`);
+addColumn('trips', 'driver_token', 'TEXT');
+addColumn('trips', 'fail_reason', `TEXT NOT NULL DEFAULT ''`);
+addColumn('trips', 'failed_by', 'INTEGER');
+addColumn('blacklist', 'reply', `TEXT NOT NULL DEFAULT ''`);
+addColumn('users', 'accepted_terms', 'TEXT');
+addColumn('users', 'is_demo', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('otps', 'fail_hour', 'INTEGER');
+addColumn('trips', 'terms', 'TEXT');
+addColumn('invites', 'user_id', 'INTEGER');
+// чат принадлежит двум компаниям: его видят все их сотрудники
+addColumn('chats', 'owner_company', 'INTEGER');
+addColumn('chats', 'peer_company', 'INTEGER');
+db.exec(`
+UPDATE chats SET owner_company = (SELECT company_id FROM users WHERE id = chats.owner_id) WHERE owner_company IS NULL;
+UPDATE chats SET peer_company = (SELECT company_id FROM users WHERE id = chats.peer_id) WHERE peer_company IS NULL;
+UPDATE trips SET driver_token = lower(hex(randomblob(14))) WHERE driver_token IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS trips_driver_token ON trips(driver_token);
+CREATE INDEX IF NOT EXISTS listings_company ON listings(company_id, status);
+CREATE INDEX IF NOT EXISTS responses_listing ON responses(listing_id, status);
+CREATE INDEX IF NOT EXISTS trips_listing ON trips(listing_id, status);
+CREATE INDEX IF NOT EXISTS reviews_target ON reviews(target_company);
+`);
 
 db.exec(`
 DROP VIEW IF EXISTS company_stats;
-CREATE VIEW company_stats AS SELECT c.id, c.name, c.form, c.kind, c.bin, c.about, c.city_id, c.verified, c.created_at,
+DROP VIEW IF EXISTS rated_reviews;
+DROP VIEW IF EXISTS visible_reviews;
+CREATE VIEW visible_reviews AS SELECT r.* FROM reviews r
+WHERE EXISTS (SELECT 1 FROM reviews o WHERE o.trip_id = r.trip_id AND o.author_company = r.target_company)
+   OR r.created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-7 days');
+-- В рейтинге от каждой компании учитывается один, самый свежий отзыв: серия рейсов между двумя «своими» компаниями его не накручивает.
+CREATE VIEW rated_reviews AS SELECT r.* FROM visible_reviews r
+WHERE NOT EXISTS (SELECT 1 FROM visible_reviews n WHERE n.target_company = r.target_company AND n.author_company = r.author_company AND n.id > r.id);
+-- Отзыв учитывается в рейтинге, когда отзывы оставили обе стороны рейса или прошло 7 дней:
+-- так нельзя ответить оценкой на оценку.
+CREATE VIEW company_stats AS SELECT c.id, c.name, c.form, c.kind, c.bin, c.about, c.city_id, c.verified, c.created_at, c.banned,
   CASE WHEN c.plan = 'pro' AND c.plan_until > strftime('%Y-%m-%dT%H:%M:%fZ','now') THEN 1 ELSE 0 END AS pro,
-  (SELECT ROUND(AVG(rating), 1) FROM reviews r WHERE r.target_company = c.id) AS rating,
-  (SELECT COUNT(*) FROM reviews r WHERE r.target_company = c.id) AS reviews,
+  (SELECT ROUND(AVG(rating), 1) FROM rated_reviews r WHERE r.target_company = c.id) AS rating,
+  (SELECT COUNT(*) FROM visible_reviews r WHERE r.target_company = c.id) AS reviews,
+  (SELECT COUNT(*) FROM rated_reviews r WHERE r.target_company = c.id) AS reviewers,
   (SELECT COUNT(*) FROM trips t WHERE t.status = 'completed' AND (t.customer_company = c.id OR t.carrier_company = c.id)) AS trips,
   (SELECT COUNT(*) FROM blacklist b WHERE b.company_id = c.id) AS bl
 FROM companies c;

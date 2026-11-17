@@ -67,8 +67,8 @@ export function seed() {
         name, form, kind, makeBin(i + 1), city, verified, i >= 1 && i <= 5 ? 5000 : 0,
         kind === 'broker' ? 'Таможенное оформление, декларирование, сертификация, СВХ.' : kind === 'carrier' ? 'Собственный парк, работаем по Казахстану и СНГ.' : '');
       comp[name] = cid;
-      user[name] = insert('INSERT INTO users(name, phone, email, role, company_id, is_admin) VALUES(?, ?, ?, ?, ?, ?)',
-        person, phone, `demo${i}@jolda.local`, kind, cid, i === 0 ? 1 : 0);
+      user[name] = insert('INSERT INTO users(name, phone, email, role, company_id, is_admin, is_demo, accepted_terms) VALUES(?, ?, ?, ?, ?, ?, 1, ?)',
+        person, phone, `demo${i}@jolda.local`, kind, cid, i === 0 ? 1 : 0, ago(500));
     });
     const carriers = COMPANIES.filter((c) => c[2] === 'carrier').map((c) => c[0]);
     const customers = COMPANIES.filter((c) => c[2] === 'customer' || (c[2] === 'logist' && c[0] !== 'Jolda Модерация')).map((c) => c[0]);
@@ -127,9 +127,9 @@ export function seed() {
       const lid = addListing('cargo', customer, route, { status: 'closed', cargo: pick(cargoKinds), body: 'tent', weight: 20, volume: 82, createdAt: ago(hoursAgo + 200), dateFrom: day(-20), dateTo: day(-10) });
       const price = q1('SELECT rate FROM listings WHERE id = ?', lid).rate;
       const tid = insert(
-        `INSERT INTO trips(listing_id, customer_user, customer_company, carrier_user, carrier_company, price, status, stage, track_token, created_at, finished_at)
-         VALUES(?, ?, ?, ?, ?, ?, 'completed', 'delivered', ?, ?, ?)`,
-        lid, user[customer], comp[customer], user[carrier], comp[carrier], price, token(12), ago(hoursAgo + 96), ago(hoursAgo),
+        `INSERT INTO trips(listing_id, customer_user, customer_company, carrier_user, carrier_company, price, status, stage, track_token, driver_token, created_at, finished_at)
+         VALUES(?, ?, ?, ?, ?, ?, 'completed', 'delivered', ?, ?, ?, ?)`,
+        lid, user[customer], comp[customer], user[carrier], comp[carrier], price, token(12), token(18), ago(hoursAgo + 96), ago(hoursAgo),
       );
       const rev = (author, target, rating) =>
         run('INSERT INTO reviews(trip_id, author_user, author_company, target_company, rating, text, created_at) VALUES(?, ?, ?, ?, ?, ?, ?)',
@@ -138,9 +138,9 @@ export function seed() {
       rev(carrier, customer, ratingToCustomer);
     };
     let h = 30;
-    for (const carrier of carriers.filter((c) => c !== 'Быстрый Груз 24')) {
-      for (let k = 0; k < int(2, 4); k++) history(pick(customers), carrier, pick(ROUTES), pick([5, 5, 5, 4, 4]), pick([5, 5, 4]), (h += int(20, 90)));
-    }
+    carriers.filter((c) => c !== 'Быстрый Груз 24').forEach((carrier, ci) => {
+      for (let k = 0; k < int(3, 4); k++) history(customers[(ci + k) % customers.length], carrier, pick(ROUTES), pick([5, 5, 5, 4, 4]), pick([5, 5, 4]), (h += int(20, 90)));
+    });
     history('Алатау Агро', 'Быстрый Груз 24', ['almaty', 'astana'], 1, 4, 300);
     history('СтройМаркет KZ', 'Быстрый Груз 24', ['shymkent', 'almaty'], 2, 5, 520);
     history('Каспий Металл', 'Быстрый Груз 24', ['aktau', 'atyrau'], 1, 4, 760);
@@ -151,7 +151,7 @@ export function seed() {
 
     // ---- сценарий для демо-аккаунтов: активный рейс, отклики, чат ----
     const chat = (listing, owner, peer, msgs) => {
-      const cid = insert('INSERT INTO chats(listing_id, owner_id, peer_id) VALUES(?, ?, ?)', listing, user[owner], user[peer]);
+      const cid = insert('INSERT INTO chats(listing_id, owner_id, peer_id, owner_company, peer_company) VALUES(?, ?, ?, ?, ?)', listing, user[owner], user[peer], comp[owner], comp[peer]);
       msgs.forEach(([who, text], i) => run('INSERT INTO messages(chat_id, sender_id, text, is_read, created_at) VALUES(?, ?, ?, ?, ?)',
         cid, user[who], text, i < msgs.length - 1 ? 1 : 0, ago((msgs.length - i) * 0.4)));
     };
@@ -161,8 +161,8 @@ export function seed() {
     const r1 = insert(`INSERT INTO responses(listing_id, user_id, company_id, message, price, status, created_at) VALUES(?, ?, ?, 'Реф свободен, могу встать на загрузку завтра утром.', 500000, 'accepted', ?)`, live, user[B], comp[B], ago(30));
     chat(live, A, B, [[B, 'Реф свободен, могу встать на загрузку завтра утром.\n— 500000 KZT'], [A, 'Добрый день! Подходит. Режим +2…+6, термописец есть?'], [B, 'Да, есть, распечатку дам на выгрузке.'], [A, 'Отлично, принимаю отклик.'], [B, 'Загрузился, выехал из Астаны.']]);
     const trip = insert(
-      `INSERT INTO trips(listing_id, response_id, customer_user, customer_company, carrier_user, carrier_company, price, stage, share_gps, track_token, created_at)
-       VALUES(?, ?, ?, ?, ?, ?, 500000, 'in_transit', 1, 'demo-track-jolda', ?)`,
+      `INSERT INTO trips(listing_id, response_id, customer_user, customer_company, carrier_user, carrier_company, price, stage, share_gps, track_token, driver_token, created_at)
+       VALUES(?, ?, ?, ?, ?, ?, 500000, 'in_transit', 1, 'demo-track-jolda', 'demo-drive-jolda', ?)`,
       live, r1, user[A], comp[A], user[B], comp[B], ago(28),
     );
     [['planned', 28], ['to_loading', 20], ['loading', 16], ['in_transit', 13]].forEach(([st, hh]) => run('INSERT INTO trip_events(trip_id, stage, at) VALUES(?, ?, ?)', trip, st, ago(hh)));
@@ -173,7 +173,7 @@ export function seed() {
       for (let k = 0; k < 6; k++) {
         const f = k / 6;
         run('INSERT INTO positions(trip_id, lat, lon, speed, at) VALUES(?, ?, ?, ?, ?)', trip,
-          way[i - 1][0] + (way[i][0] - way[i - 1][0]) * f + (rnd() - 0.5) * 0.02, way[i - 1][1] + (way[i][1] - way[i - 1][1]) * f + (rnd() - 0.5) * 0.02, int(62, 88), ago(13 - n++ * 0.3));
+          way[i - 1][0] + (way[i][0] - way[i - 1][0]) * f + (rnd() - 0.5) * 0.02, way[i - 1][1] + (way[i][1] - way[i - 1][1]) * f + (rnd() - 0.5) * 0.02, int(62, 88), ago((41 - n++) * 0.3 + 0.03));
       }
     }
 

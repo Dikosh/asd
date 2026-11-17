@@ -18,18 +18,38 @@ try {
 webpush.setVapidDetails(process.env.PUSH_CONTACT || 'mailto:support@jolda.local', vapid.publicKey, vapid.privateKey);
 export const pushPublicKey = vapid.publicKey;
 
+// Push отправляется только на серверы браузеров — иначе подпиской можно заставить сервер стучаться по произвольному адресу.
+const PUSH_HOSTS = [/^fcm\.googleapis\.com$/, /\.push\.services\.mozilla\.com$/, /\.notify\.windows\.com$/, /\.push\.apple\.com$/];
+export function isPushEndpoint(url) {
+  try {
+    const u = new URL(url);
+    return u.protocol === 'https:' && PUSH_HOSTS.some((r) => r.test(u.hostname));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Уведомить пользователей. title и body — русские шаблоны из server/i18n.js (или текст человека), vars — подстановки;
  * kind — тип для значка, link — куда перейти по нажатию.
  */
-export function notify(userIds, { kind, title, body = '', link = '', vars = {} }) {
+export function notify(userIds, payload) {
+  // уведомление — побочное действие: его сбой не должен ломать основную операцию
+  try {
+    deliver(userIds, payload);
+  } catch (e) {
+    console.error('[notify]', e);
+  }
+}
+function deliver(userIds, { kind, title, body = '', link = '', vars = {} }) {
   for (const userId of new Set([userIds].flat())) {
     const id = insert('INSERT INTO notifications(user_id, kind, title, body, link, vars) VALUES(?, ?, ?, ?, ?, ?)', userId, kind, title, body, link, JSON.stringify(vars));
     push(userId, 'notify', { id, kind, title, body, link, vars });
     const lang = j(q1('SELECT settings FROM users WHERE id = ?', userId)?.settings, {}).lang;
-    for (const sub of q('SELECT id, endpoint, keys FROM push_subs WHERE user_id = ?', userId)) {
+    for (const sub of q('SELECT id, endpoint, keys FROM push_subs WHERE user_id = ? LIMIT 5', userId)) {
+      if (!isPushEndpoint(sub.endpoint)) continue;
       webpush
-        .sendNotification({ endpoint: sub.endpoint, keys: JSON.parse(sub.keys) }, JSON.stringify({ title: render(title, vars, lang), body: render(body, vars, lang), link }), { TTL: 3600 })
+        .sendNotification({ endpoint: sub.endpoint, keys: JSON.parse(sub.keys) }, JSON.stringify({ title: render(title, vars, lang), body: render(body, vars, lang), link }), { TTL: 3600, timeout: 5000 })
         .catch((e) => {
           // подписка отозвана на устройстве — удаляем её
           if (e.statusCode === 404 || e.statusCode === 410) run('DELETE FROM push_subs WHERE id = ?', sub.id);
