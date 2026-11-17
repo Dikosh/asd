@@ -102,8 +102,10 @@ export function normPhone(raw) {
   // привычные местные записи: 701 123 45 67, 8 701 123 45 67 и +7 8 701… — это один и тот же номер
   if (digits.length === 10) digits = '7' + digits;
   else if (digits.length === 11 && digits[0] === '8') digits = '7' + digits.slice(1);
-  else if (digits.length === 12 && digits.startsWith('78')) digits = '7' + digits.slice(2);
-  if (digits.length < 10 || digits.length > 15) throw bad('phone', 'Некорректный номер телефона');
+  // код страны введён дважды: «+7» в списке и «+7 701…» или «8 701…» в поле
+  else if (digits.length === 12 && (digits.startsWith('77') || digits.startsWith('78'))) digits = '7' + digits.slice(2);
+  // у номеров Казахстана и России (+7) ровно 11 цифр
+  if (digits[0] === '7' ? digits.length !== 11 : digits.length < 10 || digits.length > 15) throw bad('phone', 'Некорректный номер телефона');
   return '+' + digits;
 }
 

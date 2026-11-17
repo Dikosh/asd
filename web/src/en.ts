@@ -1328,4 +1328,13 @@ export const EN: Record<string, string> = {
   'Вы снова можете размещать объявления и откликаться.': 'You can post listings and respond again.',
   'Поддержка ответила на ваше обращение': 'Support replied to your request',
   'Ваше обращение закрыто': 'Your request was closed',
+  'Выберите причину': 'Choose a reason',
+  'Введите номер полностью: 10 цифр, например 701 123 45 67': 'Enter the full number: 10 digits, e.g. 701 123 45 67',
+  'Ответ на запись': 'Reply to the entry',
+  'Расчёт по ставкам этого направления: {n} ₸/км, {s} объявлений. Это ориентир, а не предложение.': 'Based on rates for this route: {n} ₸/km, {s} listings. This is a guide, not an offer.',
+  'По этому направлению мало объявлений, поэтому расчёт по похожим рейсам такой же длины: {n} ₸/км, {s} объявлений. Это ориентир, а не предложение.': 'Too few listings on this route, so this is based on trips of similar length: {n} ₸/km, {s} listings. This is a guide, not an offer.',
+  'Проверьте поля: нужны положительные числа, например 7 или 7,5': 'Check the fields: positive numbers are needed, e.g. 7 or 7.5',
+  'Сначала включите геолокацию — без неё этот этап не отметить': 'Turn on location first — this stage can\'t be marked without it',
+  'Этот человек уже есть в «Сотрудниках»': 'This person is already in Employees',
+  'До ближайшего пункта выгрузки ещё {n} км — отметить выгрузку можно на месте': '{n} km to the nearest unloading point — unloading can be marked on site',
 };

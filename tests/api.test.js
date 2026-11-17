@@ -161,7 +161,7 @@ test('полный цикл сделки', async () => {
   await carrier.post(`/api/trips/${tripId}/stage`, { stage: 'loading' });
   assert.equal((await carrier.call('POST', `/api/trips/${tripId}/stage`, { stage: 'in_transit' })).data.error, 'gps_stale', 'в путь — только с GPS-позицией');
   assert.equal((await carrier.call('POST', `/api/trips/${tripId}/gps`, { share: false })).status, 409, 'после начала рейса GPS не отключить');
-  await carrier.post(`/api/trips/${tripId}/position`, { lat: 54.0, lon: 69.3, speed: 80 });
+  await carrier.post(`/api/trips/${tripId}/position`, { lat: 54.6, lon: 69.2, speed: 80 });
   await carrier.post(`/api/trips/${tripId}/stage`, { stage: 'in_transit' });
   // точка, до которой машина не могла доехать за секунды, отбрасывается
   await new Promise((r) => setTimeout(r, 1600));

@@ -33,7 +33,9 @@ export default function Cabinet() {
   // водитель из команды ведёт рейсы; сделки, деньги и документы — у владельца и сотрудников
   // водителю-одиночке не показываем то, что нужно только компаниям
   const visible = me!.user.companyRole === 'driver' ? items.filter((i) => ['profile', 'trips', 'team', 'catalog', 'settings'].includes(i.key))
-    : me!.user.role === 'driver' ? items.filter((i) => !['employees', 'balance', 'partners'].includes(i.key)) : items;
+    : me!.user.role === 'driver' ? items.filter((i) => !['employees', 'balance', 'partners'].includes(i.key))
+    // деньги и тариф — у владельца компании
+    : me!.user.companyRole !== 'owner' ? items.filter((i) => i.key !== 'balance') : items;
   const current = visible.find((i) => i.key === tab);
   if (tab && !current) return <Navigate to="/cabinet" replace />;
   return (

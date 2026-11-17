@@ -79,16 +79,16 @@ const REASONS: Record<string, string> = {
 /** Жалоба модератору на объявление или компанию. */
 export function ComplaintModal({ listingId, companyId, onClose }: { listingId?: number; companyId?: number; onClose: () => void }) {
   const { act } = useApp();
-  const [reason, setReason] = useState('fraud');
+  const [reason, setReason] = useState('');
   const [text, setText] = useState('');
   return (
     <Modal title={t('Пожаловаться')} onClose={onClose}>
       <p className="muted small">{t('Жалобу увидит только модератор. Он проверит объявление и компанию и примет меры.')}</p>
-      <Field label={t('Что не так')}><Select value={reason} onChange={setReason} options={Object.keys(REASONS).map((k) => ({ value: k, label: t(REASONS[k]) }))} /></Field>
+      <Field label={t('Что не так')}><Select value={reason} onChange={setReason} options={[{ value: '', label: t('Выберите причину') }, ...Object.keys(REASONS).map((k) => ({ value: k, label: t(REASONS[k]) }))]} /></Field>
       <Field label={t('Подробности (необязательно)')}><textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} maxLength={1000} /></Field>
       <div className="row end">
         <button className="btn ghost" onClick={onClose}>{t('Отмена')}</button>
-        <button className="btn danger" onClick={async () => (await act(() => api('/complaints', 'POST', { listingId, companyId, reason, text }), t('Жалоба отправлена модератору'))) && onClose()}>{t('Отправить жалобу')}</button>
+        <button className="btn danger" disabled={!reason} onClick={async () => (await act(() => api('/complaints', 'POST', { listingId, companyId, reason, text }), t('Жалоба отправлена модератору'))) && onClose()}>{t('Отправить жалобу')}</button>
       </div>
     </Modal>
   );

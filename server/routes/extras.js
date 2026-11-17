@@ -218,11 +218,16 @@ export default function extraRoutes(app) {
     if (points.length < 2 || points.length > 8) throw bad('validation', 'Укажите от двух до восьми пунктов');
     const r = await route(points);
     const body = L.BODY.includes(req.query.body) ? req.query.body : null;
-    const m = marketRate('cargo', { bodyType: body, km: r.km });
+    // как на странице «Цены»: сначала ставки этого направления, иначе — общая оценка по похожим рейсам
+    const ids = String(req.query.points || '').split(',');
+    const dir = priceSamples('cargo', { bodyType: body }).filter((x) => x.from_id === ids[0] && x.to_id === ids.at(-1) && x.km > 0).map((x) => x.rate / x.km).sort((a, b) => a - b);
+    const at = (p) => Math.round(dir[Math.floor((dir.length - 1) * p)]);
+    const similar = marketRate('cargo', { bodyType: body, km: r.km });
+    const m = dir.length >= 3 ? { low: at(0.25), median: at(0.5), high: at(0.75), sample: dir.length, basis: 'direction' } : similar && { ...similar, basis: 'similar' };
     res.json({
       ...r,
       hours: Math.round(r.km / 60), // средняя скорость грузовика на трассе с учётом остановок
-      cost: m ? { low: Math.round((m.low * r.km) / 1000) * 1000, median: Math.round((m.median * r.km) / 1000) * 1000, high: Math.round((m.high * r.km) / 1000) * 1000, perKm: m.median, sample: m.sample } : null,
+      cost: m ? { low: Math.round((m.low * r.km) / 1000) * 1000, median: Math.round((m.median * r.km) / 1000) * 1000, high: Math.round((m.high * r.km) / 1000) * 1000, perKm: m.median, sample: m.sample, basis: m.basis } : null,
     });
   });
   app.get('/api/tools/rates', auth, async (_req, res) => {

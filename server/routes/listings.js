@@ -315,7 +315,9 @@ export default function listingRoutes(app) {
   app.post('/api/searches', auth, (req, res) => {
     const b = parse(z.object({ kind: z.enum(['cargo', 'truck']), name: z.string().trim().min(1).max(80), params: z.record(z.enum(FILTER_KEYS), z.string().max(120)), notify: z.boolean().default(false) }), req.body);
     if (q1('SELECT COUNT(*) AS n FROM searches WHERE user_id = ?', req.user.id).n >= 30) throw bad('limit', 'Не более 30 сохранённых поисков');
-    if (b.notify && q1('SELECT COUNT(*) AS n FROM searches WHERE user_id = ? AND notify = 1', req.user.id).n >= alertLimit(req.user)) b.notify = false;
+    const limit = alertLimit(req.user);
+    if (b.notify && q1('SELECT COUNT(*) AS n FROM searches WHERE user_id = ? AND notify = 1', req.user.id).n >= limit)
+      throw bad('alert_limit', `На вашем тарифе доступно подписок: ${limit}. Снимите галочку уведомлений или подключите тариф Pro.`, 402);
     res.json({ id: insert('INSERT INTO searches(user_id, kind, name, params, notify) VALUES(?, ?, ?, ?, ?)', req.user.id, b.kind, b.name, JSON.stringify(b.params), b.notify ? 1 : 0), notify: b.notify });
   });
   app.patch('/api/searches/:id', auth, (req, res) => {

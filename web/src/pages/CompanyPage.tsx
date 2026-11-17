@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, BadgeCheck, Ban, EyeOff, FileCheck2, Flag, Handshake, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { api, Company, DOC_L, fmtDate, Listing, ROLE_L, t, useApp, useLoad } from '../core';
-import { CompanyBadge, Empty, Field, Loading, Modal, Stars } from '../ui';
+import { CompanyBadge, Empty, Field, Loading, Modal, ReasonModal, Stars } from '../ui';
 import { ComplaintModal, ContactButtons, ListingCard } from '../listing';
 
 type Full = Company & {
@@ -27,10 +27,8 @@ export default function CompanyPage() {
   const [bl, setBl] = useState<{ reason: string; review: string } | null>(null);
   const [complain, setComplain] = useState(false);
   const { me } = useApp();
-  const reply = async (entryId: number) => {
-    const text = prompt(t('Ваш ответ на запись — его увидят все участники'));
-    if (text && (await act(() => api(`/blacklist/${entryId}/reply`, 'POST', { reply: text }), t('Ответ опубликован')))) reload();
-  };
+  const [replyTo, setReplyTo] = useState<number | null>(null);
+  const reply = (entryId: number) => setReplyTo(entryId);
   const relate = async (kind: 'partner' | 'block', on: boolean, ok: string) => (await act(() => api(`/companies/${id}/${kind}`, 'POST', { on }), ok)) && reload();
   if (loading) return <Loading />;
   if (!c) return <div className="card"><Empty title={t('Компания не найдена')} /></div>;
@@ -147,6 +145,11 @@ export default function CompanyPage() {
             }}>{t('Добавить')}</button>
           </div>
         </Modal>
+      )}
+      {replyTo !== null && (
+        <ReasonModal title={t('Ответ на запись')} hint={t('Ваш ответ на запись — его увидят все участники')} label={t('Ваш ответ')} min={3} confirm={t('Опубликовать')}
+          onClose={() => setReplyTo(null)}
+          onSubmit={async (text) => (await act(() => api(`/blacklist/${replyTo}/reply`, 'POST', { reply: text }), t('Ответ опубликован'))) && (setReplyTo(null), reload())} />
       )}
     </div>
   );

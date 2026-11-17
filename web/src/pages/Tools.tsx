@@ -59,7 +59,7 @@ function Distance() {
               <div className="mid"><span>{t('обычно')}</span><b>{money(d.cost.median)}</b></div>
               <div><span>{t('дороже обычного')}</span><b>{money(d.cost.high)}</b></div>
             </div>
-            <p className="muted small">{t('Расчёт по ставкам из объявлений на платформе: {n} ₸/км, {s} объявлений в выборке. Это ориентир, а не предложение.', { n: num(d.cost.perKm), s: d.cost.sample })}</p>
+            <p className="muted small">{d.cost.basis === 'direction' ? t('Расчёт по ставкам этого направления: {n} ₸/км, {s} объявлений. Это ориентир, а не предложение.', { n: num(d.cost.perKm), s: d.cost.sample }) : t('По этому направлению мало объявлений, поэтому расчёт по похожим рейсам такой же длины: {n} ₸/км, {s} объявлений. Это ориентир, а не предложение.', { n: num(d.cost.perKm), s: d.cost.sample })}</p>
           </div>
         )}
       </div>
@@ -121,6 +121,8 @@ function Axles() {
       limTotal: N(v.limTotal),
     };
   }, [v]);
+  // пустое, отрицательное или не число — это ошибка ввода, а не ноль
+  const bad = Object.values(v).some((s) => !/^\d+([.,]\d+)?$/.test(String(s).trim()));
   const over = r.rows.some((x) => x.load > x.limit) || r.total > r.limTotal;
   const inp = (k: keyof typeof v, label: string, hint?: string) => (
     <Field label={label} hint={hint}><input inputMode="decimal" value={v[k]} onChange={set(k)} /></Field>
@@ -129,10 +131,10 @@ function Axles() {
   return (
     <div className="detail-layout">
       <div className="stack">
-        <div className={`banner ${over ? 'bad' : 'good'}`}>
-          {over ? <AlertTriangle size={22} /> : <CheckCircle2 size={22} />}
+        <div className={`banner ${over || bad ? 'bad' : 'good'}`}>
+          {over || bad ? <AlertTriangle size={22} /> : <CheckCircle2 size={22} />}
           <div>
-            <b>{over ? t('Есть перегруз') : t('Нагрузка в пределах заданных норм')}</b>
+            <b>{bad ? t('Проверьте поля: нужны положительные числа, например 7 или 7,5') : over ? t('Есть перегруз') : t('Нагрузка в пределах заданных норм')}</b>
             <span>{t('Полная масса автопоезда: {n} т из {m} т допустимых', { n: r.total.toFixed(1), m: r.limTotal })}</span>
           </div>
         </div>

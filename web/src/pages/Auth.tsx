@@ -35,7 +35,13 @@ export default function AuthPage() {
   }, [wait]);
   const phoneInput = useRef<HTMLInputElement>(null);
   const feed = useLoad(() => api<PublicListing[]>('/public/listings').catch(() => []));
-  const phone = prefix + number.replace(/\D/g, '');
+  // «+7 701…», «8 701…» и «701…» при коде +7 — один и тот же номер
+  const local = (() => {
+    const d = number.replace(/\D/g, '');
+    return prefix === '+7' && d.length === 11 && (d[0] === '7' || d[0] === '8') ? d.slice(1) : d;
+  })();
+  const phone = prefix + local;
+  const phoneOk = prefix === '+7' ? local.length === 10 : local.length >= 7;
   const run = async (fn: () => Promise<unknown>) => {
     setBusy(true);
     await act(fn);
@@ -130,7 +136,8 @@ export default function AuthPage() {
                   <input ref={phoneInput} type="tel" inputMode="tel" autoFocus placeholder="701 123 45 67" value={number} onChange={(e) => setNumber(e.target.value)} autoComplete="tel-national" />
                 </div>
               </Field>
-              <button className="btn primary block" disabled={busy || number.replace(/\D/g, '').length < 7}>{t('Получить код')}</button>
+              <button className="btn primary block" disabled={busy || !phoneOk}>{t('Получить код')}</button>
+              {!phoneOk && number.replace(/\D/g, '').length > 0 && <p className="muted small">{t('Введите номер полностью: 10 цифр, например 701 123 45 67')}</p>}
             </>
           )}
           {step === 'code' && (

@@ -23,8 +23,9 @@ export default function JobsPage() {
       reload();
     }
   };
-  const hire = (j: any) =>
-    act(() => api('/employees', 'POST', { name: j.userName, phone: j.phone, position: t('Водитель'), licenseCats: j.licenseCats, experience: j.experience }), t('Добавлен в «Сотрудники»'));
+  const [hired, setHired] = useState<number[]>([]);
+  const hire = async (j: any) =>
+    (await act(() => api('/employees', 'POST', { name: j.userName, phone: j.phone, position: t('Водитель'), licenseCats: j.licenseCats, experience: j.experience }), t('Добавлен в «Сотрудники»'))) && setHired((x) => [...x, j.id]);
   const isVac = form?.kind === 'vacancy';
   // водителю не показываем действия работодателя
   const isDriver = me!.user.role === 'driver';
@@ -73,7 +74,7 @@ export default function JobsPage() {
                   ) : (
                     <>
                       <ContactButtons full phone={j.phone} text={`${t('Здравствуйте! Пишу по объявлению на Jolda')}: ${j.title}`} />
-                      {kind === 'resume' && canHire && <button className="btn soft" onClick={() => hire(j)}><UserPlus size={16} /> {t('В сотрудники')}</button>}
+                      {kind === 'resume' && canHire && <button className="btn soft" disabled={hired.includes(j.id)} onClick={() => hire(j)}><UserPlus size={16} /> {t('В сотрудники')}</button>}
                     </>
                   )}
                 </div>

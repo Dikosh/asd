@@ -487,7 +487,10 @@ export function DrivePage() {
                   {!geoError && geo.jump && <div className="form-error">{t('Новая точка не принята: она слишком далеко от предыдущей. Так бывает при сбое GPS — позиция обновится сама через несколько минут.')}</div>}
                   <p className="muted small">{t('Не закрывайте эту страницу до конца рейса: пока она открыта, экран не погаснет и позиция будет уходить заказчику.')}</p>
                   {next ? (
-                    <button className="btn primary block big" onClick={() => confirmStage(next) && post('stage', { stage: next }, t('Этап обновлён'))}><Check size={20} /> {t(STAGE_ACT[next])}</button>
+                    <>
+                    <button className="btn primary block big" disabled={!!geoError && meta.stages.indexOf(next) >= meta.stages.indexOf('in_transit')} onClick={() => confirmStage(next) && post('stage', { stage: next }, t('Этап обновлён'))}><Check size={20} /> {t(STAGE_ACT[next])}</button>
+                    {!!geoError && meta.stages.indexOf(next) >= meta.stages.indexOf('in_transit') && <p className="muted small center">{t('Сначала включите геолокацию — без неё этот этап не отметить')}</p>}
+                    </>
                   ) : (
                     <div className="info-line">{t('Доставка отмечена. Ждём подтверждения заказчика.')}</div>
                   )}

@@ -124,9 +124,10 @@ test('подписка на поиск присылает уведомление
   assert.equal((await carrier.get('/api/me')).counters.notifications, 0);
 
   // лимит подписок на бесплатном тарифе
-  for (const name of ['b', 'c']) await carrier.post('/api/searches', { kind: 'cargo', name, params: { from: 'astana' }, notify: true });
-  const extra = await carrier.post('/api/searches', { kind: 'cargo', name: 'd', params: { from: 'astana' }, notify: true });
-  assert.equal(extra.notify, false, 'сверх лимита поиск сохраняется без подписки');
+  // добираем подписки до лимита тарифа (у демо-перевозчика часть уже есть)
+  for (const name of ['b', 'c', 'e']) await carrier.call('POST', '/api/searches', { kind: 'cargo', name, params: { from: 'astana' }, notify: true });
+  assert.equal((await carrier.call('POST', '/api/searches', { kind: 'cargo', name: 'd', params: { from: 'astana' }, notify: true })).data.error, 'alert_limit', 'сверх лимита — понятная ошибка, а не тихое отключение');
+  const extra = await carrier.post('/api/searches', { kind: 'cargo', name: 'd', params: { from: 'astana' }, notify: false });
   assert.equal((await carrier.call('PATCH', `/api/searches/${extra.id}`, { notify: true })).status, 402);
 
   // отклик → уведомление владельцу; push-подписка принимается и снимается

@@ -13,8 +13,9 @@ const id = (req) => Number(req.params.id);
 const optNum = (max) => z.number().min(0).max(max).nullable().optional();
 
 /** Был ли между компаниями рейс (в любом статусе) — основание для записи в чёрный список. */
+// чёрный список — по итогам рейса: пока рейс идёт, вносить нельзя
 const dealBetween = (a, b) =>
-  q1('SELECT id FROM trips WHERE (customer_company = :a AND carrier_company = :b) OR (customer_company = :b AND carrier_company = :a) LIMIT 1', { a, b });
+  q1(`SELECT id FROM trips WHERE status != 'active' AND ((customer_company = :a AND carrier_company = :b) OR (customer_company = :b AND carrier_company = :a)) LIMIT 1`, { a, b });
 
 export default function companyRoutes(app) {
   // ---------- каталог компаний ----------
@@ -124,6 +125,11 @@ export default function companyRoutes(app) {
     const buf = Buffer.from(b.data, 'base64');
     if (buf.length > 5 * 1024 * 1024) throw bad('file_size', 'Файл больше 5 МБ');
     if (q1('SELECT COUNT(*) AS n FROM documents WHERE company_id = ?', req.user.company_id).n >= 20) throw bad('limit', 'Не более 20 документов');
+    // новый файл того же вида заменяет прежний непринятый: в очереди нет дублей
+    for (const old of q(`SELECT id, path FROM documents WHERE company_id = ? AND kind = ? AND status != 'approved'`, req.user.company_id, b.kind)) {
+      fs.rmSync(path.join(UPLOAD_DIR, path.basename(old.path)), { force: true });
+      run('DELETE FROM documents WHERE id = ?', old.id);
+    }
     const name = `${L.token(16)}.${ext}`;
     fs.writeFileSync(path.join(UPLOAD_DIR, name), buf);
     res.json({ id: insert('INSERT INTO documents(company_id, user_id, kind, filename, mime, path) VALUES(?, ?, ?, ?, ?, ?)',
@@ -176,6 +182,8 @@ export default function companyRoutes(app) {
     const d = parse(decision, req.body);
     const ok = d.approve;
     run('UPDATE companies SET verified = ?, verify_note = ? WHERE id = ?', ok ? 'verified' : 'rejected', ok ? '' : d.note, id(req));
+    // при отказе непроверенные документы компании тоже отклоняются с той же причиной — компания видит, что исправить
+    if (!ok) run(`UPDATE documents SET status = 'rejected', note = ? WHERE company_id = ? AND status = 'pending'`, d.note, id(req));
     L.modLog(req.user, ok ? 'verify_approve' : 'verify_reject', q1('SELECT name FROM companies WHERE id = ?', id(req))?.name, d.note);
     notify(q('SELECT id FROM users WHERE company_id = ?', id(req)).map((u) => u.id), {
       kind: 'system', title: ok ? 'Компания проверена' : 'Проверка компании не пройдена',
@@ -243,6 +251,7 @@ export default function companyRoutes(app) {
   });
   app.post('/api/employees', auth, (req, res) => {
     const b = parse(employeeSchema, req.body);
+    if (b.phone && q1('SELECT 1 FROM employees WHERE company_id = ? AND phone = ?', req.user.company_id, b.phone)) throw bad('exists', 'Этот человек уже есть в «Сотрудниках»', 409);
     res.json({ id: insert('INSERT INTO employees(company_id, name, phone, position, license_cats, experience, esutd, esutd_number) VALUES(?, ?, ?, ?, ?, ?, ?, ?)',
       req.user.company_id, b.name, b.phone, b.position, b.licenseCats, b.experience ?? null, b.esutd, b.esutdNumber) });
   });
@@ -258,7 +267,7 @@ export default function companyRoutes(app) {
   });
 
   // ---------- баланс ----------
-  app.get('/api/balance', auth, (req, res) => {
+  app.get('/api/balance', auth, owner, (req, res) => {
     res.json({
       balance: q1('SELECT balance FROM companies WHERE id = ?', req.user.company_id).balance,
       transactions: q('SELECT id, amount, kind, note, created_at AS createdAt FROM transactions WHERE company_id = ? ORDER BY id DESC LIMIT 100', req.user.company_id),

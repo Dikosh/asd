@@ -24,6 +24,7 @@ export default function ListingPage() {
   useEvent('response trip', reload);
   const [msg, setMsg] = useState('');
   const [price, setPrice] = useState('');
+  const priceOk = /^\d*$/.test(price.replace(/\s/g, ''));
   const [currency, setCurrency] = useState('KZT');
   const [note, setNote] = useState(false);
   const [complain, setComplain] = useState(false);
@@ -95,7 +96,7 @@ export default function ListingPage() {
   const respond = () => once(async () => {
     let chatId: number | null = null;
     const ok = await act(async () => {
-      chatId = (await api<{ chatId: number | null }>(`/listings/${l.id}/responses`, 'POST', { message: msg.trim() || defaultMsg, price: price ? Number(price) : null, currency })).chatId;
+      chatId = (await api<{ chatId: number | null }>(`/listings/${l.id}/responses`, 'POST', { message: msg.trim() || defaultMsg, price: price.replace(/\s/g, '') ? Number(price.replace(/\s/g, '')) : null, currency })).chatId;
     }, t('Отклик отправлен'));
     if (!ok) return;
     setMsg('');
@@ -273,7 +274,8 @@ export default function ListingPage() {
                   </Field>
                   <div className="grid2">
                     <Field label={broker ? t('Стоимость ваших услуг (необязательно)') : t('Ваша цена (необязательно)')}>
-                      <input inputMode="numeric" value={price} maxLength={10} onChange={(e) => setPrice(e.target.value.replace(/\D/g, ''))} />
+                      <input inputMode="numeric" value={price} maxLength={10} onChange={(e) => setPrice(e.target.value.replace(/[^\d\s.,-]/g, ''))} aria-invalid={!priceOk} />
+                      {!priceOk && <span className="field-error">{t('Сумма — целое число без копеек, например 350000')}</span>}
                     </Field>
                     <Field label={t('Валюта')}><Select value={currency} onChange={setCurrency} options={meta.currencies.map((c) => ({ value: c, label: c }))} /></Field>
                   </div>

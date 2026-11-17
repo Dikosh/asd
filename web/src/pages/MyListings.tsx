@@ -580,7 +580,7 @@ export function ListingForm() {
                   errId="lf-rate-err"
                   hint={km > 0 && !errs.rate && f.currency === 'KZT' ? `≈ ${num(Math.round(Number(f.rate.replace(/\s+/g, '')) / km))} ₸/${t('км')}` : t('Целое число, без копеек')}
                 >
-                  <input inputMode="numeric" value={f.rate} onChange={(e) => set({ rate: e.target.value.replace(/[^\d\s.,]/g, '') })} placeholder="350000" maxLength={14} aria-required="true" {...inv('rate')} />
+                  <input inputMode="numeric" value={f.rate} onChange={(e) => set({ rate: e.target.value.replace(/[^\d\s.,-]/g, '') })} placeholder="350000" maxLength={14} aria-required="true" {...inv('rate')} />
                 </F>
                 <Field label={t('Валюта')}>
                   <Select value={f.currency} onChange={(v) => set({ currency: v })} options={meta.currencies.map((c) => ({ value: c, label: `${c} (${CUR[c]})` }))} />

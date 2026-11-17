@@ -29,7 +29,8 @@ function ReviewGate() {
   const [text, setText] = useState('');
   const p = me?.pendingReviews[0];
   const loc = useLocation();
-  if (!p || loc.pathname.startsWith('/trip/')) return null;
+  // на странице того же рейса отзыв оставляют в его карточке; на остальных страницах окно показывается всегда
+  if (!p || loc.pathname.startsWith(`/trip/${p.tripId}`) || loc.pathname.startsWith('/d/') || loc.pathname.startsWith('/t/')) return null;
   return (
     <Modal title={t('Оцените завершённый рейс')}>
       <p>

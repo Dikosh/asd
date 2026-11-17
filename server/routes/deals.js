@@ -33,7 +33,7 @@ function chatOf(req) {
 const TRIP_SQL = `
 SELECT t.*, l.kind AS l_kind, l.points AS l_points, l.cargo_type, l.body_type, l.weight, l.volume, l.distance_km,
   l.date_from AS l_date_from, l.date_to AS l_date_to, l.description AS l_description, l.loading AS l_loading, l.pay_terms AS l_pay_terms, l.brand AS l_brand,
-  cu.name AS customer_user_name, cu.phone AS customer_phone, cc.name AS customer_name, cc.form AS customer_form, cc.bin AS customer_bin,
+  cu.name AS customer_user_name, cu.phone AS customer_phone, cu.settings AS customer_settings, ru.settings AS carrier_settings, cc.name AS customer_name, cc.form AS customer_form, cc.bin AS customer_bin,
   ru.name AS carrier_user_name, ru.phone AS carrier_phone, rc.name AS carrier_name, rc.form AS carrier_form, rc.bin AS carrier_bin
 FROM trips t JOIN listings l ON l.id = t.listing_id
 JOIN users cu ON cu.id = t.customer_user JOIN companies cc ON cc.id = t.customer_company
@@ -81,7 +81,7 @@ function tripOut(t, viewer, full = false, mode = 'party') {
   };
   if (mode === 'driver') {
     // водителю нужны контакты для погрузки и условия, но не цена сделки
-    Object.assign(out.customer, { userName: t.customer_user_name, phone: t.customer_phone });
+    Object.assign(out.customer, { userName: t.customer_user_name, phone: t.status === 'active' ? t.customer_phone : null });
     Object.assign(out, { dateFrom: t.l_date_from, dateTo: t.l_date_to, description: t.l_description, loading: L.j(t.l_loading, []) });
   }
   if (mode === 'party') {
@@ -97,8 +97,10 @@ function tripOut(t, viewer, full = false, mode = 'party') {
       autoCompleteAt: t.status === 'active' && t.stage === 'delivered' && done ? new Date(Date.parse(done) + AUTO_COMPLETE_HOURS * 3600_000).toISOString() : null,
       dateFrom: t.l_date_from, dateTo: t.l_date_to, description: t.l_description, loading: L.j(t.l_loading, []), payTerms: L.j(t.l_pay_terms, []), brand: t.l_brand,
     });
-    Object.assign(out.carrier, { phone: t.carrier_phone, form: t.carrier_form, bin: t.carrier_bin });
-    Object.assign(out.customer, { userName: t.customer_user_name, phone: t.customer_phone, form: t.customer_form, bin: t.customer_bin });
+    // пока идёт рейс, стороны должны дозвониться друг до друга; после него действует настройка «скрыть телефон»
+    const ph = (phone, settings, company) => (t.status === 'active' ? phone : L.phoneFor(viewer, { phone, settings, company_id: company }));
+    Object.assign(out.carrier, { phone: ph(t.carrier_phone, t.carrier_settings, t.carrier_company), form: t.carrier_form, bin: t.carrier_bin });
+    Object.assign(out.customer, { userName: t.customer_user_name, phone: ph(t.customer_phone, t.customer_settings, t.customer_company), form: t.customer_form, bin: t.customer_bin });
     out.chatId = q1('SELECT id FROM chats WHERE listing_id = :l AND ((owner_company = :a AND peer_company = :b) OR (owner_company = :b AND peer_company = :a))',
       { l: t.listing_id, a: t.customer_company, b: t.carrier_company })?.id || null;
   }
@@ -127,7 +129,8 @@ function tripOf(req) {
 }
 function tripByDriverToken(req) {
   const t = withTerms(q1(`${TRIP_SQL} WHERE t.driver_token = ?`, String(req.params.token)));
-  if (!t) throw bad('not_found', 'Ссылка недействительна', 404);
+  // ссылка водителя нужна только на время рейса: через сутки после окончания она перестаёт работать
+  if (!t || (t.finished_at && Date.now() - Date.parse(t.finished_at) > 86400_000)) throw bad('not_found', 'Ссылка недействительна', 404);
   return t;
 }
 
@@ -169,7 +172,9 @@ function setStage(t, stage) {
     const points = L.j(t.l_points, []);
     const dest = cityById.get(points[points.length - 1]);
     const far = dest ? Math.round(haversine(last, dest)) : 0;
-    if (stage === 'unloading' && far > 80) throw L.tbad('gps_far', 'До пункта выгрузки ещё {n} км — отметить выгрузку можно на месте', { n: far }, 409);
+    // выгрузка может начаться в любом пункте после погрузки (частичная выгрузка по пути), доставка — только в конечном
+    const nearStop = Math.round(Math.min(...points.slice(1).map((p) => cityById.get(p)).filter(Boolean).map((c) => haversine(last, c)), far || Infinity));
+    if (stage === 'unloading' && nearStop > 80) throw L.tbad('gps_far', 'До ближайшего пункта выгрузки ещё {n} км — отметить выгрузку можно на месте', { n: nearStop }, 409);
     if (stage === 'delivered' && far > 80) throw L.tbad('gps_far', 'До пункта выгрузки ещё {n} км — отметить доставку можно на месте', { n: far }, 409);
     // рейс не может закончиться быстрее, чем машина способна проехать маршрут: так его не «нарисовать» за минуту
     if (stage === 'delivered' && !(L.DEMO && q1('SELECT sim FROM trips WHERE id = ?', t.id).sim)) {
@@ -324,7 +329,12 @@ export default function dealRoutes(app) {
          JOIN companies pc ON pc.id = CASE WHEN c.owner_company = :c THEN c.peer_company ELSE c.owner_company END
          WHERE c.owner_company = :c OR c.peer_company = :c ORDER BY lastAt DESC LIMIT 300`,
         { c: req.user.company_id },
-      ).map(({ peerSettings, peerUserCompany, ...c }) => ({ ...c, peerPhone: L.phoneFor(req.user, { phone: c.peerPhone, settings: peerSettings, company_id: peerUserCompany }) })),
+      ).map(({ peerSettings, peerUserCompany, ...c }) => ({
+        ...c,
+        // если одна из компаний скрыла другую, контакты в чате не показываем
+        peerPhone: q1('SELECT 1 FROM blocks WHERE (company_id = :a AND blocked_id = :b) OR (company_id = :b AND blocked_id = :a)', { a: req.user.company_id, b: c.peerCompanyId })
+          ? null : L.phoneFor(req.user, { phone: c.peerPhone, settings: peerSettings, company_id: peerUserCompany }),
+      })),
     );
   });
   app.get('/api/chats/:id/messages', auth, staff, (req, res) => {
