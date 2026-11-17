@@ -2,12 +2,14 @@
 import { ReactNode, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
-  ArrowLeft, BadgeCheck, Ban, Building2, ChevronRight, FileText, Inbox, LogOut, MessageSquare, Pencil, Plus, Route as RouteIcon, Search, Send, Settings, ShieldCheck,
-  Trash2, Truck, Upload, UserRound, Users, Wallet,
+  ArrowLeft, BadgeCheck, Ban, Bookmark, Briefcase, Building2, Calculator, ChevronRight, FileText, Handshake, Inbox, LifeBuoy, LogOut, MessageSquare, Pencil, Plus,
+  Route as RouteIcon, Search, Send, Settings, ShieldCheck, Trash2, TrendingUp, Truck, Upload, UserRound, Users, UsersRound, Wallet,
 } from 'lucide-react';
 import { api, BODY_L, Company, DOC_L, fmtDate, fmtWhen, LOADING_L, Me, money, num, opts, ROLE_L, t, Trip, useApp, useEvent, useLoad } from '../core';
 import { Chips, CitySelect, CompanyBadge, Empty, Field, LangSwitch, Loading, Modal, Select, Tabs } from '../ui';
 import { TripSummary } from './TripPage';
+import { AdminExtra, Partners, PlanCard, Team } from './CabinetExtra';
+import { PushToggle } from './Notifications';
 
 export default function Cabinet() {
   const { tab, id } = useParams();
@@ -18,9 +20,11 @@ export default function Cabinet() {
     { key: 'messages', label: t('Сообщения'), icon: <MessageSquare size={19} />, badge: me!.counters.unread, el: <Messages chatId={id ? Number(id) : null} /> },
     { key: 'trips', label: t('Рейсы'), icon: <RouteIcon size={19} />, badge: me!.counters.trips, el: <Trips /> },
     { key: 'vehicles', label: t('Машины'), icon: <Truck size={19} />, el: <Vehicles /> },
+    { key: 'team', label: t('Команда'), icon: <UsersRound size={19} />, el: <Team /> },
     { key: 'employees', label: t('Сотрудники'), icon: <Users size={19} />, el: <Employees /> },
-    { key: 'balance', label: t('Баланс'), icon: <Wallet size={19} />, el: <Balance /> },
+    { key: 'balance', label: t('Баланс и тариф'), icon: <Wallet size={19} />, el: <Balance /> },
     { key: 'catalog', label: t('Каталог компаний'), icon: <Building2 size={19} />, el: <Catalog /> },
+    { key: 'partners', label: t('Партнёры'), icon: <Handshake size={19} />, el: <Partners /> },
     { key: 'blacklist', label: t('Чёрный список'), icon: <Ban size={19} />, el: <Blacklist /> },
     { key: 'settings', label: t('Настройки'), icon: <Settings size={19} />, el: <SettingsTab /> },
     ...(me!.user.isAdmin ? [{ key: 'admin', label: t('Модерация'), icon: <ShieldCheck size={19} />, el: <Admin /> }] : []),
@@ -40,6 +44,13 @@ export default function Cabinet() {
             <ChevronRight size={16} className="only-s chev" />
           </Link>
         ))}
+        <div className="cab-more only-s">
+          <Link to="/marked"><Bookmark size={19} /><span>{t('Отмеченные')}</span><ChevronRight size={16} className="chev" /></Link>
+          <Link to="/jobs"><Briefcase size={19} /><span>{t('Работа')}</span><ChevronRight size={16} className="chev" /></Link>
+          <Link to="/prices"><TrendingUp size={19} /><span>{t('Цены')}</span><ChevronRight size={16} className="chev" /></Link>
+          <Link to="/tools"><Calculator size={19} /><span>{t('Инструменты')}</span><ChevronRight size={16} className="chev" /></Link>
+          <Link to="/help"><LifeBuoy size={19} /><span>{t('Помощь')}</span><ChevronRight size={16} className="chev" /></Link>
+        </div>
       </aside>
       <section className="cab-body">
         <Link to="/cabinet" className="link back only-s"><ArrowLeft size={16} /> {t('Кабинет')}</Link>
@@ -399,11 +410,11 @@ function Employees() {
 function Balance() {
   const { act, meta, reloadMe } = useApp();
   const { data, loading, reload } = useLoad(() => api<{ balance: number; transactions: any[] }>('/balance'));
-  const KIND: Record<string, string> = { topup: 'Пополнение', boost: 'Поднятие в топ' };
+  const KIND: Record<string, string> = { topup: 'Пополнение', boost: 'Поднятие в топ', plan: 'Тариф Pro' };
   const topup = async (amount: number) => (await act(() => api('/balance/topup', 'POST', { amount }), t('Баланс пополнен'))) && (reload(), reloadMe());
   return (
     <div className="stack">
-      <h1 className="page-title">{t('Баланс')}</h1>
+      <h1 className="page-title">{t('Баланс и тариф')}</h1>
       <div className="card balance">
         <div><span className="muted">{t('На счёте компании')}</span><b>{money(data?.balance ?? 0)}</b></div>
         <p className="muted small">{t('С баланса оплачивается поднятие объявлений в топ ({n} ₸ за 24 часа). Размещение, поиск и отклики бесплатны.', { n: meta.boostPrice })}</p>
@@ -414,6 +425,7 @@ function Balance() {
           </div>
         ) : <p className="muted small">{t('Онлайн-оплата скоро появится.')}</p>}
       </div>
+      <PlanCard onChange={reload} />
       {loading ? <Loading /> : (
         <div className="card">
           <h3>{t('История операций')}</h3>
@@ -514,6 +526,11 @@ function SettingsTab() {
         <LangSwitch />
       </div>
       <div className="card form">
+        <h3>{t('Уведомления')}</h3>
+        <p className="muted small">{t('Новые отклики, изменения по рейсам и грузы по вашим подпискам — на телефон, даже когда платформа закрыта.')}</p>
+        <PushToggle />
+      </div>
+      <div className="card form">
         <h3>{t('Согласия')}</h3>
         <label className="switch">{toggle('showPhone', true)}<span>{t('Показывать мой телефон в объявлениях')}</span></label>
         <label className="switch">{toggle('gpsConsent', true)}<span>{t('Согласен передавать GPS-позицию во время рейса')}</span></label>
@@ -556,6 +573,7 @@ function Admin() {
         ))}
         {data?.documents.length === 0 && <p className="muted">{t('Очередь пуста.')}</p>}
       </div>
+      <AdminExtra />
     </div>
   );
 }

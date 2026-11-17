@@ -4,6 +4,10 @@ import { q1, run, insert, tx } from '../db.js';
 import { CITIES, isValidBin } from '../geo.js';
 import * as L from '../lib.js';
 import { sendSms } from '../sms.js';
+import zlib from 'node:zlib';
+
+const PLACES_JSON = Buffer.from(JSON.stringify(CITIES.map((c) => [c.id, c.ru, c.kz, c.en, c.country, c.lat, c.lon, c.region])));
+const PLACES_GZ = zlib.gzipSync(PLACES_JSON);
 
 const { bad, parse } = L;
 const attempts = new Map();
@@ -19,7 +23,9 @@ export default function authRoutes(app) {
   app.get('/api/meta', (_req, res) => {
     res.json({
       demo: L.DEMO,
-      cities: CITIES,
+      flags: L.FLAGS,
+      plan: L.PLAN,
+      places: CITIES.length,
       roles: L.ROLES,
       body: L.BODY,
       cargo: L.CARGO,
@@ -36,6 +42,16 @@ export default function authRoutes(app) {
         trips: q1(`SELECT COUNT(*) AS n FROM trips WHERE status = 'completed'`).n,
       },
     });
+  });
+
+  app.get('/api/places', (req, res) => {
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    if (/\bgzip\b/.test(req.headers['accept-encoding'] || '')) {
+      res.setHeader('Content-Encoding', 'gzip');
+      return res.end(PLACES_GZ);
+    }
+    res.end(PLACES_JSON);
   });
 
   app.post('/api/auth/request-code', async (req, res) => {
@@ -71,24 +87,34 @@ export default function authRoutes(app) {
     }
     const regToken = L.token();
     run('UPDATE otps SET reg_token = ?, expires = ? WHERE phone = ?', regToken, Date.now() + 30 * 60_000, phone);
-    res.json({ registered: false, regToken });
+    // если компания уже пригласила этот номер, достаточно имени и почты
+    const invite = q1('SELECT i.name, c.name AS companyName, c.form AS companyForm FROM invites i JOIN companies c ON c.id = i.company_id WHERE i.phone = ?', phone);
+    res.json({ registered: false, regToken, invite: invite || null });
   });
 
   const regSchema = z.object({
     regToken: z.string().min(10),
     name: z.string().trim().min(2).max(100),
     email: z.string().trim().email().max(120),
-    companyName: z.string().trim().min(2).max(120),
-    companyForm: z.enum(['ИП', 'ТОО']),
-    role: z.enum(L.ROLES),
+    companyName: z.string().trim().min(2).max(120).optional(),
+    companyForm: z.enum(['ИП', 'ТОО']).optional(),
+    role: z.enum(L.ROLES).optional(),
   });
   app.post('/api/auth/register', (req, res) => {
     const b = parse(regSchema, req.body);
     const otp = q1('SELECT * FROM otps WHERE reg_token = ?', b.regToken);
     if (!otp || otp.expires < Date.now()) throw bad('code_expired', 'Сессия регистрации истекла, подтвердите номер заново');
+    const invite = q1('SELECT i.*, c.kind FROM invites i JOIN companies c ON c.id = i.company_id WHERE i.phone = ?', otp.phone);
+    if (!invite && (!b.companyName || !b.companyForm || !b.role)) throw bad('validation', 'Укажите компанию и роль');
     const userId = tx(() => {
-      const companyId = insert('INSERT INTO companies(name, form, kind) VALUES(?, ?, ?)', b.companyName, b.companyForm, b.role);
       run('DELETE FROM otps WHERE phone = ?', otp.phone);
+      if (invite) {
+        // сотрудник присоединяется к компании, которая его пригласила
+        run('DELETE FROM invites WHERE id = ?', invite.id);
+        return insert('INSERT INTO users(name, phone, email, role, company_id, company_role) VALUES(?, ?, ?, ?, ?, ?)',
+          b.name, otp.phone, b.email, invite.role === 'driver' ? 'driver' : invite.kind, invite.company_id, invite.role === 'driver' ? 'driver' : 'manager');
+      }
+      const companyId = insert('INSERT INTO companies(name, form, kind) VALUES(?, ?, ?)', b.companyName, b.companyForm, b.role);
       return insert('INSERT INTO users(name, phone, email, role, company_id) VALUES(?, ?, ?, ?, ?)', b.name, otp.phone, b.email, b.role, companyId);
     });
     L.startSession(req, res, userId);

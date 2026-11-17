@@ -1,13 +1,13 @@
 // Страница компании: проверка контрагента — рейтинг, отзывы, документы, чёрный список.
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, BadgeCheck, Ban, FileCheck2, ShieldAlert, ShieldCheck } from 'lucide-react';
+import { ArrowLeft, BadgeCheck, Ban, EyeOff, FileCheck2, Flag, Handshake, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { api, Company, DOC_L, fmtDate, Listing, ROLE_L, t, useApp, useLoad } from '../core';
 import { CompanyBadge, Empty, Field, Loading, Modal, Stars } from '../ui';
-import { ContactButtons, ListingCard } from '../listing';
+import { ComplaintModal, ContactButtons, ListingCard } from '../listing';
 
 type Full = Company & {
-  bin: string | null; binValid: boolean; about: string; cityId: string | null; since: string; mine: boolean; vehicles: number; documents: string[];
+  bin: string | null; binValid: boolean; about: string; cityId: string | null; since: string; mine: boolean; isPartner: boolean; isBlocked: boolean; vehicles: number; documents: string[];
   contacts: { name: string; phone: string; role: string }[];
   reviewList: { rating: number; text: string; createdAt: string; author: string; authorId: number }[];
   blacklist: { reason: string; review: string; createdAt: string; author: string; authorId: number }[];
@@ -25,6 +25,8 @@ export default function CompanyPage() {
   const nav = useNavigate();
   const { data: c, loading, reload } = useLoad(() => api<Full>(`/companies/${id}`), [id]);
   const [bl, setBl] = useState<{ reason: string; review: string } | null>(null);
+  const [complain, setComplain] = useState(false);
+  const relate = async (kind: 'partner' | 'block', on: boolean, ok: string) => (await act(() => api(`/companies/${id}/${kind}`, 'POST', { on }), ok)) && reload();
   if (loading) return <Loading />;
   if (!c) return <div className="card"><Empty title={t('Компания не найдена')} /></div>;
   return (
@@ -97,10 +99,24 @@ export default function CompanyPage() {
               </div>
             ))}
           </div>
-          {!c.mine && <button className="btn ghost danger" onClick={() => setBl({ reason: '', review: '' })}><Ban size={16} /> {t('Добавить в чёрный список')}</button>}
+          {!c.mine && (
+            <div className="card stack-s">
+              <b>{t('Ваши отношения с компанией')}</b>
+              <button className={`btn ${c.isPartner ? 'primary' : 'soft'}`} onClick={() => relate('partner', !c.isPartner, c.isPartner ? t('Убрано из партнёров') : t('Добавлено в партнёры'))}>
+                <Handshake size={16} /> {c.isPartner ? t('Ваш партнёр') : t('Добавить в партнёры')}
+              </button>
+              <p className="muted small">{t('Объявления партнёров помечаются и находятся отдельным фильтром.')}</p>
+              <button className="btn ghost" onClick={() => relate('block', !c.isBlocked, c.isBlocked ? t('Объявления компании снова видны') : t('Объявления компании скрыты'))}>
+                <EyeOff size={16} /> {c.isBlocked ? t('Показывать объявления компании') : t('Скрыть все объявления компании')}
+              </button>
+              <button className="btn ghost" onClick={() => setComplain(true)}><Flag size={16} /> {t('Пожаловаться модератору')}</button>
+              <button className="btn ghost danger" onClick={() => setBl({ reason: '', review: '' })}><Ban size={16} /> {t('Добавить в чёрный список')}</button>
+            </div>
+          )}
         </aside>
       </div>
 
+      {complain && <ComplaintModal companyId={c.id} onClose={() => setComplain(false)} />}
       {bl && (
         <Modal title={t('Добавить в чёрный список')} onClose={() => setBl(null)}>
           <p className="muted small">{t('Запись увидят все участники вместе с названием вашей компании. Указывайте только то, что можете подтвердить.')}</p>

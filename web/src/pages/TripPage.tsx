@@ -1,7 +1,7 @@
 // Рейс: карта с живой позицией, этапы, GPS, завершение и отзыв. Публичная страница отслеживания.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Check, Clock, Copy, MapPin, MessageSquare, Navigation, Play, Share2, Square } from 'lucide-react';
+import { ArrowLeft, Check, Clock, Copy, FileText, MapPin, MessageSquare, Navigation, Play, Share2, Smartphone, Square } from 'lucide-react';
 import { api, BODY_L, CARGO_L, fmtWhen, money, num, STAGE_L, t, Trip, useApp, useEvent, useLoad } from '../core';
 import { Empty, Loading, Logo, MapMarker, MapRoute, MapView, Stars } from '../ui';
 import { ContactButtons, RouteTitle } from '../listing';
@@ -162,7 +162,11 @@ export default function TripPage() {
                 <input type="checkbox" checked={trip.shareGps} onChange={(e) => post('gps', { share: e.target.checked }, e.target.checked ? t('Передача GPS включена') : t('Передача GPS выключена'))} />
                 <span>{t('Делиться GPS')}</span>
               </label>
-              <p className="muted small">{t('Обязательно в рейсе: заказчик видит, где машина. Позиция передаётся, пока приложение открыто на телефоне водителя.')}</p>
+              <div className="gps-how">
+                <Smartphone size={18} />
+                <span>{t('Откройте этот рейс на телефоне, который едет в машине, и разрешите доступ к геолокации. Пока Jolda открыта, позиция уходит заказчику, а экран не гаснет.')}</span>
+              </div>
+              {trip.shareGps && !trip.position && <div className="form-error">{t('Позиция ещё не получена. Проверьте, что на телефоне включена геолокация и она разрешена для сайта.')}</div>}
               {next && (
                 <button className="btn primary block" onClick={() => post('stage', { stage: next }, t('Этап обновлён'))}>
                   <Check size={16} /> {t('Отметить')}: {t(STAGE_L[next])}
@@ -217,6 +221,8 @@ export default function TripPage() {
               {trip.chatId && <Link to={`/cabinet/messages/${trip.chatId}`} className="btn soft"><MessageSquare size={16} /> {t('Чат')}</Link>}
             </div>
           </div>
+
+          <Link to={`/trip/${trip.id}/doc`} className="btn soft"><FileText size={16} /> {t('Заявка на перевозку — печать или PDF')}</Link>
 
           <div className="card stack-s">
             <b><Share2 size={16} /> {t('Ссылка для получателя')}</b>

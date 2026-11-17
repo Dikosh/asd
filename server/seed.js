@@ -188,7 +188,18 @@ export function seed() {
     chat(truck1, B, 'Алатау Агро', [['Алатау Агро', 'Есть 12 т фруктов из Алматы в Караганду, реф обязателен.\n— 300000 KZT']]);
     addListing('cargo', 'Silk Way Logistics', ['urumqi', 'khorgos', 'almaty'], { cargo: 'consumer', body: 'container', weight: 22, volume: 76, rate: 1450000, from: 2, description: 'Контейнер 40HC, электроника. Нужен брокер на Хоргосе.', createdAt: ago(4) });
     addListing('truck', 'Silk Way Logistics', ['almaty', 'astana'], { brand: 'MAN TGX', body: 'tent', weight: 22, volume: 92, rate: 400000, from: 1, createdAt: ago(6) });
-    run(`INSERT INTO searches(user_id, kind, name, params) VALUES(?, 'cargo', 'Алматы → Астана, реф', ?)`, user[B], JSON.stringify({ from: 'almaty', to: 'astana', body: 'ref', radius: '100' }));
+    run(`INSERT INTO searches(user_id, kind, name, params, notify) VALUES(?, 'cargo', 'Алматы → Астана, реф', ?, 1)`, user[B], JSON.stringify({ from: 'almaty', to: 'astana', body: 'ref', radius: '100' }));
+    run('INSERT INTO partners(company_id, partner_id) VALUES(?, ?), (?, ?)', comp[A], comp[B], comp[B], comp[A]);
+    run(`INSERT INTO notifications(user_id, kind, title, body, link, vars, created_at) VALUES
+      (?, 'response', 'Новый отклик: {route}', 'Есть 12 т фруктов из Алматы в Караганду, реф обязателен.', ?, ?, ?),
+      (?, 'response', 'Новый отклик: {route}', 'Тент 20 т в Астане, готов забрать послезавтра.', ?, ?, ?)`,
+      user[B], `/listing/${truck1}`, JSON.stringify({ route: ['almaty', 'balkhash', 'karaganda', 'astana'] }), ago(1),
+      user[A], `/listing/${open1}`, JSON.stringify({ route: ['astana', 'kostanay'] }), ago(3));
+    run(`INSERT INTO news(title, body, title_kz, body_kz, title_en, body_en, created_at) VALUES
+      ('Подписки на грузы и push-уведомления', 'Сохраните поиск и включите колокольчик — платформа сама сообщит о новом подходящем грузе или машине, даже если она закрыта.', 'Жүктерге жазылу және push-хабарламалар', 'Іздеуді сақтап, қоңырауды қосыңыз — платформа жабық тұрса да, жаңа сәйкес жүк немесе көлік туралы өзі хабарлайды.', 'Load alerts and push notifications', 'Save a search and switch on the bell — the platform will tell you about a new matching load or truck even when it is closed.', ?),
+      ('Калькуляторы: расстояние, стоимость рейса, нагрузка на оси', 'В разделе «Инструменты» появились три калькулятора и курсы Национального банка.', 'Калькуляторлар: қашықтық, рейс құны, осьтік жүктеме', '«Құралдар» бөлімінде үш калькулятор және Ұлттық банк бағамдары пайда болды.', 'Calculators: distance, trip cost, axle load', 'The Tools section now has three calculators and National Bank exchange rates.', ?),
+      ('Команда: несколько сотрудников в одной компании', 'Владелец компании может пригласить логистов и водителей по номеру телефона — у каждого будет свой вход.', 'Команда: бір компанияда бірнеше қызметкер', 'Компания иесі логистер мен жүргізушілерді телефон нөмірі арқылы шақыра алады — әрқайсысының өз кіруі болады.', 'Teams: several people in one company', 'A company owner can invite dispatchers and drivers by phone number — each gets their own sign-in.', ?)`,
+      ago(20), ago(140), ago(300));
     run(`INSERT INTO marks(user_id, listing_id, marked, note) VALUES(?, ?, 1, 'Уточнить про термописец и время выгрузки')`, user[B], open1);
 
     // ---- работа ----
@@ -216,7 +227,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       process.exit(1);
     }
     db.exec('PRAGMA foreign_keys=OFF;');
-    for (const t of ['transactions', 'jobs', 'blacklist', 'reviews', 'positions', 'trip_events', 'trips', 'messages', 'chats', 'responses', 'searches', 'marks', 'listings', 'employees', 'vehicles', 'documents', 'otps', 'sessions', 'users', 'companies'])
+    for (const t of ['route_cache', 'feedback', 'news', 'push_subs', 'notifications', 'complaints', 'partners', 'blocks', 'listing_views', 'invites', 'transactions', 'jobs', 'blacklist', 'reviews', 'positions', 'trip_events', 'trips', 'messages', 'chats', 'responses', 'searches', 'marks', 'listings', 'employees', 'vehicles', 'documents', 'otps', 'sessions', 'users', 'companies'])
       db.exec(`DELETE FROM ${t}`);
     db.exec('PRAGMA foreign_keys=ON;');
   }

@@ -1,10 +1,10 @@
 // Подробная карточка объявления: маршрут на карте, отклик, отклики владельцу, подходящие встречные объявления.
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeft, Bookmark, BookmarkCheck, Check, Globe2, MessageSquare, StickyNote, TrendingUp, X } from 'lucide-react';
+import { ArrowLeft, Bookmark, BookmarkCheck, Check, Eye, Flag, Globe2, MessageSquare, Share2, StickyNote, TrendingUp, X } from 'lucide-react';
 import { api, fmtDates, fmtWhen, Listing, money, num, PAY_L, t, useApp, useEvent, useLoad } from '../core';
 import { CompanyBadge, Empty, Field, Loading, MapView, Select } from '../ui';
-import { ContactButtons, ListingCard, NoteModal, RateBlock, RouteTitle, SpecChips } from '../listing';
+import { ComplaintModal, ContactButtons, ListingCard, NoteModal, RateBlock, RouteTitle, SpecChips, useShare } from '../listing';
 
 type Detail = Listing & {
   market: { low: number; median: number; high: number; sample: number } | null;
@@ -24,6 +24,8 @@ export default function ListingPage() {
   const [price, setPrice] = useState('');
   const [currency, setCurrency] = useState('KZT');
   const [note, setNote] = useState(false);
+  const [complain, setComplain] = useState(false);
+  const share = useShare();
 
   const map = useMemo(() => {
     if (!l) return null;
@@ -153,6 +155,8 @@ export default function ListingPage() {
           {l.mine ? (
             <div className="card">
               <b>{t('Это ваше объявление')}</b>
+              <div className="muted small"><Eye size={14} /> {t('просмотров: {n}', { n: l.views })} · {t('откликов: {n}', { n: l.responsesCount })}</div>
+              <button className="btn soft block" onClick={() => share(l)}><Share2 size={16} /> {t('Поделиться объявлением')}</button>
               {l.tripId ? <Link to={`/trip/${l.tripId}`} className="btn primary block">{t('Открыть рейс')}</Link> : <Link to={`/my/${l.kind}/${l.id}/edit`} className="btn soft block">{t('Изменить')}</Link>}
             </div>
           ) : (
@@ -188,12 +192,15 @@ export default function ListingPage() {
                   {l.mark.marked ? <BookmarkCheck size={16} /> : <Bookmark size={16} />} {l.mark.marked ? t('Отмечено') : t('Отметить')}
                 </button>
                 <button className="btn soft" onClick={() => setNote(true)}><StickyNote size={16} /> {t('Заметка')}</button>
+                <button className="btn soft" onClick={() => share(l)} aria-label={t('Поделиться')}><Share2 size={16} /></button>
+                <button className="btn ghost" onClick={() => setComplain(true)} aria-label={t('Пожаловаться')} title={t('Пожаловаться')}><Flag size={16} /></button>
               </div>
             </div>
           )}
         </aside>
       </div>
       {note && <NoteModal l={l} onClose={() => setNote(false)} onSaved={reload} />}
+      {complain && <ComplaintModal listingId={l.id} onClose={() => setComplain(false)} />}
     </div>
   );
 }

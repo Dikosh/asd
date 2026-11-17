@@ -18,6 +18,7 @@ export default function AuthPage() {
   const [code, setCode] = useState('');
   const [devCode, setDevCode] = useState('');
   const [regToken, setRegToken] = useState('');
+  const [invite, setInvite] = useState<{ name: string; companyName: string; companyForm: string } | null>(null);
   const [reg, setReg] = useState({ name: '', email: '', companyName: '', companyForm: 'ТОО', role: 'customer' });
   const [busy, setBusy] = useState(false);
   const phone = prefix + number.replace(/\D/g, '');
@@ -40,10 +41,12 @@ export default function AuthPage() {
       if (r.registered) setMe(r as Me);
       else {
         setRegToken(r.regToken);
+        setInvite(r.invite);
+        if (r.invite?.name) setReg((x) => ({ ...x, name: r.invite.name }));
         setStep('reg');
       }
     });
-  const register = () => run(async () => setMe(await api<Me>('/auth/register', 'POST', { regToken, ...reg })));
+  const register = () => run(async () => setMe(await api<Me>('/auth/register', 'POST', invite ? { regToken, name: reg.name, email: reg.email } : { regToken, ...reg })));
   const demo = (role: string) => run(async () => setMe(await api<Me>('/auth/demo', 'POST', { role })));
 
   const features = [
@@ -107,13 +110,18 @@ export default function AuthPage() {
           {step === 'reg' && (
             <>
               <h2>{t('Регистрация')}</h2>
-              <p className="muted">{t('Номер {phone} подтверждён. Осталось четыре поля.', { phone })}</p>
+              {invite ? (
+                <div className="info-line">{t('Вас пригласили в компанию «{name}»', { name: `${invite.companyForm} ${invite.companyName}` })}</div>
+              ) : (
+                <p className="muted">{t('Номер {phone} подтверждён. Осталось четыре поля.', { phone })}</p>
+              )}
               <Field label={t('ФИО')}>
                 <input autoFocus required value={reg.name} onChange={(e) => setReg({ ...reg, name: e.target.value })} autoComplete="name" />
               </Field>
               <Field label={t('Почта')}>
                 <input type="email" required value={reg.email} onChange={(e) => setReg({ ...reg, email: e.target.value })} autoComplete="email" />
               </Field>
+              {!invite && (<>
               <Field label={t('Наименование компании')}>
                 <div className="phone-row">
                   <Select value={reg.companyForm} onChange={(v) => setReg({ ...reg, companyForm: v })} options={[{ value: 'ТОО', label: 'ТОО' }, { value: 'ИП', label: 'ИП' }]} />
@@ -131,7 +139,8 @@ export default function AuthPage() {
                   ))}
                 </div>
               </div>
-              <button className="btn primary block" disabled={busy}>{t('Зарегистрироваться')}</button>
+              </>)}
+              <button className="btn primary block" disabled={busy}>{invite ? t('Присоединиться') : t('Зарегистрироваться')}</button>
             </>
           )}
         </form>

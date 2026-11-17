@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { Archive, ArrowLeft, ArrowRight, Check, Package, Pencil, Plus, RotateCcw, Trash2, Truck, Users, Zap } from 'lucide-react';
-import { api, BODY_L, CARGO_L, CUR, fmtDates, Listing, LOADING_L, money, num, opts, PAY_L, t, todayStr, useApp, useLoad } from '../core';
+import { api, BODY_L, CARGO_L, CUR, FLAG_L, fmtDates, Listing, LOADING_L, money, num, opts, PAY_L, t, todayStr, useApp, useLoad } from '../core';
 import { Chips, CitySelect, Empty, Field, Loading, Select, Tabs } from '../ui';
 import { ListingCard } from '../listing';
 
@@ -95,14 +95,16 @@ export default function MyListings() {
 // ---------- размещение: 4 шага ----------
 interface Form {
   points: (string | null)[]; brand: string; bodyType: string | null; cargoType: string | null; weight: string; volume: string; loading: string[];
+  adrClass: string; flags: string[];
   dateFrom: string; dateTo: string; payTerms: string[]; withRate: boolean; rate: string; currency: string; description: string;
 }
 const empty = (): Form => ({
-  points: [null, null], brand: '', bodyType: null, cargoType: null, weight: '', volume: '', loading: [],
+  points: [null, null], brand: '', bodyType: null, cargoType: null, weight: '', volume: '', loading: [], adrClass: '', flags: [],
   dateFrom: todayStr(), dateTo: todayStr(7), payTerms: [], withRate: true, rate: '', currency: 'KZT', description: '',
 });
 const fromListing = (l: Listing, keepDates: boolean): Form => ({
   points: l.points, brand: l.brand, bodyType: l.bodyType, cargoType: l.cargoType, weight: l.weight?.toString() || '', volume: l.volume?.toString() || '',
+  adrClass: l.adrClass ? String(l.adrClass) : '', flags: l.flags || [],
   loading: l.loading, dateFrom: keepDates ? l.dateFrom : todayStr(), dateTo: keepDates ? l.dateTo : todayStr(7), payTerms: l.payTerms,
   withRate: l.rate != null, rate: l.rate?.toString() || '', currency: l.currency, description: l.description,
 });
@@ -147,7 +149,7 @@ export function ListingForm() {
     setBusy(true);
     const body = {
       kind, points: pts, brand: f.brand, bodyType: f.bodyType, cargoType: kind === 'cargo' ? f.cargoType : null, weight: toNum(f.weight), volume: toNum(f.volume),
-      loading: f.loading, dateFrom: f.dateFrom, dateTo: f.dateTo, payTerms: f.payTerms, rate: f.withRate ? toNum(f.rate) : null, currency: f.currency, description: f.description,
+      loading: f.loading, adrClass: f.adrClass ? Number(f.adrClass) : null, flags: f.flags, dateFrom: f.dateFrom, dateTo: f.dateTo, payTerms: f.payTerms, rate: f.withRate ? toNum(f.rate) : null, currency: f.currency, description: f.description,
     };
     const ok = await act(() => (editId ? api(`/listings/${editId}`, 'PUT', body) : api('/listings', 'POST', body)), editId ? t('Изменения сохранены') : t('Объявление размещено'));
     setBusy(false);
@@ -235,6 +237,15 @@ export function ListingForm() {
             <div className="field">
               <span className="field-label">{kind === 'cargo' ? t('Тип загрузки — какая нужна') : t('Тип загрузки — по устройству машины')}</span>
               <Chips options={opts(meta.loading, LOADING_L)} value={f.loading} onChange={(v) => set({ loading: v })} />
+            </div>
+            <Field label={kind === 'cargo' ? t('Опасный груз (ADR)') : t('Допуск к опасным грузам (ADR)')}>
+              <Select value={f.adrClass} onChange={(v) => set({ adrClass: v })} placeholder={kind === 'cargo' ? t('Груз не опасный') : t('Нет допуска')}
+                options={[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => ({ value: String(n), label: t('Класс {n}', { n }) }))} />
+            </Field>
+            <div className="field">
+              <span className="field-label">{kind === 'cargo' ? t('Документы, которые нужны для рейса') : t('Документы, которые есть у перевозчика')}</span>
+              <Chips options={opts(meta.flags, FLAG_L)} value={f.flags} onChange={(v) => set({ flags: v })} />
+              <span className="field-hint">{t('Для международных рейсов: CMR — накладная, TIR — книжка МДП, ЕКМТ — разрешение, T1 — транзитная декларация.')}</span>
             </div>
           </>
         )}

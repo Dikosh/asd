@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { q, q1, run, insert, tx, UPLOAD_DIR } from '../db.js';
 import { cityById, isValidBin } from '../geo.js';
 import * as L from '../lib.js';
+import { notify } from '../notify.js';
 
 const { bad, parse, auth } = L;
 const MIME = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
@@ -19,6 +20,7 @@ export default function companyRoutes(app) {
     res.json(
       q(
         `SELECT * FROM company_stats WHERE (name LIKE :t OR bin LIKE :t) AND (:k IS NULL OR kind = :k)
+           AND id NOT IN (SELECT company_id FROM users WHERE is_admin = 1)
          ORDER BY (verified = 'verified') DESC, trips DESC, reviews DESC, id DESC LIMIT 100`,
         { t: term, k: kind },
       ).map((c) => ({ ...L.companyOut(c), cityId: c.city_id, bin: c.bin })),
@@ -35,6 +37,8 @@ export default function companyRoutes(app) {
       cityId: c.city_id,
       since: c.created_at,
       mine: c.id === req.user.company_id,
+      isPartner: !!q1('SELECT 1 FROM partners WHERE company_id = ? AND partner_id = ?', req.user.company_id, c.id),
+      isBlocked: !!q1('SELECT 1 FROM blocks WHERE company_id = ? AND blocked_id = ?', req.user.company_id, c.id),
       contacts: q('SELECT name, phone, role FROM users WHERE company_id = ? AND is_admin = 0 LIMIT 5', c.id),
       vehicles: q1('SELECT COUNT(*) AS n FROM vehicles WHERE company_id = ?', c.id).n,
       documents: q(`SELECT kind FROM documents WHERE company_id = ? AND status = 'approved' GROUP BY kind`, c.id).map((d) => d.kind),
@@ -134,7 +138,12 @@ export default function companyRoutes(app) {
   });
   const decision = z.object({ approve: z.boolean() });
   app.post('/api/admin/companies/:id', auth, L.admin, (req, res) => {
-    run('UPDATE companies SET verified = ? WHERE id = ?', parse(decision, req.body).approve ? 'verified' : 'rejected', id(req));
+    const ok = parse(decision, req.body).approve;
+    run('UPDATE companies SET verified = ? WHERE id = ?', ok ? 'verified' : 'rejected', id(req));
+    notify(q('SELECT id FROM users WHERE company_id = ?', id(req)).map((u) => u.id), {
+      kind: 'system', title: ok ? 'Компания проверена' : 'Проверка компании не пройдена',
+      body: ok ? 'В объявлениях появилась отметка «Проверена».' : 'Проверьте БИН и документы и отправьте заявку заново.', link: '/cabinet/profile',
+    });
     res.json({ ok: true });
   });
   app.post('/api/admin/documents/:id', auth, L.admin, (req, res) => {

@@ -1,9 +1,12 @@
 // Карточка объявления и общие части для грузов и транспорта.
 import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { ArrowRight, Bookmark, BookmarkCheck, EyeOff, Eye, ExternalLink, Globe2, MessageCircle, MoreHorizontal, Phone, StickyNote, Zap } from 'lucide-react';
-import { api, BODY_L, CARGO_L, fmtDates, Listing, LOADING_L, money, num, PAY_L, t, useApp, waLink } from './core';
-import { CompanyBadge, Modal } from './ui';
+import {
+  ArrowRight, Ban, Bookmark, BookmarkCheck, EyeOff, Eye, ExternalLink, Flag, Globe2, Handshake, MessageCircle, MoreHorizontal, Phone, Share2, StickyNote,
+  TriangleAlert, Zap,
+} from 'lucide-react';
+import { api, BODY_L, CARGO_L, FLAG_L, fmtDates, Listing, LOADING_L, money, num, PAY_L, t, useApp, waLink } from './core';
+import { CompanyBadge, Field, Modal, Select } from './ui';
 
 export function RouteTitle({ points }: { points: string[] }) {
   const { cityName } = useApp();
@@ -19,7 +22,7 @@ export function RouteTitle({ points }: { points: string[] }) {
   );
 }
 
-export function SpecChips({ l }: { l: Pick<Listing, 'kind' | 'cargoType' | 'bodyType' | 'weight' | 'volume' | 'loading' | 'brand'> }) {
+export function SpecChips({ l }: { l: Pick<Listing, 'kind' | 'cargoType' | 'bodyType' | 'weight' | 'volume' | 'loading' | 'brand'> & Partial<Pick<Listing, 'adrClass' | 'flags'>> }) {
   return (
     <div className="chips">
       {l.kind === 'truck' && l.brand && <span className="chip strong">{l.brand}</span>}
@@ -27,6 +30,8 @@ export function SpecChips({ l }: { l: Pick<Listing, 'kind' | 'cargoType' | 'body
       {l.bodyType && <span className="chip">{t(BODY_L[l.bodyType])}</span>}
       {l.weight != null && <span className="chip">{num(l.weight)} {t('т')}</span>}
       {l.volume != null && <span className="chip">{num(l.volume)} {t('м³')}</span>}
+      {l.adrClass != null && <span className="chip adr"><TriangleAlert size={12} /> ADR {l.adrClass}</span>}
+      {l.flags?.map((x) => <span className="chip doc" key={x}>{t(FLAG_L[x])}</span>)}
       {l.loading.map((x) => (
         <span className="chip light" key={x}>{t(LOADING_L[x])}</span>
       ))}
@@ -68,12 +73,52 @@ export function NoteModal({ l, onClose, onSaved }: { l: Listing; onClose: () => 
   );
 }
 
-/** Меню «Действия»: открыть, отметить, заметка, скрыть. */
+const REASONS: Record<string, string> = {
+  fraud: 'Похоже на мошенничество', outdated: 'Объявление устарело', wrong_info: 'Неверные данные', duplicate: 'Повтор объявления', rude: 'Грубость или угрозы', other: 'Другое',
+};
+/** Жалоба модератору на объявление или компанию. */
+export function ComplaintModal({ listingId, companyId, onClose }: { listingId?: number; companyId?: number; onClose: () => void }) {
+  const { act } = useApp();
+  const [reason, setReason] = useState('fraud');
+  const [text, setText] = useState('');
+  return (
+    <Modal title={t('Пожаловаться')} onClose={onClose}>
+      <p className="muted small">{t('Жалобу увидит только модератор. Он проверит объявление и компанию и примет меры.')}</p>
+      <Field label={t('Что не так')}><Select value={reason} onChange={setReason} options={Object.keys(REASONS).map((k) => ({ value: k, label: t(REASONS[k]) }))} /></Field>
+      <Field label={t('Подробности (необязательно)')}><textarea rows={3} value={text} onChange={(e) => setText(e.target.value)} maxLength={1000} /></Field>
+      <div className="row end">
+        <button className="btn ghost" onClick={onClose}>{t('Отмена')}</button>
+        <button className="btn danger" onClick={async () => (await act(() => api('/complaints', 'POST', { listingId, companyId, reason, text }), t('Жалоба отправлена модератору'))) && onClose()}>{t('Отправить жалобу')}</button>
+      </div>
+    </Modal>
+  );
+}
+
+/** Поделиться объявлением: системное меню на телефоне, иначе — ссылка в буфер обмена. */
+export function useShare() {
+  const { toast, routeName } = useApp();
+  return async (l: Listing) => {
+    const url = `${location.origin}/listing/${l.id}`;
+    const title = `${l.kind === 'cargo' ? t('Груз') : t('Транспорт')}: ${routeName(l.points)}${l.rate ? ` · ${money(l.rate, l.currency)}` : ''}`;
+    try {
+      if (navigator.share) await navigator.share({ title, text: title, url });
+      else {
+        await navigator.clipboard.writeText(`${title}\n${url}`);
+        toast(t('Ссылка скопирована'));
+      }
+    } catch {
+      /* пользователь закрыл окно «Поделиться» */
+    }
+  };
+}
+
+/** Меню «Действия»: открыть, отметить, заметка, поделиться, скрыть, пожаловаться. */
 function ActionsMenu({ l, onChange }: { l: Listing; onChange: () => void }) {
   const { act } = useApp();
   const nav = useNavigate();
+  const share = useShare();
   const [open, setOpen] = useState(false);
-  const [note, setNote] = useState(false);
+  const [modal, setModal] = useState<'note' | 'complaint' | null>(null);
   const box = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!open) return;
@@ -84,6 +129,11 @@ function ActionsMenu({ l, onChange }: { l: Listing; onChange: () => void }) {
   const mark = async (body: object, ok: string) => {
     setOpen(false);
     if (await act(() => api(`/listings/${l.id}/mark`, 'POST', body), ok)) onChange();
+  };
+  const blockCompany = async () => {
+    setOpen(false);
+    if (!confirm(t('Скрыть все объявления компании «{name}»? Вернуть можно в кабинете, в чёрном списке.', { name: l.company.name }))) return;
+    if (await act(() => api(`/companies/${l.company.id}/block`, 'POST', { on: true }), t('Объявления компании скрыты'))) onChange();
   };
   return (
     <div className="menu-wrap" ref={box}>
@@ -96,13 +146,21 @@ function ActionsMenu({ l, onChange }: { l: Listing; onChange: () => void }) {
           <button role="menuitem" onClick={() => mark({ marked: !l.mark.marked }, l.mark.marked ? t('Отметка снята') : t('Добавлено в «Отмеченные»'))}>
             {l.mark.marked ? <BookmarkCheck size={16} /> : <Bookmark size={16} />} {l.mark.marked ? t('Снять отметку') : t('Отметить')}
           </button>
-          <button role="menuitem" onClick={() => { setOpen(false); setNote(true); }}><StickyNote size={16} /> {t('Заметка')}</button>
-          <button role="menuitem" onClick={() => mark({ hidden: !l.mark.hidden }, l.mark.hidden ? t('Объявление возвращено') : t('Объявление скрыто'))}>
-            {l.mark.hidden ? <Eye size={16} /> : <EyeOff size={16} />} {l.mark.hidden ? t('Вернуть в выдачу') : t('Скрыть')}
-          </button>
+          <button role="menuitem" onClick={() => { setOpen(false); setModal('note'); }}><StickyNote size={16} /> {t('Заметка')}</button>
+          <button role="menuitem" onClick={() => { setOpen(false); share(l); }}><Share2 size={16} /> {t('Поделиться')}</button>
+          {!l.mine && (
+            <>
+              <button role="menuitem" onClick={() => mark({ hidden: !l.mark.hidden }, l.mark.hidden ? t('Объявление возвращено') : t('Объявление скрыто'))}>
+                {l.mark.hidden ? <Eye size={16} /> : <EyeOff size={16} />} {l.mark.hidden ? t('Вернуть в выдачу') : t('Скрыть')}
+              </button>
+              <button role="menuitem" onClick={blockCompany}><Ban size={16} /> {t('Скрыть все от этой компании')}</button>
+              <button role="menuitem" className="danger" onClick={() => { setOpen(false); setModal('complaint'); }}><Flag size={16} /> {t('Пожаловаться')}</button>
+            </>
+          )}
         </div>
       )}
-      {note && <NoteModal l={l} onClose={() => setNote(false)} onSaved={onChange} />}
+      {modal === 'note' && <NoteModal l={l} onClose={() => setModal(null)} onSaved={onChange} />}
+      {modal === 'complaint' && <ComplaintModal listingId={l.id} onClose={() => setModal(null)} />}
     </div>
   );
 }
@@ -127,6 +185,7 @@ export function ListingCard({ l, onChange, footer }: { l: Listing; onChange: () 
             {l.boosted && <span className="tag top"><Zap size={12} /> {t('В топе')}</span>}
             {l.international && <span className="tag intl"><Globe2 size={12} /> {t('Международный')}</span>}
             {l.match && <span className="tag match">{t('Совпадение {n}%', { n: l.match.score })}</span>}
+            {l.partner && <span className="tag partner"><Handshake size={12} /> {t('Партнёр')}</span>}
             {l.mark.marked && <span className="tag marked"><BookmarkCheck size={12} /> {t('Отмечено')}</span>}
             {l.myResponse?.status === 'sent' && <span className="tag sent">{t('Вы откликнулись')}</span>}
             {l.tripId && <span className="tag trip">{t('В рейсе')}</span>}
@@ -135,6 +194,7 @@ export function ListingCard({ l, onChange, footer }: { l: Listing; onChange: () 
           <div className="muted small">
             {num(l.distanceKm)} {t('км')} · {fmtDates(l.dateFrom, l.dateTo)}
             {l.detourKm ? ` · ${t('крюк ~{n} км', { n: l.detourKm })}` : ''}
+            {l.mine ? ` · ${t('просмотров: {n}', { n: l.views })}` : ''}
           </div>
         </div>
         <RateBlock l={l} />

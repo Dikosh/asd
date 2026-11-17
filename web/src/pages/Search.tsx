@@ -1,8 +1,8 @@
 // «Найти груз» и «Найти транспорт»: фильтр, сохранённые поиски, список и карта.
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { ArrowLeftRight, HelpCircle, List, Map as MapIcon, Save, SlidersHorizontal, X } from 'lucide-react';
-import { api, BODY_L, CARGO_L, Listing, LOADING_L, num, opts, t, useApp, useLoad } from '../core';
+import { ArrowLeftRight, Bell, BellOff, HelpCircle, List, Map as MapIcon, Save, SlidersHorizontal, X } from 'lucide-react';
+import { api, BODY_L, CARGO_L, COUNTRY_L, FLAG_L, Listing, LOADING_L, num, opts, PAY_L, t, useApp, useLoad } from '../core';
 import { Chips, CitySelect, Empty, Field, Loading, MapView, Modal, Select, Tabs } from '../ui';
 import { ListingCard } from '../listing';
 
@@ -13,8 +13,12 @@ export default function SearchPage() {
   const kind = useParams().kind === 'truck' ? 'truck' : 'cargo';
   const { meta, city, act, routeName } = useApp();
   const nav = useNavigate();
-  const [f, setF] = useState<Filter>({});
-  const [debounced, setDebounced] = useState<Filter>({});
+  // условия можно передать ссылкой: /search/cargo?from=almaty&to=astana
+  const fromUrl = () => clean(Object.fromEntries(new URLSearchParams(location.search)));
+  const [f, setF] = useState<Filter>(fromUrl);
+  const [debounced, setDebounced] = useState<Filter>(fromUrl);
+  const [notifyNew, setNotifyNew] = useState(true);
+  const firstKind = useRef(kind);
   const [view, setView] = useState<'list' | 'map'>('list');
   const [panel, setPanel] = useState(false);
   const [hint, setHint] = useState(false);
@@ -22,7 +26,8 @@ export default function SearchPage() {
   const set = (k: string, v: string | null) => setF((x) => clean({ ...x, [k]: v ?? '' }));
 
   useEffect(() => {
-    setF({});
+    if (firstKind.current !== kind) setF({});
+    firstKind.current = kind;
   }, [kind]);
   useEffect(() => {
     const id = setTimeout(() => setDebounced(f), 250);
@@ -30,7 +35,10 @@ export default function SearchPage() {
   }, [f]);
   const query = new URLSearchParams({ kind, ...debounced }).toString();
   const res = useLoad(() => api<{ total: number; items: Listing[] }>(`/listings?${query}`), [query]);
-  const saved = useLoad(() => api<{ id: number; kind: string; name: string; params: Filter }[]>('/searches'));
+  const saved = useLoad(() => api<{ id: number; kind: string; name: string; params: Filter; notify: boolean }[]>('/searches'));
+  const flag = (k: string, label: string) => (
+    <label className="switch small"><input type="checkbox" checked={f[k] === '1'} onChange={(e) => set(k, e.target.checked ? '1' : '')} /><span>{label}</span></label>
+  );
   const active = Object.keys(f).filter((k) => k !== 'sort').length;
   const foundLabel = kind === 'cargo' ? t('Найдено грузов: {n}', { n: res.data?.total ?? '…' }) : t('Найдено машин: {n}', { n: res.data?.total ?? '…' });
 
@@ -81,6 +89,28 @@ export default function SearchPage() {
         <Field label={t('Ставка до')}><input inputMode="numeric" value={f.rateMax || ''} onChange={(e) => set('rateMax', e.target.value.replace(/\D/g, ''))} /></Field>
       </div>
       <Field label={t('Валюта')}><Select value={f.currency || ''} onChange={(v) => set('currency', v)} placeholder={t('Любая')} options={meta.currencies.map((c) => ({ value: c, label: c }))} /></Field>
+      <div className="field">
+        <span className="field-label">{t('Оплата')}</span>
+        <Chips options={opts(meta.pay, PAY_L)} value={f.pay ? f.pay.split(',') : []} onChange={(v: string[]) => set('pay', v.join(','))} />
+      </div>
+      <div className="grid2">
+        <Field label={t('Страна погрузки')}><Select value={f.fromCountry || ''} onChange={(v) => set('fromCountry', v)} placeholder={t('Любая')} options={opts(Object.keys(COUNTRY_L), COUNTRY_L)} /></Field>
+        <Field label={t('Страна разгрузки')}><Select value={f.toCountry || ''} onChange={(v) => set('toCountry', v)} placeholder={t('Любая')} options={opts(Object.keys(COUNTRY_L), COUNTRY_L)} /></Field>
+      </div>
+      <div className="field">
+        <span className="field-label">{t('Документы')}</span>
+        <Chips options={opts(meta.flags, FLAG_L)} value={f.flags ? f.flags.split(',') : []} onChange={(v: string[]) => set('flags', v.join(','))} />
+      </div>
+      <div className="field checks">
+        <span className="field-label">{t('Показывать только')}</span>
+        {flag('verified', t('от проверенных компаний'))}
+        {flag('direct', kind === 'cargo' ? t('от прямых заказчиков') : t('от владельцев машин'))}
+        {flag('partners', t('от моих партнёров'))}
+        {flag('fresh', t('новые за сутки'))}
+        {flag('withRate', t('с указанной ставкой'))}
+        {flag('adr', t('опасные грузы (ADR)'))}
+        {flag('intl', t('международные рейсы'))}
+      </div>
       <Field label={t('Сортировка')}>
         <Select value={f.sort || 'new'} onChange={(v) => set('sort', v === 'new' ? '' : v)}
           options={[
@@ -116,6 +146,14 @@ export default function SearchPage() {
           <span className="muted small">{t('Сохранённые поиски')}:</span>
           {saved.data.filter((s) => s.kind === kind).map((s) => (
             <span className="saved-chip" key={s.id}>
+              <button
+                className={s.notify ? 'bell on' : 'bell'}
+                title={s.notify ? t('Уведомления включены — нажмите, чтобы выключить') : t('Сообщать о новых объявлениях по этому поиску')}
+                aria-label={s.notify ? t('Выключить уведомления') : t('Включить уведомления')}
+                onClick={async () => (await act(() => api(`/searches/${s.id}`, 'PATCH', { notify: !s.notify }), s.notify ? t('Уведомления по поиску выключены') : t('Сообщим о новых объявлениях по этому поиску'))) && saved.reload()}
+              >
+                {s.notify ? <Bell size={13} /> : <BellOff size={13} />}
+              </button>
               <button onClick={() => setF(s.params)}>{s.name}</button>
               <button aria-label={t('Удалить')} onClick={async () => (await act(() => api(`/searches/${s.id}`, 'DELETE'))) && saved.reload()}><X size={13} /></button>
             </span>
@@ -158,17 +196,19 @@ export default function SearchPage() {
             <li><b>{t('Вес, объём, кузов, погрузка')}.</b> {t('Сужают выдачу под вашу машину или груз.')}</li>
             <li><b>{t('Сортировка')}.</b> {t('«Выгоднее за километр» ставит наверх объявления с лучшей ставкой за км; сортировка по ставке работает в одной валюте (по умолчанию — тенге).')}</li>
             <li><b>{t('Сохранить поиск')}.</b> {t('Сохраняет все условия — потом они применяются одним нажатием.')}</li>
+            <li><b>{t('Колокольчик')}.</b> {t('Включите его у сохранённого поиска — и платформа сама сообщит о новом подходящем объявлении, даже на телефон.')}</li>
           </ul>
         </Modal>
       )}
       {saveName !== null && (
         <Modal title={t('Сохранить поиск')} onClose={() => setSaveName(null)}>
           <Field label={t('Название')}><input autoFocus value={saveName} onChange={(e) => setSaveName(e.target.value)} maxLength={80} /></Field>
+          <label className="switch"><input type="checkbox" checked={notifyNew} onChange={(e) => setNotifyNew(e.target.checked)} /><span>{t('Сообщать о новых объявлениях по этому поиску')}</span></label>
           <p className="muted small">{t('Условий в фильтре: {n}', { n: num(active) })}</p>
           <div className="row end">
             <button className="btn ghost" onClick={() => setSaveName(null)}>{t('Отмена')}</button>
             <button className="btn primary" disabled={!saveName.trim()} onClick={async () => {
-              if (await act(() => api('/searches', 'POST', { kind, name: saveName, params: clean(f) }), t('Поиск сохранён'))) {
+              if (await act(() => api('/searches', 'POST', { kind, name: saveName, params: clean(f), notify: notifyNew }), t('Поиск сохранён'))) {
                 saved.reload();
                 setSaveName(null);
               }

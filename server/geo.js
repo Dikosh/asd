@@ -1,4 +1,7 @@
 // Справочник городов и геометрия маршрутов (расстояния, «по пути»).
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 const RAW = [
   // id, ru, kz, страна, широта, долгота
   ['astana', 'Астана', 'Астана', 'KZ', 51.17, 71.43],
@@ -88,7 +91,12 @@ const RAW = [
   ['istanbul', 'Стамбул', 'Стамбұл', 'TR', 41.01, 28.98],
 ];
 
-export const CITIES = RAW.map(([id, ru, kz, country, lat, lon]) => ({ id, ru, kz, country, lat, lon }));
+// Полный справочник (города и посёлки Казахстана, крупные города соседних стран) собирается из GeoNames
+// скриптом scripts/build-places.py в server/data/places.json. Список RAW выше — запасной вариант, если файла нет.
+const placesFile = path.join(path.dirname(fileURLToPath(import.meta.url)), 'data/places.json');
+export const CITIES = fs.existsSync(placesFile)
+  ? JSON.parse(fs.readFileSync(placesFile, 'utf8')).map(([id, ru, kz, en, country, lat, lon, region, pop]) => ({ id, ru, kz, en, country, lat, lon, region, pop }))
+  : RAW.map(([id, ru, kz, country, lat, lon]) => ({ id, ru, kz, en: ru, country, lat, lon, region: '', pop: 0 }));
 export const cityById = new Map(CITIES.map((c) => [c.id, c]));
 
 const rad = (d) => (d * Math.PI) / 180;

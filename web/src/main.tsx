@@ -1,9 +1,10 @@
 import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter, NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import { Bookmark, Briefcase, Home as HomeIcon, MessageSquare, Package, Search as SearchIcon, Truck, UserRound } from 'lucide-react';
+import { Bell, Bookmark, Building2, Calculator, ChevronDown, Home as HomeIcon, LifeBuoy, Menu, MessageSquare, Package, Search as SearchIcon, TrendingUp, Truck, UserRound } from 'lucide-react';
 import './styles.css';
-import { api, AppCtx, connectEvents, Ctx, getLang, Lang, Me, Meta, storeLang, t, Trip, useApp, useEvent } from './core';
+import { api, AppCtx, City, connectEvents, Ctx, getLang, Lang, Me, Meta, placeName, storeLang, t, Trip, useApp, useEvent } from './core';
+import { registerWorker } from './push';
 import { Loading, Logo, LangSwitch, Modal, Stars } from './ui';
 import AuthPage from './pages/Auth';
 import HomePage from './pages/Home';
@@ -15,6 +16,11 @@ import Cabinet from './pages/Cabinet';
 import TripPage, { PublicTrack, simulating } from './pages/TripPage';
 import CompanyPage from './pages/CompanyPage';
 import JobsPage from './pages/Jobs';
+import ToolsPage from './pages/Tools';
+import PricesPage from './pages/Prices';
+import HelpPage from './pages/Help';
+import NotificationsPage from './pages/Notifications';
+import TripDoc from './pages/TripDoc';
 
 /** Платформа обязательно требует отзыв после завершения рейса. */
 function ReviewGate() {
@@ -56,6 +62,19 @@ function GpsBeacon() {
   useEffect(() => { load(); }, [load, me?.counters.trips]);
   useEvent('trip', load);
   const ids = trips.filter((x) => x.status === 'active' && x.shareGps && x.myRole === 'carrier').map((x) => x.id).join(',');
+  // Пока идёт передача позиции, просим телефон не гасить экран: в фоне браузер перестаёт отдавать геолокацию.
+  useEffect(() => {
+    if (!ids || !('wakeLock' in navigator)) return;
+    let lock: any = null;
+    const take = () => (navigator as any).wakeLock.request('screen').then((l: any) => { lock = l; }).catch(() => {});
+    const onVisible = () => document.visibilityState === 'visible' && take();
+    take();
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      lock?.release?.().catch(() => {});
+    };
+  }, [ids]);
   useEffect(() => {
     if (!ids || !navigator.geolocation) return;
     let last = 0;
@@ -76,7 +95,14 @@ function GpsBeacon() {
 
 function Layout() {
   const { me, reloadMe } = useApp();
+  const { toast } = useApp();
   useEvent('message read response trip', () => { reloadMe(); });
+  const { routeName } = useApp();
+  useEvent('notify', (n) => {
+    reloadMe();
+    toast(t(n.title, Object.fromEntries(Object.entries(n.vars || {}).map(([k, v]) => [k, Array.isArray(v) ? routeName(v as string[]) : (v as string)]))));
+  });
+  useEffect(() => { registerWorker(); }, []);
   const loc = useLocation();
   useEffect(() => {
     window.scrollTo(0, 0); // в новых браузерах возвращает Promise — эффект не должен его возвращать
@@ -87,9 +113,32 @@ function Layout() {
     { to: `/my/${mineKind}`, match: '/my', icon: <Package size={20} />, label: t('Мои объявления') },
     { to: '/search/cargo', icon: <SearchIcon size={20} />, label: t('Найти груз') },
     { to: '/search/truck', icon: <Truck size={20} />, label: t('Найти транспорт') },
-    { to: '/marked', icon: <Bookmark size={20} />, label: t('Отмеченные') },
-    { to: '/jobs', icon: <Briefcase size={20} />, label: t('Работа') },
+    { to: '/jobs', label: t('Работа') },
   ];
+  // остальные разделы собраны в одно меню, чтобы шапка не переполнялась на любом языке
+  const more = [
+    { to: '/prices', icon: <TrendingUp size={17} />, label: t('Цены') },
+    { to: '/tools', icon: <Calculator size={17} />, label: t('Инструменты') },
+    { to: '/cabinet/catalog', icon: <Building2 size={17} />, label: t('Каталог компаний') },
+    { to: '/marked', icon: <Bookmark size={17} />, label: t('Отмеченные') },
+    { to: '/help', icon: <LifeBuoy size={17} />, label: t('Помощь') },
+  ];
+  const [menu, setMenu] = useState(false);
+  const menuBox = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    setMenu(false);
+  }, [loc.pathname]);
+  useEffect(() => {
+    if (!menu) return;
+    const away = (e: MouseEvent) => !menuBox.current?.contains(e.target as Node) && setMenu(false);
+    const esc = (e: KeyboardEvent) => e.key === 'Escape' && setMenu(false);
+    document.addEventListener('mousedown', away);
+    document.addEventListener('keydown', esc);
+    return () => {
+      document.removeEventListener('mousedown', away);
+      document.removeEventListener('keydown', esc);
+    };
+  }, [menu]);
   const badge = me!.counters.unread + me!.counters.responses;
   return (
     <div className="app">
@@ -102,10 +151,26 @@ function Layout() {
                 {n.label}
               </NavLink>
             ))}
+            <div className="menu-wrap" ref={menuBox}>
+              <button className={`nav-more ${more.some((m) => loc.pathname.startsWith(m.to)) ? 'on' : ''}`} onClick={() => setMenu(!menu)} aria-haspopup="menu" aria-expanded={menu}>
+                {t('Сервисы')} <ChevronDown size={15} />
+              </button>
+              {menu && (
+                <div className="menu down" role="menu">
+                  {more.map((m) => (
+                    <NavLink key={m.to} to={m.to} role="menuitem">{m.icon} {m.label}</NavLink>
+                  ))}
+                </div>
+              )}
+            </div>
           </nav>
           <div className="topbar-right">
-            <LangSwitch />
-            <NavLink to="/cabinet/messages" className="icon-btn" aria-label={t('Сообщения')}>
+            <span className="hide-s"><LangSwitch /></span>
+            <NavLink to="/notifications" className="icon-btn" aria-label={t('Уведомления')} title={t('Уведомления')}>
+              <Bell size={20} />
+              {me!.counters.notifications > 0 && <span className="badge">{me!.counters.notifications}</span>}
+            </NavLink>
+            <NavLink to="/cabinet/messages" className="icon-btn" aria-label={t('Сообщения')} title={t('Сообщения')}>
               <MessageSquare size={20} />
               {me!.counters.unread > 0 && <span className="badge">{me!.counters.unread}</span>}
             </NavLink>
@@ -130,13 +195,20 @@ function Layout() {
           <Route path="/cabinet" element={<Cabinet />} />
           <Route path="/cabinet/:tab" element={<Cabinet />} />
           <Route path="/cabinet/:tab/:id" element={<Cabinet />} />
+          <Route path="/tools" element={<ToolsPage />} />
+          <Route path="/tools/:tab" element={<ToolsPage />} />
+          <Route path="/prices" element={<PricesPage />} />
+          <Route path="/help" element={<HelpPage />} />
+          <Route path="/help/:tab" element={<HelpPage />} />
+          <Route path="/notifications" element={<NotificationsPage />} />
           <Route path="/trip/:id" element={<TripPage />} />
+          <Route path="/trip/:id/doc" element={<TripDoc />} />
           <Route path="/company/:id" element={<CompanyPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
       <nav className="bottomnav">
-        {[nav[0], nav[1], nav[2], nav[3], { to: '/cabinet', icon: <UserRound size={20} />, label: t('Кабинет'), match: '/cabinet' }].map((n: any) => (
+        {[nav[0], nav[1], nav[2], nav[3], { to: '/cabinet', icon: <Menu size={20} />, label: t('Ещё'), match: '/cabinet' }].map((n: any) => (
           <NavLink key={n.to} to={n.to} end={n.end} className={({ isActive }) => (isActive || (n.match && loc.pathname.startsWith(n.match)) ? 'on' : '')}>
             {n.icon}
             <span>{n.label}</span>
@@ -152,6 +224,7 @@ function Layout() {
 
 function App() {
   const [meta, setMeta] = useState<Meta | null>(null);
+  const [cities, setCities] = useState<City[]>([]);
   const [me, setMeState] = useState<Me | null | undefined>(undefined);
   const [lang, setLangState] = useState<Lang>(getLang());
   const [toasts, setToasts] = useState<{ id: number; text: string; kind: string }[]>([]);
@@ -160,8 +233,9 @@ function App() {
 
   useEffect(() => {
     storeLang(lang);
-    Promise.all([api<Meta>('/meta'), api<Me | null>('/me')])
-      .then(([m, u]) => {
+    Promise.all([api<Meta>('/meta'), api<Me | null>('/me'), api<any[][]>('/places')])
+      .then(([m, u, rows]) => {
+        setCities(rows.map(([id, ru, kz, en, country, lat, lon, region]) => ({ id, ru, kz, en, country, lat, lon, region })));
         setMeta(m);
         setMeState(u);
       })
@@ -175,10 +249,10 @@ function App() {
 
   const ctx = useMemo<AppCtx | null>(() => {
     if (!meta || me === undefined) return null;
-    const byId = new Map(meta.cities.map((c) => [c.id, c]));
+    const byId = new Map(cities.map((c) => [c.id, c]));
     const cityName = (id: string | null | undefined) => {
       const c = id ? byId.get(id) : undefined;
-      return c ? (lang === 'kz' ? c.kz : c.ru) : '—';
+      return c ? placeName(c) : '—';
     };
     const toast = (text: string, kind: 'ok' | 'error' = 'ok') => {
       const id = ++seq.current;
@@ -186,8 +260,12 @@ function App() {
       setTimeout(() => setToasts((x) => x.filter((y) => y.id !== id)), 3800);
     };
     return {
-      me, meta, lang,
-      setLang: (l) => { storeLang(l); setLangState(l); },
+      me, meta, lang, cities,
+      setLang: (l) => {
+        storeLang(l);
+        setLangState(l);
+        if (me) api('/me', 'PATCH', { settings: { lang: l } }).catch(() => {});
+      },
       setMe: setMeState,
       reloadMe: async () => setMeState(await api<Me | null>('/me')),
       city: (id) => (id ? byId.get(id) : undefined),
@@ -205,7 +283,7 @@ function App() {
         }
       },
     };
-  }, [meta, me, lang]);
+  }, [meta, me, lang, cities]);
 
   if (fatal) return <div className="splash"><Logo /><p>{t('Не удалось связаться с сервером')}: {fatal}</p></div>;
   if (!ctx) return <div className="splash"><Logo /><Loading /></div>;

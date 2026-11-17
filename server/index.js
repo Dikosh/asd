@@ -9,6 +9,7 @@ import authRoutes from './routes/auth.js';
 import listingRoutes from './routes/listings.js';
 import dealRoutes from './routes/deals.js';
 import companyRoutes from './routes/company.js';
+import extraRoutes from './routes/extras.js';
 import { seed } from './seed.js';
 
 export function createApp() {
@@ -27,11 +28,14 @@ export function createApp() {
   listingRoutes(app);
   dealRoutes(app);
   companyRoutes(app);
+  extraRoutes(app);
 
   app.use('/api', (_req, _res, next) => next(new HttpError(404, 'not_found', 'Нет такого метода')));
 
   const dist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web/dist');
   if (fs.existsSync(dist)) {
+    // сервис-воркер должен обновляться сразу, остальное можно кэшировать
+    app.get('/sw.js', (_req, res) => res.sendFile(path.join(dist, 'sw.js'), { headers: { 'Cache-Control': 'no-cache' } }));
     app.use(express.static(dist, { index: false, maxAge: '1h' }));
     app.get(/.*/, (_req, res) => res.sendFile(path.join(dist, 'index.html')));
   }

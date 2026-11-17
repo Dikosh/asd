@@ -71,7 +71,10 @@ test('защита: без входа API закрыт, демо-данные н
   assert.equal((await anon.call('GET', '/api/listings?kind=cargo')).status, 401);
   assert.equal(await anon.get('/api/me'), null);
   const meta = await anon.get('/api/meta');
-  assert.ok(meta.cities.length > 70 && meta.stats.cargo > 20);
+  assert.ok(meta.places > 70 && meta.stats.cargo > 20);
+  const places = await anon.get('/api/places');
+  assert.equal(places.length, meta.places);
+  assert.equal(places.find((p) => p[0] === 'astana')[1], 'Астана');
   const demo = client();
   const me = await demo.post('/api/auth/demo', { role: 'carrier' });
   assert.equal(me.user.role, 'carrier');

@@ -3,8 +3,13 @@ import { z } from 'zod';
 import { q, q1, run, insert, tx } from '../db.js';
 import { cityById, haversine, ROAD_FACTOR } from '../geo.js';
 import * as L from '../lib.js';
+import { notify } from '../notify.js';
+
+/** Маршрут объявления для подстановки {route} в уведомление. */
+const routeOf = (listingId) => ({ route: L.j(q1('SELECT points FROM listings WHERE id = ?', listingId)?.points, []) });
 
 const { bad, parse, auth } = L;
+const STAGE_TITLE = { to_loading: 'Машина едет на погрузку: {route}', loading: 'Идёт погрузка: {route}', in_transit: 'Груз в пути: {route}', unloading: 'Идёт выгрузка: {route}', delivered: 'Груз доставлен: {route}' };
 
 function postMessage(chatId, senderId, text) {
   const id = insert('INSERT INTO messages(chat_id, sender_id, text) VALUES(?, ?, ?)', chatId, senderId, text);
@@ -20,8 +25,9 @@ function chatOf(req) {
 
 const TRIP_SQL = `
 SELECT t.*, l.kind AS l_kind, l.points AS l_points, l.cargo_type, l.body_type, l.weight, l.volume, l.distance_km,
-  cu.name AS customer_user_name, cu.phone AS customer_phone, cc.name AS customer_name,
-  ru.name AS carrier_user_name, ru.phone AS carrier_phone, rc.name AS carrier_name
+  l.date_from AS l_date_from, l.date_to AS l_date_to, l.description AS l_description, l.loading AS l_loading, l.pay_terms AS l_pay_terms, l.brand AS l_brand,
+  cu.name AS customer_user_name, cu.phone AS customer_phone, cc.name AS customer_name, cc.form AS customer_form, cc.bin AS customer_bin,
+  ru.name AS carrier_user_name, ru.phone AS carrier_phone, rc.name AS carrier_name, rc.form AS carrier_form, rc.bin AS carrier_bin
 FROM trips t JOIN listings l ON l.id = t.listing_id
 JOIN users cu ON cu.id = t.customer_user JOIN companies cc ON cc.id = t.customer_company
 JOIN users ru ON ru.id = t.carrier_user JOIN companies rc ON rc.id = t.carrier_company`;
@@ -60,7 +66,9 @@ function tripOut(t, viewer, full = false) {
       trackToken: t.track_token,
       reviewed: !!q1('SELECT 1 FROM reviews WHERE trip_id = ? AND author_company = ?', t.id, viewer.company_id),
     });
-    out.carrier.phone = t.carrier_phone;
+    Object.assign(out.carrier, { phone: t.carrier_phone, form: t.carrier_form, bin: t.carrier_bin });
+    Object.assign(out.customer, { form: t.customer_form, bin: t.customer_bin });
+    Object.assign(out, { dateFrom: t.l_date_from, dateTo: t.l_date_to, description: t.l_description, loading: L.j(t.l_loading, []), payTerms: L.j(t.l_pay_terms, []), brand: t.l_brand });
     out.customer.phone = t.customer_phone;
     out.customer.userName = t.customer_user_name;
     out.chatId = q1(
@@ -112,6 +120,7 @@ export default function dealRoutes(app) {
     });
     postMessage(out.chatId, req.user.id, b.price ? `${b.message}\n— ${b.price} ${b.currency}` : b.message);
     L.push(l.user_id, 'response', { listingId: l.id });
+    notify(l.user_id, { kind: 'response', title: 'Новый отклик: {route}', vars: routeOf(l.id), body: b.message.slice(0, 140), link: `/listing/${l.id}` });
     res.json(out);
   });
 
@@ -150,6 +159,7 @@ export default function dealRoutes(app) {
       run(`UPDATE responses SET status = 'withdrawn' WHERE id = ?`, r.id);
     } else if (action === 'decline' && isOwner) {
       run(`UPDATE responses SET status = 'declined' WHERE id = ?`, r.id);
+      notify(r.user_id, { kind: 'response', title: 'Отклик отклонён: {route}', vars: routeOf(r.listing_id), link: `/listing/${r.listing_id}` });
     } else if (action === 'accept' && isOwner) {
       if (q1(`SELECT 1 FROM trips WHERE listing_id = ? AND status = 'active'`, r.listing_id)) throw bad('in_trip', 'По объявлению уже идёт рейс', 409);
       // заказчик — тот, чей груз; перевозчик — тот, чей транспорт
@@ -168,6 +178,7 @@ export default function dealRoutes(app) {
         return id;
       });
       L.push([r.owner_user, r.user_id], 'trip', { tripId });
+      notify(r.user_id, { kind: 'trip', title: 'Отклик принят — рейс создан: {route}', vars: routeOf(r.listing_id), link: `/trip/${tripId}` });
     } else throw bad('forbidden', 'Действие недоступно', 403);
     L.push([r.owner_user, r.user_id], 'response', { listingId: r.listing_id });
     res.json({ ok: true, tripId });
@@ -236,6 +247,7 @@ export default function dealRoutes(app) {
     run('UPDATE trips SET stage = ? WHERE id = ?', stage, t.id);
     run('INSERT INTO trip_events(trip_id, stage) VALUES(?, ?)', t.id, stage);
     L.push(tripUsers(t), 'trip', { tripId: t.id });
+    notify(t.customer_user, { kind: 'trip', title: STAGE_TITLE[stage], vars: routeOf(t.listing_id), body: stage === 'delivered' ? 'Проверьте груз и подтвердите доставку' : '', link: `/trip/${t.id}` });
     res.json({ ok: true });
   });
 
@@ -274,6 +286,7 @@ export default function dealRoutes(app) {
       run(`UPDATE responses SET status = 'declined' WHERE listing_id = ? AND status = 'sent'`, t.listing_id);
     });
     L.push(tripUsers(t), 'trip', { tripId: t.id });
+    notify(t.carrier_user, { kind: 'trip', title: 'Доставка подтверждена: {route}', vars: routeOf(t.listing_id), body: 'Оставьте отзыв о заказчике', link: `/trip/${t.id}` });
     res.json({ ok: true });
   });
 
@@ -283,6 +296,7 @@ export default function dealRoutes(app) {
     if (L.STAGES.indexOf(t.stage) >= L.STAGES.indexOf('in_transit')) throw bad('state', 'Груз уже в пути — отменить нельзя', 409);
     run(`UPDATE trips SET status = 'cancelled', finished_at = ?, share_gps = 0 WHERE id = ?`, L.now(), t.id);
     L.push(tripUsers(t), 'trip', { tripId: t.id });
+    notify(tripUsers(t).filter((u) => u !== req.user.id), { kind: 'trip', title: 'Рейс отменён: {route}', vars: routeOf(t.listing_id), link: `/trip/${t.id}` });
     res.json({ ok: true });
   });
 
@@ -294,6 +308,7 @@ export default function dealRoutes(app) {
     if (q1('SELECT 1 FROM reviews WHERE trip_id = ? AND author_company = ?', t.id, req.user.company_id)) throw bad('duplicate', 'Отзыв уже оставлен', 409);
     run('INSERT INTO reviews(trip_id, author_user, author_company, target_company, rating, text) VALUES(?, ?, ?, ?, ?, ?)',
       t.id, req.user.id, req.user.company_id, target, b.rating, b.text);
+    notify(t.customer_company === req.user.company_id ? t.carrier_user : t.customer_user, { kind: 'review', title: 'Новый отзыв о вашей компании: {n} из 5', vars: { n: b.rating }, body: b.text.slice(0, 140), link: `/company/${target}` });
     res.json({ ok: true });
   });
 }

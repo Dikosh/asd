@@ -6,13 +6,20 @@ import { cityById, isValidBin } from './geo.js';
 export const DEMO = process.env.DEMO_MODE ? process.env.DEMO_MODE !== '0' : process.env.NODE_ENV !== 'production';
 
 export const ROLES = ['customer', 'carrier', 'logist', 'broker', 'driver'];
-export const BODY = ['tent', 'ref', 'isotherm', 'board', 'container', 'tank', 'tipper', 'trawl', 'carrier', 'grain', 'van'];
+export const BODY = [
+  'tent', 'ref', 'isotherm', 'board', 'container', 'tank', 'tipper', 'trawl', 'carrier', 'grain', 'van',
+  'jumbo', 'mega', 'coupling', 'allmetal', 'platform', 'open', 'timber', 'cattle', 'cement', 'gas', 'bitumen', 'foodtank', 'chemtank',
+  'crane', 'tow', 'concrete', 'pickup', 'minibus', 'bus', 'tractor',
+];
+export const FLAGS = ['tir', 'cmr', 'ekmt', 't1'];
+// Тариф Pro оплачивается с баланса компании на 30 дней.
+export const PLAN = { price: 9900, days: 30, free: { seats: 2, alerts: 3 }, pro: { seats: 10, alerts: 50 } };
 export const CARGO = ['food', 'building', 'equipment', 'consumer', 'agro', 'metal', 'fuel', 'groupage', 'adr', 'oversize', 'cars', 'furniture', 'other'];
 export const LOADING = ['top', 'rear', 'full', 'side'];
-export const PAY = ['prepay', 'cash', 'cashless_vat', 'cashless_novat'];
+export const PAY = ['prepay', 'cash', 'card', 'cashless_vat', 'cashless_novat'];
 export const CURRENCIES = ['KZT', 'USD', 'RUB'];
 export const STAGES = ['planned', 'to_loading', 'loading', 'in_transit', 'unloading', 'delivered'];
-export const DOC_KINDS = ['id_card', 'registration', 'license', 'driver_license', 'other'];
+export const DOC_KINDS = ['id_card', 'selfie', 'registration', 'license', 'driver_license', 'other'];
 export const BOOST_PRICE = 500;
 
 export class HttpError extends Error {
@@ -70,6 +77,11 @@ export function auth(req, _res, next) {
   if (!req.user) throw bad('unauthorized', 'Требуется вход', 401);
   next();
 }
+/** Владелец компании: управляет сотрудниками и тарифом. */
+export function owner(req, _res, next) {
+  if (req.user?.company_role !== 'owner') throw bad('forbidden', 'Доступно только владельцу компании', 403);
+  next();
+}
 export function admin(req, _res, next) {
   if (!req.user?.is_admin) throw bad('forbidden', 'Только для администратора', 403);
   next();
@@ -110,11 +122,12 @@ export function companyOut(r, prefix = '') {
     reviews: g('reviews'),
     trips: g('trips'),
     blacklisted: g('bl'),
+    pro: !!g('pro'),
     indicator: indicator(g('rating'), g('reviews'), g('bl')),
   };
 }
 export const COMPANY_COLS = (a, p) =>
-  ['name', 'form', 'kind', 'verified', 'rating', 'reviews', 'trips', 'bl'].map((k) => `${a}.${k} AS ${p}${k}`).join(', ');
+  ['name', 'form', 'kind', 'verified', 'rating', 'reviews', 'trips', 'bl', 'pro'].map((k) => `${a}.${k} AS ${p}${k}`).join(', ');
 
 // ---------- объявления ----------
 const LISTING_SQL = `
@@ -122,7 +135,9 @@ SELECT l.*, u.name AS user_name, u.phone AS user_phone, u.settings AS user_setti
   m.marked AS m_marked, m.note AS m_note, m.hidden AS m_hidden,
   (SELECT COUNT(*) FROM responses r WHERE r.listing_id = l.id AND r.status IN ('sent', 'accepted')) AS responses_count,
   (SELECT r.id || ':' || r.status FROM responses r WHERE r.listing_id = l.id AND r.user_id = :viewer ORDER BY r.id DESC LIMIT 1) AS my_response,
-  (SELECT t.id FROM trips t WHERE t.listing_id = l.id AND t.status = 'active' LIMIT 1) AS trip_id
+  (SELECT t.id FROM trips t WHERE t.listing_id = l.id AND t.status = 'active' LIMIT 1) AS trip_id,
+  EXISTS (SELECT 1 FROM partners p WHERE p.company_id = :viewerCompany AND p.partner_id = l.company_id) AS is_partner,
+  EXISTS (SELECT 1 FROM blocks b WHERE b.company_id = :viewerCompany AND b.blocked_id = l.company_id) AS is_blocked
 FROM listings l
 JOIN users u ON u.id = l.user_id
 JOIN company_stats cs ON cs.id = l.company_id
@@ -130,7 +145,7 @@ LEFT JOIN marks m ON m.listing_id = l.id AND m.user_id = :viewer`;
 
 /** Объявления по условию where (именованные параметры), уже в виде JSON для клиента. */
 export function listings(viewer, where, params = {}, tail = 'ORDER BY l.id DESC') {
-  return q(`${LISTING_SQL} WHERE ${where} ${tail}`, { viewer: viewer.id, ...params }).map((r) => listingOut(r, viewer));
+  return q(`${LISTING_SQL} WHERE ${where} ${tail}`, { viewer: viewer.id, viewerCompany: viewer.company_id, ...params }).map((r) => listingOut(r, viewer));
 }
 export function listingOut(r, viewer) {
   const points = j(r.points, []);
@@ -153,10 +168,16 @@ export function listingOut(r, viewer) {
     dateFrom: r.date_from,
     dateTo: r.date_to,
     payTerms: j(r.pay_terms, []),
+    adrClass: r.adr_class,
+    flags: j(r.flags, []),
+    views: r.views,
+    partner: !!r.is_partner,
+    blocked: !!r.is_blocked,
     rate: r.rate,
     currency: r.currency,
     description: r.description,
     distanceKm: r.distance_km,
+    countries: [...countries],
     international: countries.size > 1,
     boosted: !!r.boosted_until && r.boosted_until > now(),
     createdAt: r.created_at,
@@ -185,7 +206,7 @@ export function requireNoPendingReviews(user) {
   if (pendingReviews(user).length) throw bad('review_required', 'Сначала оставьте отзыв о завершённом рейсе', 409);
 }
 export function meOut(user) {
-  const c = q1('SELECT cs.*, c.balance FROM company_stats cs JOIN companies c ON c.id = cs.id WHERE cs.id = ?', user.company_id);
+  const c = q1('SELECT cs.*, c.balance, c.plan_until FROM company_stats cs JOIN companies c ON c.id = cs.id WHERE cs.id = ?', user.company_id);
   return {
     user: {
       id: user.id,
@@ -194,10 +215,12 @@ export function meOut(user) {
       email: user.email,
       role: user.role,
       isAdmin: !!user.is_admin,
+      companyRole: user.company_role,
       settings: j(user.settings, {}),
     },
-    company: { ...companyOut(c), bin: c.bin, binValid: isValidBin(c.bin), about: c.about, cityId: c.city_id, balance: c.balance },
+    company: { ...companyOut(c), bin: c.bin, binValid: isValidBin(c.bin), about: c.about, cityId: c.city_id, balance: c.balance, planUntil: c.pro ? c.plan_until : null },
     counters: {
+      notifications: q1('SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND is_read = 0', user.id).n,
       unread: q1(
         `SELECT COUNT(*) AS n FROM messages m JOIN chats c ON c.id = m.chat_id
          WHERE m.is_read = 0 AND m.sender_id != :u AND (c.owner_id = :u OR c.peer_id = :u)`,

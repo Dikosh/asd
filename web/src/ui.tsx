@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { BadgeCheck, ChevronDown, MapPin, Star, X } from 'lucide-react';
-import { City, Company, Lang, t, useApp } from './core';
+import { City, Company, COUNTRY_L, Lang, placeName, t, useApp } from './core';
 
 export function Modal({ title, onClose, children, wide }: { title: string; onClose?: () => void; children: ReactNode; wide?: boolean }) {
   useEffect(() => {
@@ -80,7 +80,7 @@ export function Select({ value, onChange, options, placeholder }: { value: strin
 
 /** Выбор города из справочника с поиском по русскому и казахскому названию. */
 export function CitySelect({ value, onChange, placeholder }: { value: string | null; onChange: (id: string | null) => void; placeholder?: string }) {
-  const { meta, cityName, lang } = useApp();
+  const { cities, cityName, lang } = useApp();
   const [text, setText] = useState('');
   const [open, setOpen] = useState(false);
   const [hi, setHi] = useState(0);
@@ -100,21 +100,23 @@ export function CitySelect({ value, onChange, placeholder }: { value: string | n
   });
   const list = useMemo(() => {
     const s = text.trim().toLowerCase();
-    const all = meta.cities;
+    const all = cities;
     if (!s || (value && text === cityName(value))) return all.slice(0, 40);
     const starts: City[] = [];
     const inside: City[] = [];
     for (const c of all) {
       const a = c.ru.toLowerCase();
       const b = c.kz.toLowerCase();
-      if (a.startsWith(s) || b.startsWith(s)) starts.push(c);
-      else if (a.includes(s) || b.includes(s)) inside.push(c);
+      const e = c.en.toLowerCase();
+      if (a.startsWith(s) || b.startsWith(s) || e.startsWith(s)) starts.push(c);
+      else if (starts.length + inside.length < 200 && (a.includes(s) || b.includes(s) || e.includes(s))) inside.push(c);
     }
+    // справочник отсортирован по населению, поэтому крупные города оказываются выше
     return [...starts, ...inside].slice(0, 40);
-  }, [text, meta.cities, value]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [text, cities, value]); // eslint-disable-line react-hooks/exhaustive-deps
   const choose = (c: City) => {
     onChange(c.id);
-    setText(lang === 'kz' ? c.kz : c.ru);
+    setText(placeName(c));
     setOpen(false);
   };
   return (
@@ -155,8 +157,8 @@ export function CitySelect({ value, onChange, placeholder }: { value: string | n
           {list.length === 0 && <li className="muted">{t('Город не найден')}</li>}
           {list.map((c, i) => (
             <li key={c.id} role="option" aria-selected={i === hi} className={i === hi ? 'hi' : ''} onMouseEnter={() => setHi(i)} onMouseDown={(e) => { e.preventDefault(); choose(c); }}>
-              {lang === 'kz' ? c.kz : c.ru}
-              {c.country !== 'KZ' && <span className="muted"> · {c.country}</span>}
+              {placeName(c)}
+              <span className="muted small"> {c.country !== 'KZ' ? `· ${t(COUNTRY_L[c.country] || c.country)}` : c.region && c.region !== c.ru ? `· ${c.region}` : ''}</span>
             </li>
           ))}
         </ul>
@@ -212,6 +214,7 @@ export function CompanyBadge({ c, link = true }: { c: Company; link?: boolean })
         {c.form} «{c.name}»
       </span>
       {c.verified === 'verified' && <BadgeCheck size={16} className="verified" aria-label={t('Компания проверена')} />}
+      {c.pro && <span className="pro" title={t('Тариф Pro')}>PRO</span>}
       {c.rating != null && (
         <span className="cb-rating">
           <Star size={13} fill="currentColor" /> {c.rating.toFixed(1)}
@@ -296,9 +299,9 @@ export function LangSwitch() {
   const { lang, setLang } = useApp();
   return (
     <div className="lang" role="group" aria-label="Язык / Тіл">
-      {(['ru', 'kz'] as Lang[]).map((l) => (
+      {(['ru', 'kz', 'en'] as Lang[]).map((l) => (
         <button key={l} className={lang === l ? 'on' : ''} onClick={() => setLang(l)}>
-          {l === 'ru' ? 'РУС' : 'ҚАЗ'}
+          {l === 'ru' ? 'РУС' : l === 'kz' ? 'ҚАЗ' : 'ENG'}
         </button>
       ))}
     </div>

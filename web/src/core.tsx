@@ -1,12 +1,13 @@
 // Ядро клиента: API, типы, язык, справочники, форматирование, контекст приложения.
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { KZ } from './kz';
+import { EN } from './en';
 
 // ---------- типы ----------
-export interface City { id: string; ru: string; kz: string; country: string; lat: number; lon: number }
+export interface City { id: string; ru: string; kz: string; en: string; country: string; lat: number; lon: number; region: string }
 export interface Company {
   id: number; name: string; form: string; kind: string; verified: string; rating: number | null;
-  reviews: number; trips: number; blacklisted: number; indicator: 'green' | 'red' | 'gray';
+  reviews: number; trips: number; blacklisted: number; pro?: boolean; indicator: 'green' | 'red' | 'gray';
 }
 export interface Listing {
   id: number; kind: 'cargo' | 'truck'; status: 'active' | 'closed' | 'archived'; points: string[]; fromId: string; toId: string;
@@ -14,23 +15,26 @@ export interface Listing {
   dateFrom: string; dateTo: string; payTerms: string[]; rate: number | null; currency: string; description: string; distanceKm: number;
   international: boolean; boosted: boolean; createdAt: string; tripId: number | null; company: Company;
   user: { id: number; name: string; phone: string | null }; mine: boolean; mark: { marked: boolean; note: string; hidden: boolean };
+  adrClass: number | null; flags: string[]; views: number; partner: boolean; blocked: boolean; countries: string[];
   responsesCount: number; myResponse: { id: number; status: string } | null; match?: { score: number; detourKm: number }; detourKm?: number;
 }
 export interface Me {
-  user: { id: number; name: string; phone: string; email: string; role: string; isAdmin: boolean; settings: Record<string, any> };
-  company: Company & { bin: string | null; binValid: boolean; about: string; cityId: string | null; balance: number };
-  counters: { unread: number; responses: number; trips: number };
+  user: { id: number; name: string; phone: string; email: string; role: string; isAdmin: boolean; companyRole: string; settings: Record<string, any> };
+  company: Company & { bin: string | null; binValid: boolean; about: string; cityId: string | null; balance: number; planUntil: string | null };
+  counters: { notifications: number; unread: number; responses: number; trips: number };
   pendingReviews: { tripId: number; companyName: string }[];
 }
 export interface Meta {
   demo: boolean; cities: City[]; roles: string[]; body: string[]; cargo: string[]; loading: string[]; pay: string[]; currencies: string[];
-  stages: string[]; docKinds: string[]; boostPrice: number; stats: { cargo: number; truck: number; companies: number; trips: number };
+  stages: string[]; docKinds: string[]; boostPrice: number; flags: string[]; places: number;
+  plan: { price: number; days: number; free: { seats: number; alerts: number }; pro: { seats: number; alerts: number } }; stats: { cargo: number; truck: number; companies: number; trips: number };
 }
 export interface Trip {
   id: number; status: 'active' | 'completed' | 'cancelled'; stage: string; shareGps: boolean; points: string[]; listingId: number;
   cargoType: string | null; bodyType: string | null; weight: number | null; volume: number | null; distanceKm: number; price: number | null; currency: string;
-  createdAt: string; finishedAt: string | null; carrier: { companyId: number; name: string; userName: string; phone?: string };
-  customer: { companyId: number; name: string; userName?: string; phone?: string };
+  createdAt: string; finishedAt: string | null; carrier: { companyId: number; name: string; userName: string; phone?: string; form?: string; bin?: string | null };
+  customer: { companyId: number; name: string; userName?: string; phone?: string; form?: string; bin?: string | null };
+  dateFrom?: string; dateTo?: string; description?: string; loading?: string[]; payTerms?: string[]; brand?: string;
   position: { lat: number; lon: number; speed: number | null; at: string } | null; remainingKm: number | null; etaHours: number | null;
   myRole?: 'customer' | 'carrier'; trackToken?: string; reviewed?: boolean; chatId?: number | null;
   events?: { stage: string; at: string }[]; track?: [number, number][]; reviews?: { rating: number; text: string; author: string; createdAt: string }[];
@@ -93,7 +97,7 @@ export function connectEvents(on: boolean) {
   source = null;
   if (!on) return;
   source = new EventSource('/api/events');
-  for (const type of ['message', 'read', 'response', 'trip', 'position']) {
+  for (const type of ['message', 'read', 'response', 'trip', 'position', 'notify']) {
     source.addEventListener(type, (e) => {
       const data = JSON.parse((e as MessageEvent).data || '{}');
       handlers.get(type)?.forEach((h) => h(data));
@@ -115,7 +119,7 @@ export function useEvent(types: string, handler: Handler) {
 }
 
 // ---------- язык ----------
-export type Lang = 'ru' | 'kz';
+export type Lang = 'ru' | 'kz' | 'en';
 const read = (k: string) => {
   try {
     return localStorage.getItem(k);
@@ -123,7 +127,8 @@ const read = (k: string) => {
     return null;
   }
 };
-let lang: Lang = read('lang') === 'kz' ? 'kz' : 'ru';
+const stored = read('lang');
+let lang: Lang = stored === 'kz' || stored === 'en' ? stored : 'ru';
 export const getLang = () => lang;
 export function storeLang(l: Lang) {
   lang = l;
@@ -132,11 +137,11 @@ export function storeLang(l: Lang) {
   } catch {
     /* хранилище недоступно — язык действует до перезагрузки */
   }
-  document.documentElement.lang = l === 'kz' ? 'kk' : 'ru';
+  document.documentElement.lang = l === 'kz' ? 'kk' : l;
 }
 /** Перевод: ключ — русская строка; для казахского берётся словарь, иначе остаётся русский текст. */
 export function t(s: string, vars?: Record<string, string | number>): string {
-  let out = lang === 'kz' ? KZ[s] ?? s : s;
+  let out = lang === 'kz' ? KZ[s] ?? s : lang === 'en' ? EN[s] ?? s : s;
   if (vars) for (const [k, v] of Object.entries(vars)) out = out.replaceAll(`{${k}}`, String(v));
   return out;
 }
@@ -145,6 +150,16 @@ export function t(s: string, vars?: Record<string, string | number>): string {
 export const BODY_L: Record<string, string> = {
   tent: 'Тент', ref: 'Рефрижератор', isotherm: 'Изотерм', board: 'Бортовой', container: 'Контейнеровоз', tank: 'Цистерна',
   tipper: 'Самосвал', trawl: 'Трал', carrier: 'Автовоз', grain: 'Зерновоз', van: 'Фургон',
+  jumbo: 'Джамбо', mega: 'Мега', coupling: 'Сцепка', allmetal: 'Цельнометаллический', platform: 'Площадка без бортов', open: 'Открытый',
+  timber: 'Лесовоз', cattle: 'Скотовоз', cement: 'Цементовоз', gas: 'Газовоз', bitumen: 'Битумовоз', foodtank: 'Пищевая цистерна',
+  chemtank: 'Химическая цистерна', crane: 'Манипулятор', tow: 'Эвакуатор', concrete: 'Бетоносмеситель', pickup: 'Пикап',
+  minibus: 'Микроавтобус', bus: 'Автобус', tractor: 'Тягач',
+};
+export const FLAG_L: Record<string, string> = { tir: 'TIR', cmr: 'CMR', ekmt: 'ЕКМТ', t1: 'T1' };
+export const COUNTRY_L: Record<string, string> = {
+  KZ: 'Казахстан', RU: 'Россия', UZ: 'Узбекистан', KG: 'Кыргызстан', CN: 'Китай', TJ: 'Таджикистан', TM: 'Туркменистан', BY: 'Беларусь',
+  AZ: 'Азербайджан', GE: 'Грузия', AM: 'Армения', TR: 'Турция', MN: 'Монголия', IR: 'Иран', PL: 'Польша', DE: 'Германия', LT: 'Литва',
+  LV: 'Латвия', UA: 'Украина', AF: 'Афганистан',
 };
 export const CARGO_L: Record<string, string> = {
   food: 'Продукты питания', building: 'Стройматериалы', equipment: 'Оборудование', consumer: 'Товары народного потребления',
@@ -152,7 +167,7 @@ export const CARGO_L: Record<string, string> = {
   oversize: 'Негабарит', cars: 'Автомобили', furniture: 'Мебель', other: 'Другое',
 };
 export const LOADING_L: Record<string, string> = { top: 'Верхняя', rear: 'Задняя', full: 'С полной растентовкой', side: 'Боковая' };
-export const PAY_L: Record<string, string> = { prepay: 'С предоплатой', cash: 'Наличными', cashless_vat: 'Безнал с НДС', cashless_novat: 'Безнал без НДС' };
+export const PAY_L: Record<string, string> = { prepay: 'С предоплатой', cash: 'Наличными', card: 'На карту', cashless_vat: 'Безнал с НДС', cashless_novat: 'Безнал без НДС' };
 export const ROLE_L: Record<string, string> = { customer: 'Заказчик', carrier: 'Перевозчик', logist: 'Логист', broker: 'Брокер', driver: 'Водитель' };
 export const ROLE_HINT: Record<string, string> = {
   customer: 'Размещаю грузы и ищу транспорт', carrier: 'Размещаю транспорт и ищу грузы', logist: 'Свожу заказчиков и перевозчиков',
@@ -162,10 +177,13 @@ export const STAGE_L: Record<string, string> = {
   planned: 'Рейс назначен', to_loading: 'Еду на погрузку', loading: 'Погрузка', in_transit: 'В пути', unloading: 'Выгрузка', delivered: 'Доставлено',
 };
 export const DOC_L: Record<string, string> = {
-  id_card: 'Удостоверение личности', registration: 'Свидетельство о регистрации', license: 'Лицензия', driver_license: 'Водительские права', other: 'Другое',
+  id_card: 'Удостоверение личности', selfie: 'Фото с удостоверением в руках', registration: 'Свидетельство о регистрации', license: 'Лицензия', driver_license: 'Водительские права', other: 'Другое',
 };
 export const CUR: Record<string, string> = { KZT: '₸', USD: '$', RUB: '₽' };
 export const opts = (keys: string[], labels: Record<string, string>) => keys.map((k) => ({ value: k, label: t(labels[k] || k) }));
+
+/** Название места на текущем языке интерфейса. */
+export const placeName = (c: City) => (lang === 'kz' ? c.kz : lang === 'en' ? c.en : c.ru);
 
 // ---------- форматирование ----------
 // Казахские названия месяцев задаём сами: не во всех браузерах есть данные локали kk-KZ.
@@ -174,7 +192,8 @@ export const num = (n: number) => new Intl.NumberFormat('ru-RU').format(n);
 export const money = (n: number | null, cur = 'KZT') => (n == null ? t('Договорная') : `${num(n)} ${CUR[cur] || cur}`);
 export function fmtDate(iso: string) {
   const d = new Date(iso);
-  return lang === 'kz' ? `${d.getDate()} ${KZ_MONTHS[d.getMonth()]}` : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+  if (lang === 'kz') return `${d.getDate()} ${KZ_MONTHS[d.getMonth()]}`;
+  return d.toLocaleDateString(lang === 'en' ? 'en-GB' : 'ru-RU', { day: 'numeric', month: 'short' });
 }
 export const fmtDates = (a: string, b: string) => (a === b ? fmtDate(a) : `${fmtDate(a)} — ${fmtDate(b)}`);
 export const fmtTime = (iso: string) => new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
@@ -190,6 +209,7 @@ export const todayStr = (plus = 0) => new Date(Date.now() + plus * 86400_000).to
 export interface AppCtx {
   me: Me | null;
   meta: Meta;
+  cities: City[];
   lang: Lang;
   setLang: (l: Lang) => void;
   setMe: (m: Me | null) => void;

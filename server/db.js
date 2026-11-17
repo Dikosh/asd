@@ -76,8 +76,46 @@ CREATE TABLE IF NOT EXISTS jobs(
   status TEXT NOT NULL DEFAULT 'active', created_at ${TS});
 CREATE TABLE IF NOT EXISTS transactions(id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL, amount INTEGER NOT NULL, kind TEXT NOT NULL, note TEXT NOT NULL DEFAULT '', created_at ${TS});
 
+`);
+
+// ---- расширения схемы: новые таблицы и столбцы добавляются без потери данных ----
+db.exec(`
+CREATE TABLE IF NOT EXISTS invites(
+  id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL REFERENCES companies(id), phone TEXT NOT NULL UNIQUE, name TEXT NOT NULL DEFAULT '',
+  role TEXT NOT NULL DEFAULT 'manager', created_at ${TS});
+CREATE TABLE IF NOT EXISTS listing_views(listing_id INTEGER NOT NULL, user_id INTEGER NOT NULL, day TEXT NOT NULL, PRIMARY KEY(listing_id, user_id, day));
+CREATE TABLE IF NOT EXISTS blocks(company_id INTEGER NOT NULL, blocked_id INTEGER NOT NULL, created_at ${TS}, PRIMARY KEY(company_id, blocked_id));
+CREATE TABLE IF NOT EXISTS partners(company_id INTEGER NOT NULL, partner_id INTEGER NOT NULL, created_at ${TS}, PRIMARY KEY(company_id, partner_id));
+CREATE TABLE IF NOT EXISTS complaints(
+  id INTEGER PRIMARY KEY, listing_id INTEGER, company_id INTEGER, author_user INTEGER NOT NULL, author_company INTEGER NOT NULL,
+  reason TEXT NOT NULL, text TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'open', created_at ${TS});
+CREATE TABLE IF NOT EXISTS notifications(
+  id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), kind TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL DEFAULT '',
+  link TEXT NOT NULL DEFAULT '', is_read INTEGER NOT NULL DEFAULT 0, created_at ${TS});
+CREATE INDEX IF NOT EXISTS notifications_user ON notifications(user_id, id);
+CREATE TABLE IF NOT EXISTS push_subs(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, endpoint TEXT NOT NULL UNIQUE, keys TEXT NOT NULL, created_at ${TS});
+CREATE TABLE IF NOT EXISTS news(
+  id INTEGER PRIMARY KEY, title TEXT NOT NULL, body TEXT NOT NULL, title_kz TEXT NOT NULL DEFAULT '', body_kz TEXT NOT NULL DEFAULT '',
+  title_en TEXT NOT NULL DEFAULT '', body_en TEXT NOT NULL DEFAULT '', created_at ${TS});
+CREATE TABLE IF NOT EXISTS feedback(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, text TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open', created_at ${TS});
+CREATE TABLE IF NOT EXISTS route_cache(key TEXT PRIMARY KEY, km INTEGER NOT NULL, geometry TEXT NOT NULL, created_at ${TS});
+`);
+function addColumn(table, column, definition) {
+  if (!db.prepare(`PRAGMA table_info(${table})`).all().some((c) => c.name === column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+}
+addColumn('notifications', 'vars', `TEXT NOT NULL DEFAULT '{}'`);
+addColumn('users', 'company_role', `TEXT NOT NULL DEFAULT 'owner'`);
+addColumn('listings', 'adr_class', 'INTEGER');
+addColumn('listings', 'flags', `TEXT NOT NULL DEFAULT '[]'`);
+addColumn('listings', 'views', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('searches', 'notify', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('companies', 'plan', `TEXT NOT NULL DEFAULT 'free'`);
+addColumn('companies', 'plan_until', 'TEXT');
+
+db.exec(`
 DROP VIEW IF EXISTS company_stats;
 CREATE VIEW company_stats AS SELECT c.id, c.name, c.form, c.kind, c.bin, c.about, c.city_id, c.verified, c.created_at,
+  CASE WHEN c.plan = 'pro' AND c.plan_until > strftime('%Y-%m-%dT%H:%M:%fZ','now') THEN 1 ELSE 0 END AS pro,
   (SELECT ROUND(AVG(rating), 1) FROM reviews r WHERE r.target_company = c.id) AS rating,
   (SELECT COUNT(*) FROM reviews r WHERE r.target_company = c.id) AS reviews,
   (SELECT COUNT(*) FROM trips t WHERE t.status = 'completed' AND (t.customer_company = c.id OR t.carrier_company = c.id)) AS trips,
