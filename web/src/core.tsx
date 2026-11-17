@@ -168,12 +168,16 @@ export const CUR: Record<string, string> = { KZT: '₸', USD: '$', RUB: '₽' };
 export const opts = (keys: string[], labels: Record<string, string>) => keys.map((k) => ({ value: k, label: t(labels[k] || k) }));
 
 // ---------- форматирование ----------
-const locale = () => (lang === 'kz' ? 'kk-KZ' : 'ru-RU');
+// Казахские названия месяцев задаём сами: не во всех браузерах есть данные локали kk-KZ.
+const KZ_MONTHS = ['қаң.', 'ақп.', 'нау.', 'сәу.', 'мам.', 'мау.', 'шіл.', 'там.', 'қыр.', 'қаз.', 'қар.', 'жел.'];
 export const num = (n: number) => new Intl.NumberFormat('ru-RU').format(n);
 export const money = (n: number | null, cur = 'KZT') => (n == null ? t('Договорная') : `${num(n)} ${CUR[cur] || cur}`);
-export const fmtDate = (iso: string) => new Date(iso).toLocaleDateString(locale(), { day: 'numeric', month: 'short' });
+export function fmtDate(iso: string) {
+  const d = new Date(iso);
+  return lang === 'kz' ? `${d.getDate()} ${KZ_MONTHS[d.getMonth()]}` : d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+}
 export const fmtDates = (a: string, b: string) => (a === b ? fmtDate(a) : `${fmtDate(a)} — ${fmtDate(b)}`);
-export const fmtTime = (iso: string) => new Date(iso).toLocaleTimeString(locale(), { hour: '2-digit', minute: '2-digit' });
+export const fmtTime = (iso: string) => new Date(iso).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
 export function fmtWhen(iso: string) {
   const d = new Date(iso);
   const sameDay = d.toDateString() === new Date().toDateString();
