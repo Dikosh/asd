@@ -50,12 +50,12 @@ export default function companyRoutes(app) {
       vehicles: q1('SELECT COUNT(*) AS n FROM vehicles WHERE company_id = ?', c.id).n,
       documents: q(`SELECT kind FROM documents WHERE company_id = ? AND status = 'approved' GROUP BY kind`, c.id).map((d) => d.kind),
       reviewList: q(
-        `SELECT r.rating, r.text, r.created_at AS createdAt, a.name AS author, a.id AS authorId, t.status AS tripStatus
+        `SELECT r.rating, r.text, r.created_at AS createdAt, a.name AS author, a.id AS authorId, a.verified = 'verified' AS counted, t.status AS tripStatus
          FROM visible_reviews r JOIN companies a ON a.id = r.author_company JOIN trips t ON t.id = r.trip_id WHERE r.target_company = ? ORDER BY r.id DESC LIMIT 50`,
         c.id,
       ),
       blacklist: q(
-        `SELECT b.id, b.reason, b.review, b.reply, b.created_at AS createdAt, a.name AS author, a.id AS authorId
+        `SELECT b.id, b.reason, b.review, b.reply, b.created_at AS createdAt, a.name AS author, a.id AS authorId, a.verified = 'verified' AS counted
          FROM blacklist b JOIN companies a ON a.id = b.author_company WHERE b.company_id = ? ORDER BY b.id DESC`,
         c.id,
       ),
@@ -68,11 +68,11 @@ export default function companyRoutes(app) {
     res.json(
       q(
         `SELECT b.id, b.reason, b.review, b.created_at AS createdAt, b.author_company = :c AS mine,
-           t.id AS companyId, t.name, t.form, t.bin, a.name AS author, (SELECT COUNT(*) FROM blacklist x WHERE x.company_id = t.id) AS total
+           :admin AS canDelete, a.verified = 'verified' AS counted, t.id AS companyId, t.name, t.form, t.bin, a.name AS author, (SELECT COUNT(*) FROM blacklist x WHERE x.company_id = t.id) AS total
          FROM blacklist b JOIN companies t ON t.id = b.company_id JOIN companies a ON a.id = b.author_company
          WHERE t.name LIKE :t OR t.bin LIKE :t ORDER BY b.id DESC LIMIT 200`,
-        { c: req.user.company_id, t: `%${String(req.query.q || '').trim()}%` },
-      ).map((b) => ({ ...b, mine: !!b.mine })),
+        { c: req.user.company_id, t: `%${String(req.query.q || '').trim()}%`, admin: req.user.is_admin ? 1 : 0 },
+      ).map((b) => ({ ...b, mine: !!b.mine, canDelete: !!b.canDelete, counted: !!b.counted })),
     );
   });
   app.post('/api/blacklist', auth, owner, (req, res) => {
@@ -100,7 +100,11 @@ export default function companyRoutes(app) {
   });
   app.delete('/api/blacklist/:id', auth, (req, res) => {
     // автор убирает свою запись, модератор — любую
-    if (req.user.is_admin) run('DELETE FROM blacklist WHERE id = ?', id(req));
+    if (req.user.is_admin) {
+      const e = q1('SELECT c.name FROM blacklist b JOIN companies c ON c.id = b.company_id WHERE b.id = ?', id(req));
+      run('DELETE FROM blacklist WHERE id = ?', id(req));
+      if (e) L.modLog(req.user, 'blacklist_delete', e.name);
+    }
     else {
       if (req.user.company_role !== 'owner') throw bad('forbidden', 'Доступно только владельцу компании', 403);
       run('DELETE FROM blacklist WHERE id = ? AND author_company = ?', id(req), req.user.company_id);
@@ -110,7 +114,7 @@ export default function companyRoutes(app) {
 
   // ---------- документы и проверка ----------
   app.get('/api/documents', auth, owner, (req, res) => {
-    res.json(q('SELECT id, kind, filename, status, created_at AS createdAt FROM documents WHERE company_id = ? ORDER BY id DESC', req.user.company_id));
+    res.json(q('SELECT id, kind, filename, status, note, created_at AS createdAt FROM documents WHERE company_id = ? ORDER BY id DESC', req.user.company_id));
   });
   const docSchema = z.object({ kind: z.enum(L.DOC_KINDS), filename: z.string().trim().min(1).max(120), mime: z.string(), data: z.string().min(10) });
   app.post('/api/documents', auth, owner, (req, res) => {
@@ -158,18 +162,21 @@ export default function companyRoutes(app) {
   // ---------- модерация ----------
   app.get('/api/admin/queue', auth, L.admin, (_req, res) => {
     res.json({
-      companies: q(`SELECT id, name, form, bin, kind, created_at AS createdAt FROM companies WHERE verified = 'pending' ORDER BY id`),
+      // вместе с заявкой — все документы компании: модератор видит картину целиком
+      companies: q(`SELECT id, name, form, bin, kind, created_at AS createdAt FROM companies WHERE verified = 'pending' ORDER BY id`)
+        .map((c) => ({ ...c, binValid: isValidBin(c.bin), docs: q(`SELECT id, kind, filename, status FROM documents WHERE company_id = ? ORDER BY id DESC`, c.id) })),
       documents: q(
         `SELECT d.id, d.kind, d.filename, d.status, d.created_at AS createdAt, c.id AS companyId, c.name AS companyName
          FROM documents d JOIN companies c ON c.id = d.company_id WHERE d.status = 'pending' ORDER BY d.id LIMIT 200`,
       ),
     });
   });
-  const decision = z.object({ approve: z.boolean(), note: z.string().trim().max(300).default('') });
+  const decision = z.object({ approve: z.boolean(), note: z.string().trim().max(500).default('') });
   app.post('/api/admin/companies/:id', auth, L.admin, (req, res) => {
     const d = parse(decision, req.body);
     const ok = d.approve;
     run('UPDATE companies SET verified = ?, verify_note = ? WHERE id = ?', ok ? 'verified' : 'rejected', ok ? '' : d.note, id(req));
+    L.modLog(req.user, ok ? 'verify_approve' : 'verify_reject', q1('SELECT name FROM companies WHERE id = ?', id(req))?.name, d.note);
     notify(q('SELECT id FROM users WHERE company_id = ?', id(req)).map((u) => u.id), {
       kind: 'system', title: ok ? 'Компания проверена' : 'Проверка компании не пройдена',
       body: ok ? 'В объявлениях появилась отметка «Проверена».' : d.note || 'Проверьте БИН и документы и отправьте заявку заново.', link: '/cabinet/profile',
@@ -177,7 +184,14 @@ export default function companyRoutes(app) {
     res.json({ ok: true });
   });
   app.post('/api/admin/documents/:id', auth, L.admin, (req, res) => {
-    run('UPDATE documents SET status = ? WHERE id = ?', parse(decision, req.body).approve ? 'approved' : 'rejected', id(req));
+    const d = parse(decision, req.body);
+    const doc = q1('SELECT d.*, c.name FROM documents d JOIN companies c ON c.id = d.company_id WHERE d.id = ?', id(req));
+    if (!doc) throw bad('not_found', 'Документ не найден', 404);
+    run('UPDATE documents SET status = ?, note = ? WHERE id = ?', d.approve ? 'approved' : 'rejected', d.approve ? '' : d.note, doc.id);
+    L.modLog(req.user, d.approve ? 'doc_approve' : 'doc_reject', `${doc.name}: ${doc.filename}`, d.note);
+    if (!d.approve) notify(q(`SELECT id FROM users WHERE company_id = ? AND company_role = 'owner'`, doc.company_id).map((u) => u.id), {
+      kind: 'system', title: 'Документ отклонён модератором', body: d.note || doc.filename, link: '/cabinet/profile',
+    });
     res.json({ ok: true });
   });
 
@@ -265,7 +279,7 @@ export default function companyRoutes(app) {
   const jobSchema = z.object({
     kind: z.enum(['vacancy', 'resume']),
     title: z.string().trim().min(3).max(120),
-    cityId: z.string().refine((c) => cityById.has(c)).nullable().optional(),
+    cityId: z.string().refine((c) => cityById.has(c), 'Неизвестный город').nullable().optional(),
     vehicle: z.string().trim().max(120).default(''),
     licenseCats: z.string().trim().max(30).default(''),
     experience: optNum(70),

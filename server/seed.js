@@ -1,6 +1,8 @@
 // Демо-данные: компании, объявления, рейсы, отзывы — чтобы платформа выглядела живой сразу после запуска.
 import { fileURLToPath } from 'node:url';
-import { db, q1, run, insert, tx } from './db.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { db, q1, run, insert, tx, UPLOAD_DIR } from './db.js';
 import { cityById, roadKm, isValidBin } from './geo.js';
 import { token } from './lib.js';
 
@@ -58,6 +60,18 @@ const BODY_FOR = { food: ['ref', 'isotherm', 'tent'], building: ['tent', 'board'
 const TRUCKS = [['DAF XF 105', 'tent', 20, 86], ['Volvo FH', 'ref', 20, 82], ['MAN TGX', 'tent', 22, 92], ['Scania R450', 'ref', 20, 86], ['КамАЗ 5490', 'tent', 20, 82],
   ['Mercedes Actros', 'isotherm', 20, 86], ['Shacman X3000', 'tipper', 25, 20], ['ГАЗель Next', 'van', 1.5, 16], ['Hyundai HD78', 'van', 5, 22], ['Howo T5G', 'board', 20, 60], ['Sitrak C7H', 'container', 26, 76]];
 
+const DEMO_PDF = `%PDF-1.4
+1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj
+2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj
+3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 420 200]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj
+4 0 obj<</Length 58>>stream
+BT /F1 18 Tf 40 110 Td (Jolda demo document) Tj ET
+endstream endobj
+5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj
+trailer<</Root 1 0 R>>
+%%EOF
+`;
+
 export function seed() {
   tx(() => {
     const comp = {};
@@ -69,6 +83,17 @@ export function seed() {
       comp[name] = cid;
       user[name] = insert('INSERT INTO users(name, phone, email, role, company_id, is_admin, is_demo, accepted_terms) VALUES(?, ?, ?, ?, ?, ?, 1, ?)',
         person, phone, `demo${i}@jolda.local`, kind, cid, i === 0 ? 1 : 0, ago(500));
+    });
+    // ---- документы проверенных компаний: отметка «Проверена» в демо подкреплена принятыми документами ----
+    fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+    COMPANIES.forEach(([name, , kind, , , , verified]) => {
+      if (verified !== 'verified' || name === 'Jolda Модерация') return;
+      for (const [docKind, title] of [['registration', 'Свидетельство о регистрации.pdf'], ...(kind === 'broker' ? [['customs_license', 'Свидетельство таможенного представителя.pdf']] : [])]) {
+        const file = `demo-${comp[name]}-${docKind}.pdf`;
+        fs.writeFileSync(path.join(UPLOAD_DIR, file), DEMO_PDF);
+        insert(`INSERT INTO documents(company_id, user_id, kind, filename, mime, path, status, created_at) VALUES(?, ?, ?, ?, 'application/pdf', ?, 'approved', ?)`,
+          comp[name], user[name], docKind, title, file, ago(400));
+      }
     });
     const carriers = COMPANIES.filter((c) => c[2] === 'carrier').map((c) => c[0]);
     const customers = COMPANIES.filter((c) => c[2] === 'customer' || (c[2] === 'logist' && c[0] !== 'Jolda Модерация')).map((c) => c[0]);
@@ -94,13 +119,14 @@ export function seed() {
       const from = o.from ?? int(0, 4);
       return insert(
         `INSERT INTO listings(kind, user_id, company_id, status, points, from_id, to_id, brand, body_type, cargo_type, weight, volume, loading,
-           date_from, date_to, pay_terms, rate, currency, description, distance_km, created_at, closed_at)
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'KZT', ?, ?, ?, ?)`,
+           date_from, date_to, pay_terms, rate, currency, description, distance_km, created_at, closed_at, flags)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'KZT', ?, ?, ?, ?, ?)`,
         kind, user[owner], comp[owner], o.status || 'active', JSON.stringify(points), points[0], points[points.length - 1], o.brand || '',
         o.body ?? null, o.cargo ?? null, o.weight ?? null, o.volume ?? null, JSON.stringify(o.loading || ['rear']),
         o.dateFrom || day(from), o.dateTo || day(from + int(4, 14)),
         JSON.stringify(rate ? pick([['cashless_vat'], ['cashless_novat', 'prepay'], ['cash'], ['cashless_vat', 'prepay']]) : []),
         rate, o.description || '', km, o.createdAt || ago(int(1, 70)), o.status && o.status !== 'active' ? ago(int(80, 400)) : null,
+        JSON.stringify(o.flags || []),
       );
     };
     const cargoKinds = Object.keys(CARGO_DESC);
@@ -185,8 +211,8 @@ export function seed() {
 
     const truck1 = addListing('truck', B, ['almaty', 'balkhash', 'karaganda', 'astana'], { brand: 'Volvo FH', body: 'ref', weight: 20, volume: 82, rate: 480000, from: 3, loading: ['rear', 'side'], description: 'Обратный рейс после выгрузки в Алматы, возьму догруз.', createdAt: ago(8) });
     run(`INSERT INTO responses(listing_id, user_id, company_id, message, price, created_at) VALUES(?, ?, ?, 'Есть 12 т фруктов из Алматы в Караганду, реф обязателен.', 300000, ?)`, truck1, user['Алатау Агро'], comp['Алатау Агро'], ago(1));
-    chat(truck1, B, 'Алатау Агро', [['Алатау Агро', 'Есть 12 т фруктов из Алматы в Караганду, реф обязателен.\n— 300000 KZT']]);
-    addListing('cargo', 'Silk Way Logistics', ['urumqi', 'khorgos', 'almaty'], { cargo: 'consumer', body: 'container', weight: 22, volume: 76, rate: 1450000, from: 2, description: 'Контейнер 40HC, электроника. Нужен брокер на Хоргосе.', createdAt: ago(4) });
+    chat(truck1, B, 'Алатау Агро', [['Алатау Агро', 'Есть 12 т фруктов из Алматы в Караганду, реф обязателен.\n— 300 000 ₸']]);
+    addListing('cargo', 'Silk Way Logistics', ['urumqi', 'khorgos', 'almaty'], { cargo: 'consumer', body: 'container', weight: 22, volume: 76, rate: 1450000, from: 2, description: 'Контейнер 40HC, электроника. Нужен брокер на Хоргосе.', createdAt: ago(4), flags: ['cmr', 'customs'] });
     addListing('truck', 'Silk Way Logistics', ['almaty', 'astana'], { brand: 'MAN TGX', body: 'tent', weight: 22, volume: 92, rate: 400000, from: 1, createdAt: ago(6) });
     run(`INSERT INTO searches(user_id, kind, name, params, notify) VALUES(?, 'cargo', 'Алматы → Астана, реф', ?, 1)`, user[B], JSON.stringify({ from: 'almaty', to: 'astana', body: 'ref', radius: '100' }));
     run('INSERT INTO partners(company_id, partner_id) VALUES(?, ?), (?, ?)', comp[A], comp[B], comp[B], comp[A]);

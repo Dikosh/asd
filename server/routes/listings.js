@@ -10,9 +10,9 @@ import * as L from '../lib.js';
 const { bad, parse, auth, staff } = L;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 // настоящая календарная дата, а не просто цифры по шаблону
-const dateStr = z.string().regex(DATE).refine((d) => !isNaN(Date.parse(d)) && new Date(d).toISOString().slice(0, 10) === d, 'нет такой даты');
+const dateStr = z.string().regex(DATE).refine((d) => !isNaN(Date.parse(d)) && new Date(d).toISOString().slice(0, 10) === d, 'Нет такой даты');
 const num = (max) => z.number().positive().max(max).nullable().optional();
-const cityId = z.string().refine((id) => cityById.has(id), 'неизвестный город');
+const cityId = z.string().refine((id) => cityById.has(id), 'Неизвестный город');
 
 const listingSchema = z
   .object({
@@ -33,9 +33,9 @@ const listingSchema = z
     currency: z.enum(L.CURRENCIES).default('KZT'),
     description: z.string().trim().max(2000).default(''),
   })
-  .refine((b) => b.dateTo >= b.dateFrom, 'дата окончания раньше даты начала')
-  .refine((b) => b.dateTo <= new Date(Date.now() + 180 * 86400_000).toISOString().slice(0, 10), 'период размещения — не дальше полугода')
-  .refine((b) => b.points.every((p, i) => i === 0 || p !== b.points[i - 1]), 'соседние пункты маршрута совпадают');
+  .refine((b) => b.dateTo >= b.dateFrom, 'Дата окончания раньше даты начала')
+  .refine((b) => b.dateTo <= new Date(Date.now() + 180 * 86400_000).toISOString().slice(0, 10), 'Период размещения — не дальше полугода')
+  .refine((b) => b.points.every((p, i) => i === 0 || p !== b.points[i - 1]), 'Соседние пункты маршрута совпадают');
 
 const pts = (l) => l.points.map((id) => cityById.get(id)).filter(Boolean);
 const n = (v) => (v === undefined || v === '' || v === null || isNaN(Number(v)) ? undefined : Number(v));
@@ -140,6 +140,7 @@ export function priceSamples(kind, { bodyType = null, exceptId = 0 } = {}) {
     `SELECT l.id, l.company_id, l.from_id, l.to_id, l.rate, l.currency, l.distance_km AS km, l.body_type, l.weight, 0 AS deal
      FROM listings l JOIN companies c ON c.id = l.company_id
      WHERE l.kind = :kind AND l.rate > 0 AND l.distance_km > 50 AND l.status != 'removed' AND c.banned = 0 AND l.id != :id
+       AND (c.verified = 'verified' OR EXISTS (SELECT 1 FROM trips t WHERE t.status = 'completed' AND (t.customer_company = c.id OR t.carrier_company = c.id)))
        AND (:body IS NULL OR l.body_type = :body) AND l.created_at > :since
      ORDER BY l.id DESC LIMIT 5000`,
     { kind, id: exceptId, body: bodyType, since },
@@ -273,7 +274,9 @@ export default function listingRoutes(app) {
         `ORDER BY COALESCE(l.boosted_until > :now, 0) DESC, l.id DESC LIMIT ${role === 'broker' ? 80 : 12}`,
       ).filter((l) => !seen.has(l.id));
       // брокеру в первую очередь интересны международные перевозки — там нужна таможня
-      if (role === 'broker') fresh.sort((a, b) => Number(b.international) - Number(a.international));
+      // сначала — объявления, где заказчик прямо отметил «нужен таможенный брокер»
+      const customs = (l) => (l.flags?.includes('customs') ? 2 : 0) + Number(l.international);
+      if (role === 'broker') fresh.sort((a, b) => customs(b) - customs(a));
       out.push({ kind, items: [...matched, ...fresh].slice(0, 8) });
     }
     res.json(out);
@@ -351,6 +354,10 @@ export default function listingRoutes(app) {
     if (q1(`SELECT 1 FROM listings WHERE company_id = ? AND status = 'active' AND kind = ? AND points = ? AND date_from = ? AND date_to = ?
               AND COALESCE(weight, 0) = ? AND COALESCE(body_type, '') = ?`, c, b.kind, JSON.stringify(b.points), b.dateFrom, b.dateTo, b.weight ?? 0, b.bodyType ?? ''))
       throw bad('duplicate', 'Такое объявление у вас уже размещено', 409);
+    // снятое модератором нельзя просто разместить заново
+    if (q1(`SELECT 1 FROM listings WHERE company_id = ? AND status = 'removed' AND kind = ? AND from_id = ? AND to_id = ? AND closed_at > ?`,
+      c, b.kind, b.points[0], b.points[b.points.length - 1], new Date(Date.now() - 30 * 86400_000).toISOString()))
+      throw bad('removed', 'Такое объявление недавно снял модератор. Если это ошибка, напишите в поддержку', 409);
     const id = insert(
       `INSERT INTO listings(kind, user_id, company_id, points, from_id, to_id, brand, body_type, cargo_type, weight, volume, loading,
          date_from, date_to, pay_terms, rate, currency, description, distance_km, adr_class, flags)
@@ -431,14 +438,14 @@ export default function listingRoutes(app) {
     const out = { ...l, market: marketRate(l.kind, { exceptId: l.id, bodyType: l.bodyType, km: l.distanceKm, weight: l.weight }), matches: l.mine && l.status === 'active' ? matchesFor(req.user, l) : [] };
     if (l.mine) {
       out.responses = q(
-        `SELECT r.id, r.message, r.price, r.currency, r.status, r.created_at AS createdAt, r.user_id AS userId, u.name AS userName, u.phone,
+        `SELECT r.id, r.message, r.price, r.currency, r.status, r.created_at AS createdAt, r.user_id AS userId, u.name AS userName, u.phone, u.settings, u.company_id AS u_company,
            r.company_id, ${L.COMPANY_COLS('cs', 'c_')},
            (SELECT id FROM chats c WHERE c.listing_id = r.listing_id AND c.peer_id = r.user_id) AS chatId
          FROM responses r JOIN users u ON u.id = r.user_id JOIN company_stats cs ON cs.id = r.company_id
          WHERE r.listing_id = ? AND r.status != 'withdrawn' ORDER BY r.id DESC`,
         l.id,
       ).map((r) => ({ id: r.id, message: r.message, price: r.price, currency: r.currency, status: r.status, createdAt: r.createdAt, chatId: r.chatId,
-        user: { id: r.userId, name: r.userName, phone: r.phone }, company: L.companyOut(r, 'c_') }));
+        user: { id: r.userId, name: r.userName, phone: L.phoneFor(req.user, { phone: r.phone, settings: r.settings, company_id: r.u_company }) }, company: L.companyOut(r, 'c_') }));
     } else if (l.myResponse) {
       out.chatId = q1('SELECT id FROM chats WHERE listing_id = ? AND peer_id = ?', l.id, req.user.id)?.id || null;
     }

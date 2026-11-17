@@ -145,9 +145,12 @@ function addPosition(t, b) {
     if (seconds < 1.5) return { ok: true, skipped: true };
     // точка, до которой машина не могла доехать, — сбой геолокации или подмена: не записываем
     const km = haversine(last, { lat: b.lat, lon: b.lon });
-    // в демо-режиме симуляция движения «едет» быстрее настоящей машины
-    if (!(L.DEMO && b.sim) && km > 5 && km / (seconds / 3600) > L.MAX_SPEED) return { ok: true, skipped: true, reason: 'jump' };
+    // в демо-режиме симуляция движения «едет» быстрее настоящей машины. Фильтр нужен в пути и при непрерывной передаче:
+    // до выезда и после паузы точку принимаем — GPS могли включить с другого телефона
+    const moving = L.STAGES.indexOf(t.stage) >= L.STAGES.indexOf('in_transit');
+    if (!(L.DEMO && b.sim) && moving && seconds < 600 && km > 5 && km / (seconds / 3600) > L.MAX_SPEED) return { ok: true, skipped: true, reason: 'jump' };
   }
+  if (L.DEMO && b.sim && !t.sim) run('UPDATE trips SET sim = 1 WHERE id = ?', t.id);
   run('INSERT INTO positions(trip_id, lat, lon, speed) VALUES(?, ?, ?, ?)', t.id, b.lat, b.lon, b.speed ?? null);
   L.push(tripUsers(t), 'position', { tripId: t.id, lat: b.lat, lon: b.lon, at: L.now() });
   return { ok: true };
@@ -161,12 +164,20 @@ function setStage(t, stage) {
   if (L.STAGES.indexOf(stage) >= L.STAGES.indexOf('in_transit')) {
     const last = q1('SELECT lat, lon, at FROM positions WHERE trip_id = ? ORDER BY id DESC LIMIT 1', t.id);
     if (!last || Date.now() - Date.parse(last.at) > 60 * 60_000)
-      throw bad('gps_stale', 'Нет свежей GPS-позиции. Откройте рейс на телефоне в машине и разрешите геолокацию', 409);
+      throw bad('gps_stale', 'Нет свежей GPS-позиции. Разрешите геолокацию на телефоне водителя и подождите несколько секунд', 409);
     // доставку можно отметить только рядом с пунктом выгрузки — так рейтинг нельзя накрутить рейсом «на бумаге»
     const points = L.j(t.l_points, []);
     const dest = cityById.get(points[points.length - 1]);
-    if (stage === 'delivered' && dest && haversine(last, dest) > 80)
-      throw bad('gps_far', 'Машина ещё далеко от пункта выгрузки — отметить доставку можно на месте', 409);
+    const far = dest ? Math.round(haversine(last, dest)) : 0;
+    if (stage === 'unloading' && far > 80) throw L.tbad('gps_far', 'До пункта выгрузки ещё {n} км — отметить выгрузку можно на месте', { n: far }, 409);
+    if (stage === 'delivered' && far > 80) throw L.tbad('gps_far', 'До пункта выгрузки ещё {n} км — отметить доставку можно на месте', { n: far }, 409);
+    // рейс не может закончиться быстрее, чем машина способна проехать маршрут: так его не «нарисовать» за минуту
+    if (stage === 'delivered' && !(L.DEMO && q1('SELECT sim FROM trips WHERE id = ?', t.id).sim)) {
+      const started = q1(`SELECT at FROM trip_events WHERE trip_id = ? AND stage = 'in_transit'`, t.id)?.at;
+      const km = q1('SELECT distance_km AS km FROM listings WHERE id = ?', t.listing_id)?.km || 0;
+      const left = Math.ceil((km / L.MAX_SPEED) * 60 - (Date.now() - Date.parse(started || L.now())) / 60_000);
+      if (left > 0) throw L.tbad('too_fast', 'Слишком быстро для такого расстояния — отметить доставку можно через {n} мин', { n: left }, 409);
+    }
   }
   run('UPDATE trips SET stage = ? WHERE id = ?', stage, t.id);
   run('INSERT INTO trip_events(trip_id, stage) VALUES(?, ?)', t.id, stage);
@@ -223,7 +234,8 @@ export default function dealRoutes(app) {
       if (!chat) chat = { id: insert('INSERT INTO chats(listing_id, owner_id, peer_id, owner_company, peer_company) VALUES(?, ?, ?, ?, ?)', l.id, l.user_id, req.user.id, l.company_id, req.user.company_id) };
       return { id, chatId: chat.id };
     });
-    postMessage(out.chatId, req.user, b.price ? `${b.message}\n— ${b.price} ${b.currency}` : b.message);
+    const sym = { KZT: '₸', USD: '$', RUB: '₽' }[b.currency] || b.currency;
+    postMessage(out.chatId, req.user, b.price ? `${b.message}\n— ${String(Math.round(b.price)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')} ${sym}` : b.message);
     L.push(staffOf(l.company_id), 'response', { listingId: l.id });
     notify(staffOf(l.company_id), { kind: 'response', title: 'Новый отклик: {route}', vars: routeOf(l.id), body: b.message.slice(0, 140), link: `/listing/${l.id}` });
     res.json(out);
@@ -234,7 +246,8 @@ export default function dealRoutes(app) {
       q(
         `SELECT r.id, r.message, r.price, r.currency, r.status, r.created_at AS createdAt, r.listing_id AS listingId,
            l.kind, l.from_id AS fromId, l.to_id AS toId, l.status AS listingStatus, u.name AS userName, c.name AS companyName, c.id AS companyId,
-           lc.name AS ownerCompany, lc.id AS ownerCompanyId,
+           lc.name AS ownerCompany, lc.id AS ownerCompanyId, c.kind AS companyKind, c.verified AS companyVerified,
+           (SELECT rating FROM company_stats cs WHERE cs.id = r.company_id) AS companyRating,
            (SELECT id FROM chats ch WHERE ch.listing_id = r.listing_id AND ch.peer_company = r.company_id) AS chatId,
            (SELECT id FROM trips t WHERE t.response_id = r.id) AS tripId
          FROM responses r JOIN listings l ON l.id = r.listing_id JOIN users u ON u.id = r.user_id
@@ -271,6 +284,9 @@ export default function dealRoutes(app) {
         const owner = { user: row.owner_user, company: row.owner_company };
         const peer = { user: row.user_id, company: row.company_id };
         const [customer, carrier] = row.kind === 'cargo' ? [owner, peer] : [peer, owner];
+        // брокер оформляет документы, а не везёт груз: рейс с ним как с перевозчиком не создаётся
+        if (q1('SELECT kind FROM companies WHERE id = ?', carrier.company)?.kind === 'broker')
+          throw bad('broker', 'Брокер не перевозит груз — договоритесь об услугах в чате', 409);
         run(`UPDATE responses SET status = 'accepted' WHERE id = ?`, row.id);
         const li = q1('SELECT points, cargo_type, body_type, weight, volume, distance_km, date_from, date_to, description, loading, pay_terms, brand FROM listings WHERE id = ?', row.listing_id);
         tripId = insert(
@@ -301,12 +317,14 @@ export default function dealRoutes(app) {
            (SELECT text FROM messages m WHERE m.chat_id = c.id ORDER BY m.id DESC LIMIT 1) AS lastText,
            (SELECT created_at FROM messages m WHERE m.chat_id = c.id ORDER BY m.id DESC LIMIT 1) AS lastAt,
            (SELECT u.name FROM messages m JOIN users u ON u.id = m.sender_id WHERE m.chat_id = c.id AND u.company_id != :c ORDER BY m.id DESC LIMIT 1) AS peerName,
-           (SELECT COUNT(*) FROM messages m JOIN users u ON u.id = m.sender_id WHERE m.chat_id = c.id AND m.is_read = 0 AND u.company_id != :c) AS unread
+           (SELECT COUNT(*) FROM messages m JOIN users u ON u.id = m.sender_id WHERE m.chat_id = c.id AND m.is_read = 0 AND u.company_id != :c) AS unread,
+           pu.phone AS peerPhone, pu.settings AS peerSettings, pu.company_id AS peerUserCompany
          FROM chats c JOIN listings l ON l.id = c.listing_id
+         JOIN users pu ON pu.id = CASE WHEN c.owner_company = :c THEN c.peer_id ELSE c.owner_id END
          JOIN companies pc ON pc.id = CASE WHEN c.owner_company = :c THEN c.peer_company ELSE c.owner_company END
          WHERE c.owner_company = :c OR c.peer_company = :c ORDER BY lastAt DESC LIMIT 300`,
         { c: req.user.company_id },
-      ),
+      ).map(({ peerSettings, peerUserCompany, ...c }) => ({ ...c, peerPhone: L.phoneFor(req.user, { phone: c.peerPhone, settings: peerSettings, company_id: peerUserCompany }) })),
     );
   });
   app.get('/api/chats/:id/messages', auth, staff, (req, res) => {

@@ -17,7 +17,7 @@ export default function JobsPage() {
   const set = (p: Partial<typeof blank>) => setForm((f) => f && { ...f, ...p });
   const save = async () => {
     const body = { ...form, experience: form!.experience === '' ? null : Number(form!.experience), dateFrom: form!.dateFrom || null };
-    if (await act(() => api('/jobs', 'POST', body), t('Объявление размещено'))) {
+    if (await act(() => api('/jobs', 'POST', body), form!.kind === 'vacancy' ? t('Вакансия размещена') : t('Резюме размещено'))) {
       setKind(form!.kind);
       setForm(null);
       reload();
@@ -26,14 +26,17 @@ export default function JobsPage() {
   const hire = (j: any) =>
     act(() => api('/employees', 'POST', { name: j.userName, phone: j.phone, position: t('Водитель'), licenseCats: j.licenseCats, experience: j.experience }), t('Добавлен в «Сотрудники»'));
   const isVac = form?.kind === 'vacancy';
+  // водителю не показываем действия работодателя
+  const isDriver = me!.user.role === 'driver';
+  const canHire = !isDriver && me!.user.companyRole === 'owner';
 
   return (
     <div className="stack">
       <div className="page-head">
         <h1 className="page-title">{t('Работа')}</h1>
         <div className="row wrap">
-          <button className="btn primary" onClick={() => setForm({ ...blank, kind: 'vacancy' })}><Plus size={17} /> {t('Ищу водителя')}</button>
-          <button className="btn soft" onClick={() => setForm({ ...blank, kind: 'resume' })}><Plus size={17} /> {t('Ищу работу')}</button>
+          {!isDriver && <button className="btn primary" onClick={() => setForm({ ...blank, kind: 'vacancy' })}><Plus size={17} /> {t('Ищу водителя')}</button>}
+          <button className={`btn ${isDriver ? 'primary' : 'soft'}`} onClick={() => setForm({ ...blank, kind: 'resume' })}><Plus size={17} /> {t('Ищу работу')}</button>
         </div>
       </div>
       <p className="muted">{t('Поиск водителей и работы внутри платформы — без перехода на другие сайты.')}</p>
@@ -69,8 +72,8 @@ export default function JobsPage() {
                     <button className="btn ghost" onClick={async () => confirm(t('Снять объявление?')) && (await act(() => api(`/jobs/${j.id}`, 'DELETE'), t('Объявление снято'))) && reload()}><Trash2 size={16} /> {t('Снять')}</button>
                   ) : (
                     <>
-                      <ContactButtons phone={j.phone} text={`${t('Здравствуйте! Пишу по объявлению на Jolda')}: ${j.title}`} />
-                      {kind === 'resume' && <button className="btn soft" onClick={() => hire(j)}><UserPlus size={16} /> {t('В сотрудники')}</button>}
+                      <ContactButtons full phone={j.phone} text={`${t('Здравствуйте! Пишу по объявлению на Jolda')}: ${j.title}`} />
+                      {kind === 'resume' && canHire && <button className="btn soft" onClick={() => hire(j)}><UserPlus size={16} /> {t('В сотрудники')}</button>}
                     </>
                   )}
                 </div>

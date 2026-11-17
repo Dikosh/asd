@@ -174,10 +174,10 @@ test('полный цикл сделки', async () => {
   assert.ok(trip.position && trip.remainingKm > 100 && trip.etaHours >= 1);
   assert.equal((await carrier.get('/api/listings?kind=cargo&from=petropavl')).items.some((l) => l.id === cargo.id), false, 'груз в рейсе скрыт из поиска');
   assert.equal((await customer.call('POST', `/api/trips/${tripId}/complete`)).status, 409);
-  await carrier.post(`/api/trips/${tripId}/stage`, { stage: 'unloading' });
-  assert.equal((await carrier.call('POST', `/api/trips/${tripId}/stage`, { stage: 'delivered' })).data.error, 'gps_far', 'доставку не отметить вдали от пункта выгрузки');
+  assert.equal((await carrier.call('POST', `/api/trips/${tripId}/stage`, { stage: 'unloading' })).data.error, 'gps_far', 'выгрузку не отметить вдали от пункта выгрузки');
   await new Promise((r) => setTimeout(r, 1600));
   await carrier.post(`/api/trips/${tripId}/position`, { lat: 51.15, lon: 71.45, sim: true });
+  await carrier.post(`/api/trips/${tripId}/stage`, { stage: 'unloading' });
   await carrier.post(`/api/trips/${tripId}/stage`, { stage: 'delivered' });
   assert.equal((await carrier.call('POST', `/api/trips/${tripId}/complete`)).status, 403, 'перевозчик сам завершить не может, пока не прошло трое суток');
   await customer.post(`/api/trips/${tripId}/complete`);
@@ -195,6 +195,11 @@ test('полный цикл сделки', async () => {
   await carrier.post(`/api/trips/${tripId}/review`, { rating: 4, text: '' });
   assert.equal((await carrier.get(`/api/trips/${tripId}`)).reviews.length, 2);
   assert.equal((await customer.call('POST', `/api/trips/${tripId}/review`, { rating: 1 })).status, 409);
+  assert.equal((await carrier.get('/api/me')).company.rating, null, 'отзыв непроверенной компании виден, но в рейтинг не идёт');
+  // модератор подтверждает заказчика — его отзыв начинает учитываться
+  const mod = client();
+  await mod.post('/api/auth/demo', { role: 'admin' });
+  await mod.post(`/api/admin/companies/${(await customer.get('/api/me')).company.id}`, { approve: true });
   const me = await carrier.get('/api/me');
   assert.equal(me.company.rating, 5);
   assert.equal(me.company.indicator, 'gray', 'один отзыв цвет индикатора не меняет');

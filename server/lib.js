@@ -13,7 +13,7 @@ export const BODY = [
   'jumbo', 'mega', 'coupling', 'allmetal', 'platform', 'open', 'timber', 'cattle', 'cement', 'gas', 'bitumen', 'foodtank', 'chemtank',
   'crane', 'tow', 'concrete', 'pickup', 'minibus', 'bus', 'tractor',
 ];
-export const FLAGS = ['tir', 'cmr', 'ekmt', 't1'];
+export const FLAGS = ['tir', 'cmr', 'ekmt', 't1', 'customs'];
 // Тариф Pro оплачивается с баланса компании на 30 дней.
 export const PLAN = { price: 9900, days: 30, free: { seats: 2, alerts: 3 }, pro: { seats: 10, alerts: 50 } };
 export const CARGO = ['food', 'building', 'equipment', 'consumer', 'agro', 'metal', 'fuel', 'groupage', 'adr', 'oversize', 'cars', 'furniture', 'other'];
@@ -21,7 +21,7 @@ export const LOADING = ['top', 'rear', 'full', 'side'];
 export const PAY = ['prepay', 'cash', 'card', 'cashless_vat', 'cashless_novat'];
 export const CURRENCIES = ['KZT', 'USD', 'RUB'];
 export const STAGES = ['planned', 'to_loading', 'loading', 'in_transit', 'unloading', 'delivered'];
-export const DOC_KINDS = ['id_card', 'selfie', 'registration', 'license', 'driver_license', 'other'];
+export const DOC_KINDS = ['id_card', 'selfie', 'registration', 'license', 'customs_license', 'driver_license', 'other'];
 export const BOOST_PRICE = 500;
 export const MAX_SPEED = 160; // км/ч: быстрее грузовик не едет, такие точки GPS отбрасываются
 // Отзыв другой стороны виден, когда отзывы оставили обе стороны рейса или прошло 7 дней (для запросов с псевдонимом r).
@@ -38,9 +38,43 @@ export class HttpError extends Error {
   }
 }
 export const bad = (code, message, status = 400) => new HttpError(status, code, message);
+/** Ошибка с подстановками: клиент получает шаблон и значения и показывает текст на языке пользователя. */
+export const tbad = (code, tpl, vars, status = 400) => {
+  const e = bad(code, tpl.replace(/\{(\w+)\}/g, (_, k) => vars[k] ?? ''), status);
+  e.extra = { tpl, vars };
+  return e;
+};
+// Ошибки проверки — по-русски и с названием поля; клиент по field/rule/n показывает их на языке пользователя.
+const FIELD_RU = {
+  name: 'Имя', email: 'Почта', companyName: 'Название компании', phone: 'Телефон', code: 'Код', bin: 'БИН', about: 'О компании', weight: 'Вес', volume: 'Объём',
+  rate: 'Ставка', price: 'Цена', description: 'Описание', text: 'Текст', message: 'Сообщение', title: 'Заголовок', body: 'Текст', brand: 'Марка', plate: 'Госномер',
+  points: 'Маршрут', dateFrom: 'Дата начала', dateTo: 'Дата окончания', reason: 'Причина', review: 'Отзыв', note: 'Комментарий', salary: 'Оплата', position: 'Должность',
+  reply: 'Ответ', vehicle: 'Машина', experience: 'Стаж', rating: 'Оценка', cityId: 'Город', role: 'Роль', kind: 'Тип',
+};
+const RULE_RU = {
+  required: 'обязательное поле', min_len: 'не короче {n} симв.', max_len: 'не длиннее {n} симв.', min: 'не меньше {n}', max: 'не больше {n}',
+  email: 'проверьте адрес почты', invalid: 'недопустимое значение',
+};
+function issueOut(i) {
+  const field = String(i.path[0] ?? '');
+  let rule = 'invalid';
+  let n;
+  if (i.code === 'invalid_type' && (i.received === 'undefined' || i.received === 'null')) rule = 'required';
+  else if (i.code === 'too_small') [rule, n] = [i.type === 'string' || i.type === 'array' ? (Number(i.minimum) <= 1 ? 'required' : 'min_len') : 'min', Number(i.minimum)];
+  else if (i.code === 'too_big') [rule, n] = [i.type === 'string' || i.type === 'array' ? 'max_len' : 'max', Number(i.maximum)];
+  else if (i.code === 'invalid_string' && i.validation === 'email') rule = 'email';
+  else if (i.code === 'custom') return { field, message: i.message }; // свой текст — уже по-русски
+  const text = RULE_RU[rule].replace('{n}', n);
+  return { field, rule, n, message: FIELD_RU[field] ? `${FIELD_RU[field]}: ${text}` : `${field || 'Запрос'}: ${text}` };
+}
 export const parse = (schema, data) => {
   const r = schema.safeParse(data ?? {});
-  if (!r.success) throw bad('validation', r.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; '));
+  if (!r.success) {
+    const first = issueOut(r.error.issues[0]);
+    const e = bad('validation', first.message);
+    e.extra = { field: first.field, rule: first.rule, n: first.n };
+    throw e;
+  }
   return r.data;
 };
 export const now = () => new Date().toISOString();
@@ -55,7 +89,11 @@ export const j = (s, d) => {
 export const today = () => new Date().toISOString().slice(0, 10);
 
 export function normPhone(raw) {
-  const digits = String(raw || '').replace(/\D/g, '');
+  let digits = String(raw || '').replace(/\D/g, '');
+  // привычные местные записи: 701 123 45 67, 8 701 123 45 67 и +7 8 701… — это один и тот же номер
+  if (digits.length === 10) digits = '7' + digits;
+  else if (digits.length === 11 && digits[0] === '8') digits = '7' + digits.slice(1);
+  else if (digits.length === 12 && digits.startsWith('78')) digits = '7' + digits.slice(2);
   if (digits.length < 10 || digits.length > 15) throw bad('phone', 'Некорректный номер телефона');
   return '+' + digits;
 }
@@ -106,7 +144,11 @@ export function staff(req, _res, next) {
   next();
 }
 export function requireActiveCompany(user) {
-  if (q1('SELECT banned FROM companies WHERE id = ?', user.company_id)?.banned) throw bad('banned', 'Компания заблокирована модератором. Напишите в поддержку', 403);
+  if (q1('SELECT banned FROM companies WHERE id = ?', user.company_id)?.banned) throw bad('banned', 'Компания заблокирована модератором. Причина и обжалование — в разделе «Помощь → Поддержка»', 403);
+}
+/** Журнал действий модератора: кто, что и почему сделал. */
+export function modLog(user, action, target = '', note = '') {
+  run('INSERT INTO mod_log(admin_user, action, target, note) VALUES(?, ?, ?, ?)', user.id, action, String(target), note);
 }
 export function admin(req, _res, next) {
   if (!req.user?.is_admin) throw bad('forbidden', 'Только для администратора', 403);
@@ -162,7 +204,12 @@ export function companyOut(r, prefix = '') {
     blacklisted: g('bl'),
     pro: !!g('pro'),
     banned: !!g('banned'),
-    indicator: indicator(g('rating'), g('reviews'), g('bl'), g('reviewers')),
+    // заблокированная компания всегда «красная», какими бы ни были прежние отзывы
+    indicator: g('banned') ? 'red' : (() => {
+      const i = indicator(g('rating'), g('reviews'), g('bl'), g('reviewers'));
+      // «зелёной» может быть только компания, которую проверил модератор
+      return i === 'green' && g('verified') !== 'verified' ? 'gray' : i;
+    })(),
   };
 }
 export const COMPANY_COLS = (a, p) =>
@@ -245,7 +292,7 @@ export function requireNoPendingReviews(user) {
   if (user.company_role !== 'driver' && pendingReviews(user).length) throw bad('review_required', 'Сначала оставьте отзыв о завершённом рейсе', 409);
 }
 export function meOut(user) {
-  const c = q1('SELECT cs.*, c.balance, c.plan_until, c.verify_note FROM company_stats cs JOIN companies c ON c.id = cs.id WHERE cs.id = ?', user.company_id);
+  const c = q1('SELECT cs.*, c.balance, c.plan_until, c.verify_note, c.ban_reason FROM company_stats cs JOIN companies c ON c.id = cs.id WHERE cs.id = ?', user.company_id);
   return {
     user: {
       id: user.id,
@@ -257,7 +304,7 @@ export function meOut(user) {
       companyRole: user.company_role,
       settings: j(user.settings, {}),
     },
-    company: { ...companyOut(c), bin: c.bin, binValid: isValidBin(c.bin), about: c.about, cityId: c.city_id, balance: c.balance, verifyNote: c.verify_note, planUntil: c.pro ? c.plan_until : null },
+    company: { ...companyOut(c), bin: c.bin, binValid: isValidBin(c.bin), about: c.about, cityId: c.city_id, balance: c.balance, verifyNote: c.verify_note, banReason: c.ban_reason, planUntil: c.pro ? c.plan_until : null },
     counters: {
       notifications: q1('SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND is_read = 0', user.id).n,
       unread: user.company_role === 'driver' ? 0 : q1(

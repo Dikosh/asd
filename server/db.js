@@ -112,10 +112,16 @@ addColumn('searches', 'notify', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('companies', 'plan', `TEXT NOT NULL DEFAULT 'free'`);
 addColumn('companies', 'plan_until', 'TEXT');
 addColumn('companies', 'banned', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('companies', 'ban_reason', `TEXT NOT NULL DEFAULT ''`);
+addColumn('documents', 'note', `TEXT NOT NULL DEFAULT ''`);
+addColumn('feedback', 'reply', `TEXT NOT NULL DEFAULT ''`);
+addColumn('feedback', 'replied_at', 'TEXT');
+db.exec(`CREATE TABLE IF NOT EXISTS mod_log(id INTEGER PRIMARY KEY, admin_user INTEGER NOT NULL, action TEXT NOT NULL, target TEXT NOT NULL DEFAULT '', note TEXT NOT NULL DEFAULT '', created_at ${TS})`);
 addColumn('companies', 'verify_note', `TEXT NOT NULL DEFAULT ''`);
 addColumn('trips', 'driver_token', 'TEXT');
 addColumn('trips', 'fail_reason', `TEXT NOT NULL DEFAULT ''`);
 addColumn('trips', 'failed_by', 'INTEGER');
+addColumn('trips', 'sim', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('blacklist', 'reply', `TEXT NOT NULL DEFAULT ''`);
 addColumn('users', 'accepted_terms', 'TEXT');
 addColumn('users', 'is_demo', 'INTEGER NOT NULL DEFAULT 0');
@@ -144,8 +150,9 @@ CREATE VIEW visible_reviews AS SELECT r.* FROM reviews r
 WHERE EXISTS (SELECT 1 FROM reviews o WHERE o.trip_id = r.trip_id AND o.author_company = r.target_company)
    OR r.created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-7 days');
 -- В рейтинге от каждой компании учитывается один, самый свежий отзыв: серия рейсов между двумя «своими» компаниями его не накручивает.
-CREATE VIEW rated_reviews AS SELECT r.* FROM visible_reviews r
-WHERE NOT EXISTS (SELECT 1 FROM visible_reviews n WHERE n.target_company = r.target_company AND n.author_company = r.author_company AND n.id > r.id);
+-- В рейтинг идут только отзывы проверенных компаний: пачка компаний-однодневок его не накрутит и не обрушит.
+CREATE VIEW rated_reviews AS SELECT r.* FROM visible_reviews r JOIN companies a ON a.id = r.author_company
+WHERE a.verified = 'verified' AND a.banned = 0 AND NOT EXISTS (SELECT 1 FROM visible_reviews n WHERE n.target_company = r.target_company AND n.author_company = r.author_company AND n.id > r.id);
 -- Отзыв учитывается в рейтинге, когда отзывы оставили обе стороны рейса или прошло 7 дней:
 -- так нельзя ответить оценкой на оценку.
 CREATE VIEW company_stats AS SELECT c.id, c.name, c.form, c.kind, c.bin, c.about, c.city_id, c.verified, c.created_at, c.banned,
@@ -154,7 +161,7 @@ CREATE VIEW company_stats AS SELECT c.id, c.name, c.form, c.kind, c.bin, c.about
   (SELECT COUNT(*) FROM visible_reviews r WHERE r.target_company = c.id) AS reviews,
   (SELECT COUNT(*) FROM rated_reviews r WHERE r.target_company = c.id) AS reviewers,
   (SELECT COUNT(*) FROM trips t WHERE t.status = 'completed' AND (t.customer_company = c.id OR t.carrier_company = c.id)) AS trips,
-  (SELECT COUNT(*) FROM blacklist b WHERE b.company_id = c.id) AS bl
+  (SELECT COUNT(*) FROM blacklist b JOIN companies a ON a.id = b.author_company WHERE b.company_id = c.id AND a.verified = 'verified' AND a.banned = 0) AS bl
 FROM companies c;
 `);
 

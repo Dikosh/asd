@@ -1,13 +1,14 @@
 // Кабинет: профиль и документы, отклики, сообщения, рейсы, машины, сотрудники, баланс, каталог, чёрный список, настройки.
 import { ReactNode, useEffect, useRef, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, BadgeCheck, Ban, Bookmark, Briefcase, Building2, Calculator, ChevronRight, FileText, Handshake, Inbox, LifeBuoy, LogOut, MessageSquare, Pencil, Plus,
   Route as RouteIcon, Search, Send, Settings, ShieldCheck, Trash2, TrendingUp, Truck, Upload, UserRound, Users, UsersRound, Wallet,
 } from 'lucide-react';
 import { api, BODY_L, Company, DOC_L, fmtDate, fmtWhen, LOADING_L, Me, money, num, opts, ROLE_L, t, Trip, useApp, useEvent, useLoad } from '../core';
-import { Chips, CitySelect, CompanyBadge, Empty, Field, LangSwitch, Loading, Modal, Select, Tabs } from '../ui';
+import { Chips, CitySelect, CompanyBadge, Empty, Field, LangSwitch, Loading, Modal, Select, Tabs, ReasonModal } from '../ui';
 import { TripSummary } from './TripPage';
+import { ContactButtons } from '../listing';
 import { AdminExtra, Partners, PlanCard, Team } from './CabinetExtra';
 import { PushToggle } from './Notifications';
 
@@ -15,7 +16,7 @@ export default function Cabinet() {
   const { tab, id } = useParams();
   const { me } = useApp();
   const items: { key: string; label: string; icon: ReactNode; badge?: number; el: ReactNode }[] = [
-    { key: 'profile', label: t('Кабинет'), icon: <UserRound size={19} />, el: <Profile /> },
+    { key: 'profile', label: t('Профиль'), icon: <UserRound size={19} />, el: <Profile /> },
     { key: 'responses', label: t('Отклики'), icon: <Inbox size={19} />, badge: me!.counters.responses, el: <Responses /> },
     { key: 'messages', label: t('Сообщения'), icon: <MessageSquare size={19} />, badge: me!.counters.unread, el: <Messages chatId={id ? Number(id) : null} /> },
     { key: 'trips', label: t('Рейсы'), icon: <RouteIcon size={19} />, badge: me!.counters.trips, el: <Trips /> },
@@ -30,8 +31,11 @@ export default function Cabinet() {
     ...(me!.user.isAdmin ? [{ key: 'admin', label: t('Модерация'), icon: <ShieldCheck size={19} />, el: <Admin /> }] : []),
   ];
   // водитель из команды ведёт рейсы; сделки, деньги и документы — у владельца и сотрудников
-  const visible = me!.user.companyRole === 'driver' ? items.filter((i) => ['profile', 'trips', 'team', 'catalog', 'settings'].includes(i.key)) : items;
+  // водителю-одиночке не показываем то, что нужно только компаниям
+  const visible = me!.user.companyRole === 'driver' ? items.filter((i) => ['profile', 'trips', 'team', 'catalog', 'settings'].includes(i.key))
+    : me!.user.role === 'driver' ? items.filter((i) => !['employees', 'balance', 'partners'].includes(i.key)) : items;
   const current = visible.find((i) => i.key === tab);
+  if (tab && !current) return <Navigate to="/cabinet" replace />;
   return (
     <div className={`cabinet ${current ? 'has-tab' : ''}`}>
       <aside className="card cab-menu">
@@ -74,6 +78,9 @@ function Profile() {
   const file = useRef<HTMLInputElement>(null);
   const VER: Record<string, string> = { none: 'Не проверена', pending: 'На проверке', verified: 'Проверена', rejected: 'Проверка не пройдена' };
   const DOC_ST: Record<string, string> = { pending: 'На проверке', approved: 'Принят', rejected: 'Отклонён' };
+  const binSaved = !!c.bin && c.binValid;
+  const hasDoc = !!docs.data?.some((d) => (d.kind === 'registration' || d.kind === 'id_card') && d.status !== 'rejected');
+  const canVerify = binSaved && hasDoc;
 
   const upload = async (f: File) => {
     if (f.size > 5 * 1024 * 1024) return act(() => Promise.reject(new Error('Файл больше 5 МБ')));
@@ -87,7 +94,7 @@ function Profile() {
 
   return (
     <div className="stack">
-      <h1 className="page-title">{t('Кабинет')}</h1>
+      <h1 className="page-title">{t('Профиль')}</h1>
       <div className="card form">
         <h3>{t('Общая информация')}</h3>
         <div className="grid2">
@@ -122,11 +129,18 @@ function Profile() {
           <button className="btn soft" onClick={() => act(async () => setMe(await api<Me>('/company', 'PATCH', comp)), t('Сохранено'))}>{t('Сохранить')}</button>
           {c.verified === 'rejected' && c.verifyNote && <div className="form-error"><b>{t('Причина отказа')}:</b> {c.verifyNote}</div>}
           {c.verified !== 'verified' && c.verified !== 'pending' && (
-            <button className="btn primary" onClick={() => act(async () => { await api('/company/verify-request', 'POST'); setMe(await api<Me>('/me')); }, t('Заявка на проверку отправлена'))}>
+            <button className="btn primary" disabled={!canVerify} onClick={() => act(async () => { await api('/company/verify-request', 'POST'); setMe(await api<Me>('/me')); }, t('Заявка на проверку отправлена'))}>
               <ShieldCheck size={16} /> {t('Отправить на проверку')}
             </button>
           )}
         </div>
+        {c.verified !== 'verified' && c.verified !== 'pending' && (
+          <ul className="checklist">
+            <li className={binSaved ? 'done' : ''}>{binSaved ? <BadgeCheck size={16} /> : <span className="todo-dot" />} {t('Укажите БИН или ИИН и нажмите «Сохранить»')}</li>
+            <li className={hasDoc ? 'done' : ''}>{hasDoc ? <BadgeCheck size={16} /> : <span className="todo-dot" />} {t('Загрузите свидетельство о регистрации или удостоверение личности')}</li>
+            <li>{<span className="todo-dot" />} {t('Отправьте на проверку — модератор отвечает в течение рабочего дня')}</li>
+          </ul>
+        )}
       </div>
 
       <div className="card form">
@@ -140,7 +154,7 @@ function Profile() {
         {docs.data?.map((d) => (
           <div className="line" key={d.id}>
             <FileText size={18} />
-            <div className="grow"><a href={`/api/documents/${d.id}/file`} target="_blank" rel="noreferrer">{d.filename}</a><div className="muted small">{t(DOC_L[d.kind])} · {fmtDate(d.createdAt)}</div></div>
+            <div className="grow"><a href={`/api/documents/${d.id}/file`} target="_blank" rel="noreferrer">{d.filename}</a><div className="muted small">{t(DOC_L[d.kind])} · {fmtDate(d.createdAt)}</div>{d.status === 'rejected' && d.note && <div className="form-error"><b>{t('Причина отказа')}:</b> {d.note}</div>}</div>
             <span className={`status ${d.status === 'approved' ? 'accepted' : d.status === 'pending' ? 'sent' : 'declined'}`}>{t(DOC_ST[d.status])}</span>
             <button className="icon-btn" aria-label={t('Удалить')} onClick={async () => confirm(t('Удалить документ?')) && (await act(() => api(`/documents/${d.id}`, 'DELETE'))) && docs.reload()}><Trash2 size={17} /></button>
           </div>
@@ -190,7 +204,7 @@ function Responses() {
               <p>{r.message}</p>
               <div className="row between wrap">
                 <span className="muted small">
-                  {tab === 'incoming' ? <Link to={`/company/${r.companyId}`}>{r.companyName}</Link> : <Link to={`/company/${r.ownerCompanyId}`}>{r.ownerCompany}</Link>}
+                  {tab === 'incoming' ? <><Link to={`/company/${r.companyId}`}>{r.companyName}</Link> · {t(ROLE_L[r.companyKind])}{r.companyVerified === 'verified' ? ` · ${t('Проверена')}` : ''}{r.companyRating != null ? ` · ★ ${r.companyRating.toFixed(1)}` : ''}</> : <Link to={`/company/${r.ownerCompanyId}`}>{r.ownerCompany}</Link>}
                   {' · '}{r.price ? money(r.price, r.currency) : t('Без предложения цены')} · {fmtWhen(r.createdAt)}
                 </span>
                 <div className="row wrap">
@@ -199,8 +213,10 @@ function Responses() {
                   {r.status === 'sent' && tab === 'outgoing' && <button className="btn ghost" onClick={() => decide(r, 'withdraw', t('Отклик отозван'))}>{t('Отозвать отклик')}</button>}
                   {r.status === 'sent' && tab === 'incoming' && (
                     <>
-                      <button className="btn ghost" onClick={() => decide(r, 'decline', t('Отклик отклонён'))}>{t('Отклонить')}</button>
-                      <button className="btn primary" onClick={() => confirm(t('Принять отклик и создать рейс с этой компанией?')) && decide(r, 'accept', t('Рейс создан'))}>{t('Принять')}</button>
+                      <button className="btn ghost" onClick={() => confirm(t('Отклонить отклик компании «{name}»?', { name: r.companyName })) && decide(r, 'decline', t('Отклик отклонён'))}>{t('Отклонить')}</button>
+                      {r.companyKind === 'broker' && r.kind === 'cargo'
+                        ? <span className="muted small">{t('Таможенный брокер: договоритесь об услугах в чате')}</span>
+                        : <button className="btn primary" onClick={() => confirm(t('Создать рейс с компанией «{name}»{price}? Остальные отклики останутся без ответа, объявление скроется из поиска.', { name: r.companyName, price: r.price ? ` — ${money(r.price, r.currency)}` : '' })) && decide(r, 'accept', t('Рейс создан'))}>{t('Принять')}</button>}
                     </>
                   )}
                 </div>
@@ -242,7 +258,7 @@ function Messages({ chatId }: { chatId: number | null }) {
         {chats.data?.map((c) => (
           <Link key={c.id} to={`/cabinet/messages/${c.id}`} className={`chat-item ${c.id === chatId ? 'on' : ''}`}>
             <div className="row between"><b>{c.peerCompany}</b>{c.unread > 0 && <span className="badge inline">{c.unread}</span>}</div>
-            <div className="muted small">{cityName(c.fromId)} → {cityName(c.toId)} · {c.peerName}</div>
+            <div className="muted small">{cityName(c.fromId)} → {cityName(c.toId)}{c.peerName ? ` · ${c.peerName}` : ''}</div>
             <div className="chat-last">{c.lastText}</div>
           </Link>
         ))}
@@ -258,6 +274,7 @@ function Messages({ chatId }: { chatId: number | null }) {
                 <div className="muted small"><Link to={`/listing/${chat.listingId}`}>{chat.kind === 'cargo' ? t('Груз') : t('Транспорт')}: {cityName(chat.fromId)} → {cityName(chat.toId)}</Link></div>
               </div>
             )}
+            {chat?.peerPhone && <div className="row chat-contacts"><ContactButtons phone={chat.peerPhone} /></div>}
           </header>
           <div className="chat-msgs">
             {msgs.data?.map((m) => (
@@ -490,7 +507,7 @@ function Blacklist() {
   return (
     <div className="stack">
       <h1 className="page-title">{t('Чёрный список')}</h1>
-      <p className="muted">{t('Компании, на которых пожаловались участники. У каждой записи — причина и отзыв. Добавить компанию можно с её страницы в каталоге.')}</p>
+      <p className="muted">{t('Компании, которых участники внесли в чёрный список после рейса с ними. У каждой записи — причина и отзыв. Внести компанию можно с её страницы — кнопка появляется, если у вас был с ней рейс. Жалоба модератору — отдельное действие: она в этот список не попадает.')}</p>
       <div className="search-input"><Search size={17} /><input value={q} onChange={(e) => setQ(e.target.value)} placeholder={t('Название или БИН')} /></div>
       {loading ? <Loading /> : (
         <div className="list">
@@ -503,7 +520,8 @@ function Blacklist() {
               <div><b>{t('Причина')}:</b> {b.reason}</div>
               {b.review && <p>{b.review}</p>}
               <div className="row between wrap">
-                <span className="muted small">{b.author} · {fmtDate(b.createdAt)}{b.bin ? ` · ${t('БИН')} ${b.bin}` : ''}</span>
+                <span className="muted small">{b.author} · {fmtDate(b.createdAt)}{b.bin ? ` · ${t('БИН')} ${b.bin}` : ''}{b.counted ? '' : ` · ${t('автор не проверен — в индикаторе не учитывается')}`}</span>
+                {b.canDelete && !b.mine && <button className="btn ghost danger" onClick={async () => confirm(t('Удалить эту запись из чёрного списка? Действие попадёт в журнал модератора.')) && (await act(() => api(`/blacklist/${b.id}`, 'DELETE'), t('Запись удалена'))) && reload()}>{t('Удалить запись')}</button>}
                 {b.mine && <button className="btn ghost" onClick={async () => confirm(t('Убрать вашу запись из чёрного списка?')) && (await act(() => api(`/blacklist/${b.id}`, 'DELETE'))) && reload()}>{t('Убрать мою запись')}</button>}
               </div>
             </div>
@@ -552,11 +570,11 @@ function SettingsTab() {
 function Admin() {
   const { act } = useApp();
   const { data, loading, reload } = useLoad(() => api<{ companies: any[]; documents: any[] }>('/admin/queue'));
-  const decide = async (path: string, approve: boolean) => {
-    // при отказе модератор объясняет причину — компания увидит её в кабинете
-    const note = approve ? '' : prompt(t('Причина отказа — её увидит компания')) ?? null;
-    if (note === null) return;
-    if (await act(() => api(path, 'POST', { approve, note }), approve ? t('Одобрено') : t('Отклонено'))) reload();
+  // при отказе модератор объясняет причину — компания увидит её в кабинете
+  const [reject, setReject] = useState<string | null>(null);
+  const decide = async (path: string, approve: boolean, note = '') => {
+    if (!approve && !note) return setReject(path);
+    if (await act(() => api(path, 'POST', { approve, note }), approve ? t('Одобрено') : t('Отклонено'))) { setReject(null); reload(); }
   };
   if (loading) return <Loading />;
   return (
@@ -566,7 +584,8 @@ function Admin() {
         <h3>{t('Компании на проверке')}</h3>
         {data?.companies.map((c) => (
           <div className="line" key={c.id}>
-            <div className="grow"><Link to={`/company/${c.id}`}><b>{c.form} «{c.name}»</b></Link><div className="muted small">{t('БИН')} {c.bin} · {t(ROLE_L[c.kind])}</div></div>
+            <div className="grow"><Link to={`/company/${c.id}`}><b>{c.form} «{c.name}»</b></Link><div className="muted small">{t('БИН')} {c.bin} · {t(ROLE_L[c.kind])}</div>
+              <div className="doc-chips">{c.docs.map((d: any) => <a key={d.id} className={`chip doc-${d.status}`} href={`/api/documents/${d.id}/file`} target="_blank" rel="noreferrer"><FileText size={13} /> {t(DOC_L[d.kind])}</a>)}{c.docs.length === 0 && <span className="muted small">{t('Документы не загружены')}</span>}</div></div>
             <button className="btn ghost" onClick={() => decide(`/admin/companies/${c.id}`, false)}>{t('Отклонить')}</button>
             <button className="btn primary" onClick={() => decide(`/admin/companies/${c.id}`, true)}>{t('Одобрить')}</button>
           </div>
@@ -586,6 +605,7 @@ function Admin() {
         {data?.documents.length === 0 && <p className="muted">{t('Очередь пуста.')}</p>}
       </div>
       <AdminExtra />
+      {reject && <ReasonModal title={t('Причина отказа')} hint={t('Причина отказа — её увидит компания')} label={t('Что нужно исправить')} confirm={t('Отклонить')} danger onClose={() => setReject(null)} onSubmit={(note) => decide(reject, false, note)} />}
     </div>
   );
 }

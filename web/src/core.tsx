@@ -20,7 +20,7 @@ export interface Listing {
 }
 export interface Me {
   user: { id: number; name: string; phone: string; email: string; role: string; isAdmin: boolean; companyRole: string; settings: Record<string, any> };
-  company: Company & { bin: string | null; binValid: boolean; about: string; cityId: string | null; balance: number; planUntil: string | null; verifyNote: string; banned?: boolean };
+  company: Company & { bin: string | null; binValid: boolean; about: string; cityId: string | null; balance: number; planUntil: string | null; verifyNote: string; banned?: boolean; banReason?: string };
   counters: { notifications: number; unread: number; responses: number; trips: number };
   pendingReviews: { tripId: number; companyName: string }[];
 }
@@ -43,19 +43,44 @@ export interface Trip {
 
 // ---------- API ----------
 export class ApiError extends Error {
+  field?: string;
+  need?: number;
   constructor(public status: number, public code: string, message: string) {
     super(message);
   }
 }
+// Названия полей и правила проверки — чтобы ошибку сервера показать на языке пользователя.
+export const FIELD_L: Record<string, string> = {
+  name: 'Имя', email: 'Почта', companyName: 'Название компании', phone: 'Телефон', code: 'Код', bin: 'БИН', about: 'О компании', weight: 'Вес', volume: 'Объём',
+  rate: 'Ставка', price: 'Цена', description: 'Описание', text: 'Текст', message: 'Сообщение', title: 'Заголовок', body: 'Текст', brand: 'Марка', plate: 'Госномер',
+  points: 'Маршрут', dateFrom: 'Дата начала', dateTo: 'Дата окончания', reason: 'Причина', review: 'Отзыв', note: 'Комментарий', salary: 'Оплата', position: 'Должность',
+  reply: 'Ответ', vehicle: 'Машина', experience: 'Стаж', rating: 'Оценка', cityId: 'Город', role: 'Роль', kind: 'Тип',
+};
+export const RULE_L: Record<string, string> = {
+  required: 'обязательное поле', min_len: 'не короче {n} симв.', max_len: 'не длиннее {n} симв.', min: 'не меньше {n}', max: 'не больше {n}',
+  email: 'проверьте адрес почты', invalid: 'недопустимое значение',
+};
 export async function api<T = any>(url: string, method = 'GET', body?: unknown): Promise<T> {
-  const res = await fetch('/api' + url, {
-    method,
-    headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
-    credentials: 'same-origin',
-  });
+  let res: Response;
+  try {
+    res = await fetch('/api' + url, {
+      method,
+      headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+      credentials: 'same-origin',
+    });
+  } catch {
+    // браузер не достучался до сервера: понятный текст вместо «Failed to fetch»
+    throw new ApiError(0, 'offline', t('Нет связи с сервером. Проверьте интернет и попробуйте ещё раз'));
+  }
   const data = await res.json().catch(() => null);
-  if (!res.ok) throw new ApiError(res.status, data?.error || 'error', data?.message || `Ошибка ${res.status}`);
+  if (!res.ok) {
+    const known = data?.rule && FIELD_L[data.field] && RULE_L[data.rule];
+    const e = new ApiError(res.status, data?.error || 'error', data?.tpl ? t(data.tpl, data.vars) : known ? `${t(FIELD_L[data.field])}: ${t(RULE_L[data.rule], { n: data.n })}` : data?.message || `Ошибка ${res.status}`);
+    e.field = data?.field;
+    e.need = data?.need;
+    throw e;
+  }
   return data as T;
 }
 
@@ -156,7 +181,7 @@ export const BODY_L: Record<string, string> = {
   chemtank: 'Химическая цистерна', crane: 'Манипулятор', tow: 'Эвакуатор', concrete: 'Бетоносмеситель', pickup: 'Пикап',
   minibus: 'Микроавтобус', bus: 'Автобус', tractor: 'Тягач',
 };
-export const FLAG_L: Record<string, string> = { tir: 'TIR', cmr: 'CMR', ekmt: 'ЕКМТ', t1: 'T1' };
+export const FLAG_L: Record<string, string> = { tir: 'TIR', cmr: 'CMR', ekmt: 'ЕКМТ', t1: 'T1', customs: 'Нужен таможенный брокер' };
 export const COUNTRY_L: Record<string, string> = {
   KZ: 'Казахстан', RU: 'Россия', UZ: 'Узбекистан', KG: 'Кыргызстан', CN: 'Китай', TJ: 'Таджикистан', TM: 'Туркменистан', BY: 'Беларусь',
   AZ: 'Азербайджан', GE: 'Грузия', AM: 'Армения', TR: 'Турция', MN: 'Монголия', IR: 'Иран', PL: 'Польша', DE: 'Германия', LT: 'Литва',
@@ -178,7 +203,7 @@ export const STAGE_L: Record<string, string> = {
   planned: 'Рейс назначен', to_loading: 'Еду на погрузку', loading: 'Погрузка', in_transit: 'В пути', unloading: 'Выгрузка', delivered: 'Доставлено',
 };
 export const DOC_L: Record<string, string> = {
-  id_card: 'Удостоверение личности', selfie: 'Фото с удостоверением в руках', registration: 'Свидетельство о регистрации', license: 'Лицензия', driver_license: 'Водительские права', other: 'Другое',
+  id_card: 'Удостоверение личности', selfie: 'Фото с удостоверением в руках', registration: 'Свидетельство о регистрации', license: 'Лицензия', customs_license: 'Свидетельство таможенного представителя', driver_license: 'Водительские права', other: 'Другое',
 };
 export const CUR: Record<string, string> = { KZT: '₸', USD: '$', RUB: '₽' };
 export const opts = (keys: string[], labels: Record<string, string>) => keys.map((k) => ({ value: k, label: t(labels[k] || k) }));

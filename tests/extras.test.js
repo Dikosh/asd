@@ -240,10 +240,26 @@ test('защита: настройки, чёрный список, блокир�
   assert.equal((await customer.call('GET', '/api/listings?kind=cargo&sort=__proto__')).status, 200);
   assert.equal((await customer.call('POST', '/api/documents', { kind: 'other', filename: 'x', mime: 'constructor', data: 'AAAAAAAAAAAAAAAA' })).status, 400);
   // блокировка компании модератором
-  await admin.post(`/api/admin/companies/${stranger.me.company.id}/ban`, { banned: true });
-  assert.equal(await stranger.get('/api/me'), null, 'сессии заблокированной компании закрыты');
-  const back = await signIn('+77052220001');
-  assert.equal((await back.call('POST', '/api/listings', cargo())).data.error, 'banned');
+  const banUrl = `/api/admin/companies/${stranger.me.company.id}/ban`;
+  assert.equal((await admin.call('POST', banUrl, { banned: true })).status, 400, 'без причины заблокировать нельзя');
+  await admin.post(banUrl, { banned: true, reason: 'Просили предоплату и пропали' });
+  const banned = await stranger.get('/api/me');
+  assert.equal(banned.company.banned, true);
+  assert.equal(banned.company.banReason, 'Просили предоплату и пропали', 'компания видит причину');
+  assert.equal(banned.company.indicator, 'red');
+  assert.equal((await stranger.call('POST', '/api/listings', cargo())).data.error, 'banned');
+  assert.ok((await stranger.get('/api/notifications')).some((n) => n.title === 'Компания заблокирована модератором'));
+  // обжалование: обращение в поддержку, ответ модератора, снятие блокировки
+  await stranger.post('/api/feedback', { text: 'Это ошибка, прошу разобраться' });
+  const o = await admin.get('/api/admin/overview');
+  assert.ok(o.banned.some((x) => x.id === stranger.me.company.id));
+  assert.ok(o.log.some((x) => x.action === 'ban'));
+  const f = o.feedback.find((x) => x.text === 'Это ошибка, прошу разобраться');
+  await admin.post(`/api/admin/feedback/${f.id}`, { reply: 'Проверили, блокировку сняли' });
+  assert.equal((await stranger.get('/api/feedback/mine'))[0].reply, 'Проверили, блокировку сняли');
+  await admin.post(banUrl, { banned: false });
+  assert.equal((await stranger.get('/api/me')).company.banned, false);
+  assert.ok((await admin.get('/api/admin/search?q=' + encodeURIComponent('2220001'))).some((x) => x.id === stranger.me.company.id), 'поиск по телефону');
 });
 
 test('жалобы, поддержка, новости и сводка модератора', async () => {
