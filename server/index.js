@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { q1, run } from './db.js';
-import { DEMO, HttpError, PROD, loadUser } from './lib.js';
+import { DEMO, HttpError, PROD, TILE_ORIGIN, loadUser } from './lib.js';
 import authRoutes, { rateLimit } from './routes/auth.js';
 import listingRoutes, { expireListings } from './routes/listings.js';
 import dealRoutes, { autoCompleteTrips } from './routes/deals.js';
@@ -24,11 +24,12 @@ export function createApp() {
   app.disable('x-powered-by');
   app.use((_req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Referrer-Policy', 'same-origin');
+    // сервер карт должен видеть, с какого сайта идёт запрос (иначе OpenStreetMap отвечает «Access blocked»)
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader(
       'Content-Security-Policy',
-      "default-src 'self'; img-src 'self' data: blob: https://*.tile.openstreetmap.org; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+      `default-src 'self'; img-src 'self' data: blob: https://tile.openstreetmap.org https://*.tile.openstreetmap.org ${TILE_ORIGIN}; style-src 'self' 'unsafe-inline'; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'`,
     );
     if (PROD) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
     next();

@@ -4,6 +4,15 @@ import { q, q1, run } from './db.js';
 import { cityById, isValidBin } from './geo.js';
 
 // Демо-режим включается только явно: он показывает код входа на экране и даёт вход одним нажатием под любой ролью.
+// Подложка карты. По умолчанию — серверы OpenStreetMap: им нужен заголовок Referer, и они рассчитаны
+// на небольшую нагрузку. Для боевого запуска задайте своего поставщика: TILE_URL и TILE_ATTRIBUTION.
+export const TILES = {
+  url: process.env.TILE_URL || 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  attribution: process.env.TILE_ATTRIBUTION || '© OpenStreetMap',
+};
+export const TILE_ORIGIN = (() => {
+  try { return new URL(TILES.url.replace(/\{[a-z]\}/g, 'a').replace(/\{[^}]+\}/g, '0')).origin.replace(/\/\/a\./, '//*.'); } catch { return ''; }
+})();
 export const DEMO = process.env.DEMO_MODE === '1';
 export const PROD = process.env.NODE_ENV === 'production';
 

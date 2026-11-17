@@ -27,7 +27,7 @@ export interface Me {
 export interface Meta {
   demo: boolean; cities: City[]; roles: string[]; body: string[]; cargo: string[]; loading: string[]; pay: string[]; currencies: string[];
   stages: string[]; docKinds: string[]; boostPrice: number; flags: string[]; places: number;
-  support: { phone: string; telegram: string; hours: string }; limits: { activeFree: number; activePro: number; perHour: number; boostsPro: number };
+  support: { phone: string; telegram: string; hours: string }; tiles: { url: string; attribution: string }; limits: { activeFree: number; activePro: number; perHour: number; boostsPro: number };
   plan: { price: number; days: number; free: { seats: number; alerts: number }; pro: { seats: number; alerts: number } }; stats: { cargo: number; truck: number; companies: number; trips: number };
 }
 export interface Trip {

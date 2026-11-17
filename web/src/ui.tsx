@@ -390,12 +390,13 @@ export function MapView({ routes, markers, height = 320, fitKey }: { routes: Map
   const map = useRef<L.Map | null>(null);
   const layer = useRef<L.LayerGroup | null>(null);
   const fitted = useRef<string | null>(null);
+  const tiles = useApp().meta.tiles;
 
   useEffect(() => {
     // на телефоне один палец листает страницу, карту двигают двумя — иначе под ней не прокрутить экран
     const touch = window.matchMedia?.('(pointer: coarse)').matches;
     const m = L.map(el.current!, { zoomControl: true, attributionControl: true, scrollWheelZoom: false, zoomAnimation: false, markerZoomAnimation: false, dragging: !touch }).setView([48, 68], 5);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '© OpenStreetMap' }).addTo(m);
+    L.tileLayer(tiles.url, { maxZoom: 18, attribution: tiles.attribution }).addTo(m);
     layer.current = L.layerGroup().addTo(m);
     map.current = m;
     const ro = new ResizeObserver(() => m.invalidateSize());

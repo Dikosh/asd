@@ -83,6 +83,7 @@ docker run -p 3000:3000 -v jolda-data:/data -e DEMO_MODE=1 -e INSECURE_COOKIES=1
 | `SUPPORT_PHONE`, `TELEGRAM_URL`, `SUPPORT_HOURS` | — | Контакты поддержки в разделе «Помощь» |
 | `SMS_WEBHOOK_URL`, `SMS_WEBHOOK_TOKEN` | — | Отправка кодов входа через вашего SMS-провайдера |
 | `OSRM_URL` | — | Сервер маршрутизации OSRM для расстояний по дорогам |
+| `TILE_URL`, `TILE_ATTRIBUTION` | серверы OpenStreetMap | Подложка карты. Бесплатные серверы OpenStreetMap годятся для показа, для боевой нагрузки подключите поставщика карт (MapTiler, Stadia Maps, 2ГИС и т. п.), например `https://api.maptiler.com/maps/streets-v2/{z}/{x}/{y}.png?key=…` |
 | `INSECURE_COOKIES` | выключен | `1` разрешает вход по HTTP при `NODE_ENV=production` — только для показа на своём компьютере |
 | `PUSH_CONTACT` | `mailto:support@jolda.local` | Контакт владельца сервиса для push-серверов браузеров |
 

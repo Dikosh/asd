@@ -59,6 +59,7 @@ export default function authRoutes(app) {
       docKinds: L.DOC_KINDS,
       boostPrice: L.BOOST_PRICE,
       // контакты поддержки задаются при установке; без них остаётся форма обращения
+      tiles: L.TILES,
       support: { phone: process.env.SUPPORT_PHONE || '', telegram: process.env.TELEGRAM_URL || '', hours: process.env.SUPPORT_HOURS || '' },
       stats: {
         cargo: active('cargo'),
