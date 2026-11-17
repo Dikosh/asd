@@ -1,0 +1,224 @@
+// Демо-данные: компании, объявления, рейсы, отзывы — чтобы платформа выглядела живой сразу после запуска.
+import { fileURLToPath } from 'node:url';
+import { db, q1, run, insert, tx } from './db.js';
+import { cityById, roadKm, isValidBin } from './geo.js';
+import { token } from './lib.js';
+
+// детерминированный генератор, чтобы демо-данные были одинаковыми при каждом запуске
+let s = 20261117;
+const rnd = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 2 ** 32);
+const pick = (a) => a[Math.floor(rnd() * a.length)];
+const int = (a, b) => a + Math.floor(rnd() * (b - a + 1));
+const day = (n) => new Date(Date.now() + n * 86400_000).toISOString().slice(0, 10);
+const ago = (h) => new Date(Date.now() - h * 3600_000).toISOString();
+
+function makeBin(i) {
+  for (let k = 0; k < 10; k++) {
+    const base = `9${String(i).padStart(2, '0')}140${String(k)}${String(1000 + i * 37).slice(0, 4)}`;
+    for (let c = 0; c < 10; c++) if (isValidBin(base + c)) return base + c;
+  }
+  return null;
+}
+
+const COMPANIES = [
+  // name, form, kind, city, контакт, телефон, проверена
+  ['Jolda Модерация', 'ТОО', 'logist', 'astana', 'Администратор', '+77000000000', 'verified'],
+  ['Астана Трейд', 'ТОО', 'customer', 'astana', 'Айгерим Сапарова', '+77010000001', 'verified'],
+  ['Жумабаев Транс', 'ИП', 'carrier', 'karaganda', 'Ерлан Жумабаев', '+77010000002', 'verified'],
+  ['Silk Way Logistics', 'ТОО', 'logist', 'almaty', 'Данияр Ахметов', '+77010000003', 'verified'],
+  ['КеденСервис', 'ТОО', 'broker', 'khorgos', 'Мадина Оспанова', '+77010000004', 'verified'],
+  ['Тулегенов Б.', 'ИП', 'driver', 'shymkent', 'Бауыржан Тулегенов', '+77010000005', 'none'],
+  ['Алатау Агро', 'ТОО', 'customer', 'almaty', 'Асель Нурланова', '+77015550101', 'verified'],
+  ['СтройМаркет KZ', 'ТОО', 'customer', 'shymkent', 'Руслан Ибраев', '+77015550102', 'verified'],
+  ['Каспий Металл', 'ТОО', 'customer', 'aktau', 'Тимур Касымов', '+77015550103', 'none'],
+  ['Сарыарка Карго', 'ТОО', 'carrier', 'astana', 'Нурлан Байжанов', '+77015550104', 'verified'],
+  ['Оңтүстік Транс', 'ИП', 'carrier', 'shymkent', 'Серик Абдрахманов', '+77015550105', 'verified'],
+  ['Батыс Логистик', 'ТОО', 'carrier', 'aktobe', 'Азамат Утегенов', '+77015550106', 'none'],
+  ['Ертіс Авто', 'ИП', 'carrier', 'pavlodar', 'Канат Смагулов', '+77015550107', 'verified'],
+  ['Быстрый Груз 24', 'ТОО', 'carrier', 'almaty', 'Менеджер', '+77015550108', 'none'],
+  ['Евразия Брокер', 'ТОО', 'broker', 'almaty', 'Жанна Ким', '+77015550109', 'verified'],
+  ['Номад Экспедиция', 'ТОО', 'logist', 'astana', 'Арман Сейтказин', '+77015550110', 'none'],
+];
+
+const ROUTES = [
+  ['astana', 'karaganda', 'almaty'], ['almaty', 'astana'], ['almaty', 'shymkent'], ['shymkent', 'almaty'], ['astana', 'kostanay'],
+  ['astana', 'pavlodar'], ['karaganda', 'astana'], ['almaty', 'taraz', 'shymkent'], ['shymkent', 'kyzylorda', 'aktobe'], ['aktobe', 'atyrau'],
+  ['atyrau', 'aktau'], ['almaty', 'taldykorgan', 'oskemen'], ['semey', 'pavlodar', 'astana'], ['khorgos', 'almaty'], ['almaty', 'khorgos'],
+  ['astana', 'petropavl'], ['kokshetau', 'astana', 'karaganda'], ['almaty', 'bishkek'], ['shymkent', 'tashkent'], ['astana', 'omsk'],
+  ['kostanay', 'chelyabinsk'], ['oral', 'samara'], ['almaty', 'balkhash', 'karaganda', 'astana'], ['karaganda', 'zhezkazgan'], ['aktobe', 'orenburg'],
+  ['almaty', 'novosibirsk'], ['astana', 'ekaterinburg'], ['taraz', 'almaty'], ['turkistan', 'shymkent', 'almaty'], ['urumqi', 'khorgos', 'almaty'],
+  ['astana', 'almaty'], ['pavlodar', 'ekibastuz', 'karaganda'], ['oskemen', 'semey', 'astana'], ['almaty', 'moscow'], ['shymkent', 'astana'],
+];
+const CARGO_DESC = {
+  food: ['Продукты на паллетах, 33 места', 'Соки и вода, паллеты', 'Мука в мешках'], building: ['Гипсокартон, пачки', 'Цемент в мешках, биг-бэги', 'Кирпич на поддонах'],
+  equipment: ['Станки в ящиках', 'Холодильное оборудование'], consumer: ['Бытовая техника, коробки', 'Текстиль, тюки'], agro: ['Пшеница насыпью', 'Лук в сетках'],
+  metal: ['Арматура 12 м', 'Листовой прокат'], groupage: ['Сборный груз, 6 паллет', 'Коробки, догруз'], furniture: ['Офисная мебель в упаковке'], other: ['Тара, пустые паллеты'],
+};
+const BODY_FOR = { food: ['ref', 'isotherm', 'tent'], building: ['tent', 'board'], equipment: ['tent', 'trawl'], consumer: ['tent', 'van'], agro: ['grain', 'tent'], metal: ['board', 'tent'], groupage: ['tent', 'van'], furniture: ['tent', 'van'], other: ['tent'] };
+const TRUCKS = [['DAF XF 105', 'tent', 20, 86], ['Volvo FH', 'ref', 20, 82], ['MAN TGX', 'tent', 22, 92], ['Scania R450', 'ref', 20, 86], ['КамАЗ 5490', 'tent', 20, 82],
+  ['Mercedes Actros', 'isotherm', 20, 86], ['Shacman X3000', 'tipper', 25, 20], ['ГАЗель Next', 'van', 1.5, 16], ['Hyundai HD78', 'van', 5, 22], ['Howo T5G', 'board', 20, 60], ['Sitrak C7H', 'container', 26, 76]];
+
+export function seed() {
+  tx(() => {
+    const comp = {};
+    const user = {};
+    COMPANIES.forEach(([name, form, kind, city, person, phone, verified], i) => {
+      const cid = insert('INSERT INTO companies(name, form, kind, bin, city_id, verified, balance, about) VALUES(?, ?, ?, ?, ?, ?, ?, ?)',
+        name, form, kind, makeBin(i + 1), city, verified, i >= 1 && i <= 5 ? 5000 : 0,
+        kind === 'broker' ? 'Таможенное оформление, декларирование, сертификация, СВХ.' : kind === 'carrier' ? 'Собственный парк, работаем по Казахстану и СНГ.' : '');
+      comp[name] = cid;
+      user[name] = insert('INSERT INTO users(name, phone, email, role, company_id, is_admin) VALUES(?, ?, ?, ?, ?, ?)',
+        person, phone, `demo${i}@jolda.local`, kind, cid, i === 0 ? 1 : 0);
+    });
+    const carriers = COMPANIES.filter((c) => c[2] === 'carrier').map((c) => c[0]);
+    const customers = COMPANIES.filter((c) => c[2] === 'customer' || (c[2] === 'logist' && c[0] !== 'Jolda Модерация')).map((c) => c[0]);
+
+    // ---- парк машин и сотрудники ----
+    carriers.forEach((name, i) => {
+      for (let k = 0; k < 2; k++) {
+        const [brand, body, w, v] = TRUCKS[(i * 2 + k) % TRUCKS.length];
+        run('INSERT INTO vehicles(company_id, brand, plate, body_type, weight, volume, loading) VALUES(?, ?, ?, ?, ?, ?, ?)',
+          comp[name], brand, `${int(100, 999)} ${pick(['ABA', 'KZT', 'AEO', 'BNR'])} ${pick(['01', '02', '09', '13', '17'])}`, body, w, v, JSON.stringify(['rear', 'side']));
+      }
+    });
+    run(`INSERT INTO employees(company_id, name, phone, position, license_cats, experience, esutd, esutd_number) VALUES
+      (?, 'Марат Кенжебеков', '+77015550201', 'Водитель', 'C, CE', 12, 'registered', 'ТД-2024-00417'),
+      (?, 'Олжас Берик', '+77015550202', 'Водитель', 'C, CE', 5, 'unknown', '')`, comp['Жумабаев Транс'], comp['Жумабаев Транс']);
+
+    // ---- объявления ----
+    const addListing = (kind, owner, points, o = {}) => {
+      const km = roadKm(points.map((p) => cityById.get(p)));
+      const withRate = o.rate !== undefined ? o.rate !== null : rnd() > 0.25;
+      const perKm = kind === 'cargo' ? int(260, 430) : int(230, 360);
+      const rate = o.rate !== undefined ? o.rate : withRate ? Math.max(20000, Math.round((km * perKm) / 5000) * 5000) : null;
+      const from = o.from ?? int(0, 4);
+      return insert(
+        `INSERT INTO listings(kind, user_id, company_id, status, points, from_id, to_id, brand, body_type, cargo_type, weight, volume, loading,
+           date_from, date_to, pay_terms, rate, currency, description, distance_km, created_at, closed_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'KZT', ?, ?, ?, ?)`,
+        kind, user[owner], comp[owner], o.status || 'active', JSON.stringify(points), points[0], points[points.length - 1], o.brand || '',
+        o.body ?? null, o.cargo ?? null, o.weight ?? null, o.volume ?? null, JSON.stringify(o.loading || ['rear']),
+        o.dateFrom || day(from), o.dateTo || day(from + int(4, 14)),
+        JSON.stringify(rate ? pick([['cashless_vat'], ['cashless_novat', 'prepay'], ['cash'], ['cashless_vat', 'prepay']]) : []),
+        rate, o.description || '', km, o.createdAt || ago(int(1, 70)), o.status && o.status !== 'active' ? ago(int(80, 400)) : null,
+      );
+    };
+    const cargoKinds = Object.keys(CARGO_DESC);
+    ROUTES.forEach((route, i) => {
+      const cargo = cargoKinds[i % cargoKinds.length];
+      addListing('cargo', customers[i % customers.length], route, {
+        cargo, body: pick(BODY_FOR[cargo]), weight: pick([1.5, 3, 5, 10, 15, 18, 20, 20, 22]), volume: pick([12, 20, 36, 60, 82, 86]),
+        loading: pick([['rear'], ['rear', 'side'], ['top', 'side'], ['full']]), description: pick(CARGO_DESC[cargo]),
+      });
+    });
+    ROUTES.slice(0, 26).forEach((route, i) => {
+      const [brand, body, w, v] = TRUCKS[i % TRUCKS.length];
+      addListing('truck', carriers[i % carriers.length], i % 3 === 0 ? [...route].reverse() : route, {
+        brand, body, weight: w, volume: v, loading: pick([['rear', 'side'], ['rear'], ['rear', 'side', 'top', 'full']]),
+        description: pick(['Готов к загрузке, документы в порядке.', 'Возьму догруз по пути.', 'Опытный водитель, CMR.', '']),
+      });
+    });
+
+    // ---- история: завершённые рейсы и отзывы ----
+    const GOOD = ['Всё чётко, груз доставлен вовремя.', 'Рекомендую, водитель на связи весь рейс.', 'Оплата день в день, спасибо.', 'Работаем не первый раз, без нареканий.'];
+    const FINE = ['Хорошо, но была задержка на погрузке.', 'В целом нормально, документы пришлось ждать.'];
+    const BAD = ['Сорвали сроки на три дня, на звонки не отвечали.', 'Взяли предоплату и пропали на неделю.', 'Машина пришла не того типа, груз подмочен.'];
+    const history = (customer, carrier, route, ratingToCarrier, ratingToCustomer, hoursAgo) => {
+      const lid = addListing('cargo', customer, route, { status: 'closed', cargo: pick(cargoKinds), body: 'tent', weight: 20, volume: 82, createdAt: ago(hoursAgo + 200), dateFrom: day(-20), dateTo: day(-10) });
+      const price = q1('SELECT rate FROM listings WHERE id = ?', lid).rate;
+      const tid = insert(
+        `INSERT INTO trips(listing_id, customer_user, customer_company, carrier_user, carrier_company, price, status, stage, track_token, created_at, finished_at)
+         VALUES(?, ?, ?, ?, ?, ?, 'completed', 'delivered', ?, ?, ?)`,
+        lid, user[customer], comp[customer], user[carrier], comp[carrier], price, token(12), ago(hoursAgo + 96), ago(hoursAgo),
+      );
+      const rev = (author, target, rating) =>
+        run('INSERT INTO reviews(trip_id, author_user, author_company, target_company, rating, text, created_at) VALUES(?, ?, ?, ?, ?, ?, ?)',
+          tid, user[author], comp[author], comp[target], rating, rating === 5 ? pick(GOOD) : rating === 4 ? pick(FINE) : pick(BAD), ago(hoursAgo - 1));
+      rev(customer, carrier, ratingToCarrier);
+      rev(carrier, customer, ratingToCustomer);
+    };
+    let h = 30;
+    for (const carrier of carriers.filter((c) => c !== 'Быстрый Груз 24')) {
+      for (let k = 0; k < int(2, 4); k++) history(pick(customers), carrier, pick(ROUTES), pick([5, 5, 5, 4, 4]), pick([5, 5, 4]), (h += int(20, 90)));
+    }
+    history('Алатау Агро', 'Быстрый Груз 24', ['almaty', 'astana'], 1, 4, 300);
+    history('СтройМаркет KZ', 'Быстрый Груз 24', ['shymkent', 'almaty'], 2, 5, 520);
+    history('Каспий Металл', 'Быстрый Груз 24', ['aktau', 'atyrau'], 1, 4, 760);
+    run(`INSERT INTO blacklist(company_id, author_user, author_company, reason, review) VALUES
+      (?, ?, ?, 'Срыв сроков и отказ от связи', 'Груз шёл на трое суток дольше, диспетчер не отвечал. Работать не советуем.'),
+      (?, ?, ?, 'Невозврат предоплаты', 'Взяли предоплату 30%, машину на погрузку не подали.')`,
+      comp['Быстрый Груз 24'], user['Алатау Агро'], comp['Алатау Агро'], comp['Быстрый Груз 24'], user['Каспий Металл'], comp['Каспий Металл']);
+
+    // ---- сценарий для демо-аккаунтов: активный рейс, отклики, чат ----
+    const chat = (listing, owner, peer, msgs) => {
+      const cid = insert('INSERT INTO chats(listing_id, owner_id, peer_id) VALUES(?, ?, ?)', listing, user[owner], user[peer]);
+      msgs.forEach(([who, text], i) => run('INSERT INTO messages(chat_id, sender_id, text, is_read, created_at) VALUES(?, ?, ?, ?, ?)',
+        cid, user[who], text, i < msgs.length - 1 ? 1 : 0, ago((msgs.length - i) * 0.4)));
+    };
+    const A = 'Астана Трейд';
+    const B = 'Жумабаев Транс';
+    const live = addListing('cargo', A, ['astana', 'karaganda', 'almaty'], { cargo: 'food', body: 'ref', weight: 18, volume: 82, rate: 520000, dateFrom: day(-1), dateTo: day(3), from: 0, description: 'Молочная продукция, температурный режим +2…+6 °C. Выгрузка в Караганде 4 паллеты.', createdAt: ago(40) });
+    const r1 = insert(`INSERT INTO responses(listing_id, user_id, company_id, message, price, status, created_at) VALUES(?, ?, ?, 'Реф свободен, могу встать на загрузку завтра утром.', 500000, 'accepted', ?)`, live, user[B], comp[B], ago(30));
+    chat(live, A, B, [[B, 'Реф свободен, могу встать на загрузку завтра утром.\n— 500000 KZT'], [A, 'Добрый день! Подходит. Режим +2…+6, термописец есть?'], [B, 'Да, есть, распечатку дам на выгрузке.'], [A, 'Отлично, принимаю отклик.'], [B, 'Загрузился, выехал из Астаны.']]);
+    const trip = insert(
+      `INSERT INTO trips(listing_id, response_id, customer_user, customer_company, carrier_user, carrier_company, price, stage, share_gps, track_token, created_at)
+       VALUES(?, ?, ?, ?, ?, ?, 500000, 'in_transit', 1, 'demo-track-jolda', ?)`,
+      live, r1, user[A], comp[A], user[B], comp[B], ago(28),
+    );
+    [['planned', 28], ['to_loading', 20], ['loading', 16], ['in_transit', 13]].forEach(([st, hh]) => run('INSERT INTO trip_events(trip_id, stage, at) VALUES(?, ?, ?)', trip, st, ago(hh)));
+    // трек: Астана → Караганда → в сторону Балхаша
+    const way = [[51.17, 71.43], [50.75, 72.0], [50.3, 72.6], [49.8, 73.1], [49.2, 73.5], [48.6, 73.9], [48.0, 74.3], [47.5, 74.7]];
+    let n = 0;
+    for (let i = 1; i < way.length; i++) {
+      for (let k = 0; k < 6; k++) {
+        const f = k / 6;
+        run('INSERT INTO positions(trip_id, lat, lon, speed, at) VALUES(?, ?, ?, ?, ?)', trip,
+          way[i - 1][0] + (way[i][0] - way[i - 1][0]) * f + (rnd() - 0.5) * 0.02, way[i - 1][1] + (way[i][1] - way[i - 1][1]) * f + (rnd() - 0.5) * 0.02, int(62, 88), ago(13 - n++ * 0.3));
+      }
+    }
+
+    const open1 = addListing('cargo', A, ['astana', 'kostanay'], { cargo: 'consumer', body: 'tent', weight: 12, volume: 60, rate: 290000, from: 1, description: 'Бытовая техника в коробках, 22 паллеты. Нужны ремни.', createdAt: ago(5) });
+    run(`INSERT INTO responses(listing_id, user_id, company_id, message, price, created_at) VALUES(?, ?, ?, 'Тент 20 т в Астане, готов забрать послезавтра.', 280000, ?)`, open1, user['Сарыарка Карго'], comp['Сарыарка Карго'], ago(3));
+    chat(open1, A, 'Сарыарка Карго', [['Сарыарка Карго', 'Тент 20 т в Астане, готов забрать послезавтра.\n— 280000 KZT']]);
+    run(`INSERT INTO responses(listing_id, user_id, company_id, message, price, created_at) VALUES(?, ?, ?, 'Заберём сегодня, предоплата 50%.', 250000, ?)`, open1, user['Быстрый Груз 24'], comp['Быстрый Груз 24'], ago(2));
+    chat(open1, A, 'Быстрый Груз 24', [['Быстрый Груз 24', 'Заберём сегодня, предоплата 50%.\n— 250000 KZT']]);
+
+    const truck1 = addListing('truck', B, ['almaty', 'balkhash', 'karaganda', 'astana'], { brand: 'Volvo FH', body: 'ref', weight: 20, volume: 82, rate: 480000, from: 3, loading: ['rear', 'side'], description: 'Обратный рейс после выгрузки в Алматы, возьму догруз.', createdAt: ago(8) });
+    run(`INSERT INTO responses(listing_id, user_id, company_id, message, price, created_at) VALUES(?, ?, ?, 'Есть 12 т фруктов из Алматы в Караганду, реф обязателен.', 300000, ?)`, truck1, user['Алатау Агро'], comp['Алатау Агро'], ago(1));
+    chat(truck1, B, 'Алатау Агро', [['Алатау Агро', 'Есть 12 т фруктов из Алматы в Караганду, реф обязателен.\n— 300000 KZT']]);
+    addListing('cargo', 'Silk Way Logistics', ['urumqi', 'khorgos', 'almaty'], { cargo: 'consumer', body: 'container', weight: 22, volume: 76, rate: 1450000, from: 2, description: 'Контейнер 40HC, электроника. Нужен брокер на Хоргосе.', createdAt: ago(4) });
+    addListing('truck', 'Silk Way Logistics', ['almaty', 'astana'], { brand: 'MAN TGX', body: 'tent', weight: 22, volume: 92, rate: 400000, from: 1, createdAt: ago(6) });
+    run(`INSERT INTO searches(user_id, kind, name, params) VALUES(?, 'cargo', 'Алматы → Астана, реф', ?)`, user[B], JSON.stringify({ from: 'almaty', to: 'astana', body: 'ref', radius: '100' }));
+    run(`INSERT INTO marks(user_id, listing_id, marked, note) VALUES(?, ?, 1, 'Уточнить про термописец и время выгрузки')`, user[B], open1);
+
+    // ---- работа ----
+    const job = (kind, owner, title, city, vehicle, cats, exp, salary, description) =>
+      run('INSERT INTO jobs(kind, user_id, company_id, title, city_id, vehicle, license_cats, experience, salary, date_from, description, phone, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        kind, user[owner], comp[owner], title, city, vehicle, cats, exp, salary, day(int(1, 10)), description, COMPANIES.find((c) => c[0] === owner)[5], ago(int(2, 90)));
+    job('vacancy', B, 'Водитель на рефрижератор, межгород', 'karaganda', 'Volvo FH, реф 20 т', 'C, CE', 3, 'от 600 000 ₸', 'Рейсы Караганда — Алматы — Астана. Оформление по ТК РК, договор регистрируем в ЕСУТД.');
+    job('vacancy', 'Сарыарка Карго', 'Водитель категории CE на тент', 'astana', 'DAF XF 105, тент 20 т', 'CE', 5, '18% от рейса', 'Новая техника, рейсы по Казахстану и в РФ. Нужен загранпаспорт.');
+    job('vacancy', 'Оңтүстік Транс', 'Водитель на самосвал', 'shymkent', 'Shacman X3000', 'C', 2, 'от 450 000 ₸', 'Работа вахтой 15/15, жильё предоставляем.');
+    job('vacancy', 'Ертіс Авто', 'Водитель-экспедитор', 'pavlodar', 'Hyundai HD78, фургон 5 т', 'C', 1, 'от 350 000 ₸', 'Доставка по области, пятидневка.');
+    job('resume', 'Тулегенов Б.', 'Водитель CE, стаж 14 лет, международные рейсы', 'shymkent', 'Тягач + полуприцеп (тент, реф)', 'B, C, CE', 14, 'от 700 000 ₸', 'Опыт: Китай, Узбекистан, Россия. ДОПОГ, чип-карта тахографа. Без ДТП.');
+    job('resume', 'Номад Экспедиция', 'Водитель C, стаж 6 лет', 'astana', 'Среднетоннажные фургоны', 'B, C', 6, 'от 400 000 ₸', 'Ищу работу в Астане и области, готов к командировкам.');
+    job('resume', 'Батыс Логистик', 'Водитель CE, вахта', 'aktobe', 'Самосвалы, тралы', 'C, CE', 9, 'договорная', 'Опыт перевозки негабарита, есть удостоверение стропальщика.');
+
+    for (const name of [A, B, 'Silk Way Logistics', 'КеденСервис', 'Тулегенов Б.'])
+      run(`INSERT INTO transactions(company_id, amount, kind, note) VALUES(?, 5000, 'topup', 'Приветственный бонус')`, comp[name]);
+  });
+  console.log('[seed] демо-данные загружены');
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  if (q1('SELECT 1 FROM users LIMIT 1')) {
+    if (!process.argv.includes('--reset')) {
+      console.log('База не пуста. Запустите с --reset, чтобы очистить её и загрузить демо-данные заново.');
+      process.exit(1);
+    }
+    db.exec('PRAGMA foreign_keys=OFF;');
+    for (const t of ['transactions', 'jobs', 'blacklist', 'reviews', 'positions', 'trip_events', 'trips', 'messages', 'chats', 'responses', 'searches', 'marks', 'listings', 'employees', 'vehicles', 'documents', 'otps', 'sessions', 'users', 'companies'])
+      db.exec(`DELETE FROM ${t}`);
+    db.exec('PRAGMA foreign_keys=ON;');
+  }
+  seed();
+}

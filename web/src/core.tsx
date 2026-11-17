@@ -1,0 +1,201 @@
+// Ядро клиента: API, типы, язык, справочники, форматирование, контекст приложения.
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
+import { KZ } from './kz';
+
+// ---------- типы ----------
+export interface City { id: string; ru: string; kz: string; country: string; lat: number; lon: number }
+export interface Company {
+  id: number; name: string; form: string; kind: string; verified: string; rating: number | null;
+  reviews: number; trips: number; blacklisted: number; indicator: 'green' | 'red' | 'gray';
+}
+export interface Listing {
+  id: number; kind: 'cargo' | 'truck'; status: 'active' | 'closed' | 'archived'; points: string[]; fromId: string; toId: string;
+  brand: string; bodyType: string | null; cargoType: string | null; weight: number | null; volume: number | null; loading: string[];
+  dateFrom: string; dateTo: string; payTerms: string[]; rate: number | null; currency: string; description: string; distanceKm: number;
+  international: boolean; boosted: boolean; createdAt: string; tripId: number | null; company: Company;
+  user: { id: number; name: string; phone: string | null }; mine: boolean; mark: { marked: boolean; note: string; hidden: boolean };
+  responsesCount: number; myResponse: { id: number; status: string } | null; match?: { score: number; detourKm: number }; detourKm?: number;
+}
+export interface Me {
+  user: { id: number; name: string; phone: string; email: string; role: string; isAdmin: boolean; settings: Record<string, any> };
+  company: Company & { bin: string | null; binValid: boolean; about: string; cityId: string | null; balance: number };
+  counters: { unread: number; responses: number; trips: number };
+  pendingReviews: { tripId: number; companyName: string }[];
+}
+export interface Meta {
+  demo: boolean; cities: City[]; roles: string[]; body: string[]; cargo: string[]; loading: string[]; pay: string[]; currencies: string[];
+  stages: string[]; docKinds: string[]; boostPrice: number; stats: { cargo: number; truck: number; companies: number; trips: number };
+}
+export interface Trip {
+  id: number; status: 'active' | 'completed' | 'cancelled'; stage: string; shareGps: boolean; points: string[]; listingId: number;
+  cargoType: string | null; bodyType: string | null; weight: number | null; volume: number | null; distanceKm: number; price: number | null; currency: string;
+  createdAt: string; finishedAt: string | null; carrier: { companyId: number; name: string; userName: string; phone?: string };
+  customer: { companyId: number; name: string; userName?: string; phone?: string };
+  position: { lat: number; lon: number; speed: number | null; at: string } | null; remainingKm: number | null; etaHours: number | null;
+  myRole?: 'customer' | 'carrier'; trackToken?: string; reviewed?: boolean; chatId?: number | null;
+  events?: { stage: string; at: string }[]; track?: [number, number][]; reviews?: { rating: number; text: string; author: string; createdAt: string }[];
+}
+
+// ---------- API ----------
+export class ApiError extends Error {
+  constructor(public status: number, public code: string, message: string) {
+    super(message);
+  }
+}
+export async function api<T = any>(url: string, method = 'GET', body?: unknown): Promise<T> {
+  const res = await fetch('/api' + url, {
+    method,
+    headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body),
+    credentials: 'same-origin',
+  });
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new ApiError(res.status, data?.error || 'error', data?.message || `Ошибка ${res.status}`);
+  return data as T;
+}
+
+/** Загрузка данных с перезапросом: const { data, reload } = useLoad(() => api('/x'), [deps]). */
+export function useLoad<T>(fn: () => Promise<T>, deps: unknown[] = []) {
+  const [data, setData] = useState<T | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const seq = useRef(0);
+  const fnRef = useRef(fn);
+  fnRef.current = fn;
+  const reload = useCallback(async () => {
+    const n = ++seq.current;
+    try {
+      const d = await fnRef.current();
+      if (n === seq.current) {
+        setData(d);
+        setError(null);
+      }
+    } catch (e: any) {
+      if (n === seq.current) setError(e.message);
+    } finally {
+      if (n === seq.current) setLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    setLoading(true);
+    reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+  return { data, error, loading, reload, setData };
+}
+
+// ---------- события сервера (SSE) ----------
+type Handler = (data: any) => void;
+const handlers = new Map<string, Set<Handler>>();
+let source: EventSource | null = null;
+export function connectEvents(on: boolean) {
+  source?.close();
+  source = null;
+  if (!on) return;
+  source = new EventSource('/api/events');
+  for (const type of ['message', 'read', 'response', 'trip', 'position']) {
+    source.addEventListener(type, (e) => {
+      const data = JSON.parse((e as MessageEvent).data || '{}');
+      handlers.get(type)?.forEach((h) => h(data));
+    });
+  }
+}
+export function useEvent(types: string, handler: Handler) {
+  const ref = useRef(handler);
+  ref.current = handler;
+  useEffect(() => {
+    const h: Handler = (d) => ref.current(d);
+    const list = types.split(' ');
+    for (const type of list) {
+      if (!handlers.has(type)) handlers.set(type, new Set());
+      handlers.get(type)!.add(h);
+    }
+    return () => list.forEach((type) => handlers.get(type)?.delete(h));
+  }, [types]);
+}
+
+// ---------- язык ----------
+export type Lang = 'ru' | 'kz';
+const read = (k: string) => {
+  try {
+    return localStorage.getItem(k);
+  } catch {
+    return null;
+  }
+};
+let lang: Lang = read('lang') === 'kz' ? 'kz' : 'ru';
+export const getLang = () => lang;
+export function storeLang(l: Lang) {
+  lang = l;
+  try {
+    localStorage.setItem('lang', l);
+  } catch {
+    /* хранилище недоступно — язык действует до перезагрузки */
+  }
+  document.documentElement.lang = l === 'kz' ? 'kk' : 'ru';
+}
+/** Перевод: ключ — русская строка; для казахского берётся словарь, иначе остаётся русский текст. */
+export function t(s: string, vars?: Record<string, string | number>): string {
+  let out = lang === 'kz' ? KZ[s] ?? s : s;
+  if (vars) for (const [k, v] of Object.entries(vars)) out = out.replaceAll(`{${k}}`, String(v));
+  return out;
+}
+
+// ---------- справочники ----------
+export const BODY_L: Record<string, string> = {
+  tent: 'Тент', ref: 'Рефрижератор', isotherm: 'Изотерм', board: 'Бортовой', container: 'Контейнеровоз', tank: 'Цистерна',
+  tipper: 'Самосвал', trawl: 'Трал', carrier: 'Автовоз', grain: 'Зерновоз', van: 'Фургон',
+};
+export const CARGO_L: Record<string, string> = {
+  food: 'Продукты питания', building: 'Стройматериалы', equipment: 'Оборудование', consumer: 'Товары народного потребления',
+  agro: 'Зерно и сельхозпродукция', metal: 'Металл', fuel: 'ГСМ и наливные', groupage: 'Сборный груз', adr: 'Опасный груз (ADR)',
+  oversize: 'Негабарит', cars: 'Автомобили', furniture: 'Мебель', other: 'Другое',
+};
+export const LOADING_L: Record<string, string> = { top: 'Верхняя', rear: 'Задняя', full: 'С полной растентовкой', side: 'Боковая' };
+export const PAY_L: Record<string, string> = { prepay: 'С предоплатой', cash: 'Наличными', cashless_vat: 'Безнал с НДС', cashless_novat: 'Безнал без НДС' };
+export const ROLE_L: Record<string, string> = { customer: 'Заказчик', carrier: 'Перевозчик', logist: 'Логист', broker: 'Брокер', driver: 'Водитель' };
+export const ROLE_HINT: Record<string, string> = {
+  customer: 'Размещаю грузы и ищу транспорт', carrier: 'Размещаю транспорт и ищу грузы', logist: 'Свожу заказчиков и перевозчиков',
+  broker: 'Оформляю таможню и документы', driver: 'Ищу работу или рейсы',
+};
+export const STAGE_L: Record<string, string> = {
+  planned: 'Рейс назначен', to_loading: 'Еду на погрузку', loading: 'Погрузка', in_transit: 'В пути', unloading: 'Выгрузка', delivered: 'Доставлено',
+};
+export const DOC_L: Record<string, string> = {
+  id_card: 'Удостоверение личности', registration: 'Свидетельство о регистрации', license: 'Лицензия', driver_license: 'Водительские права', other: 'Другое',
+};
+export const CUR: Record<string, string> = { KZT: '₸', USD: '$', RUB: '₽' };
+export const opts = (keys: string[], labels: Record<string, string>) => keys.map((k) => ({ value: k, label: t(labels[k] || k) }));
+
+// ---------- форматирование ----------
+const locale = () => (lang === 'kz' ? 'kk-KZ' : 'ru-RU');
+export const num = (n: number) => new Intl.NumberFormat('ru-RU').format(n);
+export const money = (n: number | null, cur = 'KZT') => (n == null ? t('Договорная') : `${num(n)} ${CUR[cur] || cur}`);
+export const fmtDate = (iso: string) => new Date(iso).toLocaleDateString(locale(), { day: 'numeric', month: 'short' });
+export const fmtDates = (a: string, b: string) => (a === b ? fmtDate(a) : `${fmtDate(a)} — ${fmtDate(b)}`);
+export const fmtTime = (iso: string) => new Date(iso).toLocaleTimeString(locale(), { hour: '2-digit', minute: '2-digit' });
+export function fmtWhen(iso: string) {
+  const d = new Date(iso);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return sameDay ? fmtTime(iso) : `${fmtDate(iso)}, ${fmtTime(iso)}`;
+}
+export const waLink = (phone: string, text = '') => `https://wa.me/${phone.replace(/\D/g, '')}${text ? `?text=${encodeURIComponent(text)}` : ''}`;
+export const todayStr = (plus = 0) => new Date(Date.now() + plus * 86400_000).toISOString().slice(0, 10);
+
+// ---------- контекст приложения ----------
+export interface AppCtx {
+  me: Me | null;
+  meta: Meta;
+  lang: Lang;
+  setLang: (l: Lang) => void;
+  setMe: (m: Me | null) => void;
+  reloadMe: () => Promise<void>;
+  city: (id: string | null | undefined) => City | undefined;
+  cityName: (id: string | null | undefined) => string;
+  routeName: (points: string[]) => string;
+  toast: (text: string, kind?: 'ok' | 'error') => void;
+  /** Выполнить действие и показать ошибку, если она случилась. */
+  act: (fn: () => Promise<unknown>, okText?: string) => Promise<boolean>;
+}
+export const Ctx = createContext<AppCtx>(null as unknown as AppCtx);
+export const useApp = () => useContext(Ctx);
