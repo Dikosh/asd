@@ -16,7 +16,7 @@ export function PushToggle() {
   const [state, setState] = useState<PushState>('off');
   useEffect(() => { pushState().then(setState); }, []);
   if (state === 'unsupported') return <p className="muted small">{t('Этот браузер не поддерживает push-уведомления. На iPhone сначала добавьте Jolda на экран «Домой».')}</p>;
-  if (state === 'denied') return <p className="muted small">{t('Уведомления запрещены в настройках браузера. Разрешите их для этого сайта и обновите страницу.')}</p>;
+  if (state === 'denied') return <p className="muted small">{t('Уведомления для этого сайта выключены в браузере. Чтобы включить: нажмите на значок замка слева от адреса сайта → «Разрешения» → «Уведомления» → «Разрешить», затем обновите страницу.')}</p>;
   if (state === 'on')
     return (
       <div className="row wrap">

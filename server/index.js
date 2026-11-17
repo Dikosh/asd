@@ -56,7 +56,7 @@ export function createApp() {
 
   app.use('/api', (_req, _res, next) => next(new HttpError(404, 'not_found', 'Нет такого метода')));
 
-  const dist = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web/dist');
+  const dist = process.env.WEB_DIST || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web/dist');
   if (fs.existsSync(dist)) {
     // сервис-воркер должен обновляться сразу, остальное можно кэшировать
     app.get('/sw.js', (_req, res) => res.sendFile(path.join(dist, 'sw.js'), { headers: { 'Cache-Control': 'no-cache' } }));
@@ -67,7 +67,7 @@ export function createApp() {
   // eslint-disable-next-line no-unused-vars
   app.use((err, _req, res, _next) => {
     if (res.headersSent) return res.destroy();
-    if (err instanceof HttpError) return res.status(err.status).json({ error: err.code, message: err.message });
+    if (err instanceof HttpError) return res.status(err.status).json({ error: err.code, message: err.message, ...err.extra });
     if (err.type === 'entity.too.large') return res.status(413).json({ error: 'too_large', message: 'Слишком большой запрос' });
     if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'bad_json', message: 'Некорректный JSON' });
     console.error(err);

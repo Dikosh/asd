@@ -127,7 +127,11 @@ export default function extraRoutes(app) {
   app.post('/api/plan/buy', auth, L.owner, (req, res) => {
     tx(() => {
       const c = q1('SELECT balance, plan, plan_until FROM companies WHERE id = ?', req.user.company_id);
-      if (c.balance < L.PLAN.price) throw bad('balance', 'Недостаточно средств на балансе', 402);
+      if (c.balance < L.PLAN.price) {
+        const e = bad('balance', 'Недостаточно средств на балансе', 402);
+        e.extra = { need: L.PLAN.price - c.balance };
+        throw e;
+      }
       // продление прибавляется к оставшемуся сроку
       const from = c.plan === 'pro' && c.plan_until > L.now() ? Date.parse(c.plan_until) : Date.now();
       const until = new Date(from + L.PLAN.days * 86400_000).toISOString();
@@ -170,6 +174,8 @@ export default function extraRoutes(app) {
     const companyId = listing?.company_id ?? b.companyId;
     if (!companyId || !q1('SELECT 1 FROM companies WHERE id = ?', companyId)) throw bad('not_found', 'Не найдено, на что жаловаться', 404);
     if (companyId === req.user.company_id) throw bad('own', 'Нельзя пожаловаться на свою компанию');
+    if (q1(`SELECT 1 FROM complaints WHERE author_company = ? AND company_id = ? AND COALESCE(listing_id, 0) = ? AND status = 'open'`, req.user.company_id, companyId, listing?.id ?? 0))
+      throw bad('duplicate', 'Вы уже пожаловались — модератор рассмотрит жалобу', 409);
     if (q1(`SELECT COUNT(*) AS n FROM complaints WHERE author_user = ? AND created_at > ?`, req.user.id, new Date(Date.now() - 86400_000).toISOString()).n >= 20)
       throw bad('rate_limit', 'Слишком много жалоб за сутки', 429);
     insert('INSERT INTO complaints(listing_id, company_id, author_user, author_company, reason, text) VALUES(?, ?, ?, ?, ?, ?)',
@@ -251,8 +257,13 @@ export default function extraRoutes(app) {
     for (const a of q('SELECT id FROM users WHERE is_admin = 1')) notify(a.id, { kind: 'system', title: 'Новое обращение в поддержку', body: text.slice(0, 120), link: '/cabinet/admin' });
     res.json({ ok: true });
   });
+  // Мои обращения и ответы поддержки
+  app.get('/api/feedback/mine', auth, (req, res) => {
+    res.json(q('SELECT id, text, status, reply, created_at AS createdAt, replied_at AS repliedAt FROM feedback WHERE user_id = ? ORDER BY id DESC LIMIT 50', req.user.id));
+  });
 
   // ---------- модератор: жалобы, обращения, сводка ----------
+  const reasonSchema = z.string().trim().max(500).default('');
   app.get('/api/admin/overview', auth, L.admin, (_req, res) => {
     const count = (sql) => q1(sql).n;
     res.json({
@@ -263,8 +274,11 @@ export default function extraRoutes(app) {
         listings: count(`SELECT COUNT(*) AS n FROM listings WHERE status = 'active'`),
         tripsActive: count(`SELECT COUNT(*) AS n FROM trips WHERE status = 'active'`),
         tripsDone: count(`SELECT COUNT(*) AS n FROM trips WHERE status = 'completed'`),
+        tripsFailed: count(`SELECT COUNT(*) AS n FROM trips WHERE status = 'failed'`),
         pro: count('SELECT COUNT(*) AS n FROM company_stats WHERE pro = 1'),
         week: count(`SELECT COUNT(*) AS n FROM users WHERE created_at > strftime('%Y-%m-%dT%H:%M:%fZ','now','-7 days')`),
+        banned: count('SELECT COUNT(*) AS n FROM companies WHERE banned = 1'),
+        removed: count(`SELECT COUNT(*) AS n FROM listings WHERE status = 'removed'`),
       },
       complaints: q(
         `SELECT c.id, c.reason, c.text, c.created_at AS createdAt, c.listing_id AS listingId, c.company_id AS companyId, t.name AS companyName, a.name AS author,
@@ -272,33 +286,77 @@ export default function extraRoutes(app) {
          FROM complaints c JOIN companies t ON t.id = c.company_id JOIN companies a ON a.id = c.author_company WHERE c.status = 'open' ORDER BY c.id LIMIT 200`,
       ),
       feedback: q(
-        `SELECT f.id, f.text, f.created_at AS createdAt, u.name AS userName, u.phone, c.name AS companyName
+        `SELECT f.id, f.text, f.created_at AS createdAt, u.name AS userName, u.phone, c.name AS companyName, c.id AS companyId, c.banned
          FROM feedback f JOIN users u ON u.id = f.user_id JOIN companies c ON c.id = u.company_id WHERE f.status = 'open' ORDER BY f.id LIMIT 200`,
+      ).map((f) => ({ ...f, banned: !!f.banned })),
+      banned: q(`SELECT id, name, form, bin, ban_reason AS reason FROM companies WHERE banned = 1 ORDER BY id DESC LIMIT 200`),
+      // сорванные рейсы: кто сорвал и почему — здесь видно тех, кто делает это серийно
+      failed: q(
+        `SELECT t.id, t.fail_reason AS reason, t.finished_at AS finishedAt, cu.id AS customerId, cu.name AS customer, ca.id AS carrierId, ca.name AS carrier,
+           fb.name AS failedBy, fb.id AS failedById,
+           (SELECT COUNT(*) FROM trips x WHERE x.status = 'failed' AND x.failed_by = t.failed_by) AS total
+         FROM trips t JOIN companies cu ON cu.id = t.customer_company JOIN companies ca ON ca.id = t.carrier_company LEFT JOIN companies fb ON fb.id = t.failed_by
+         WHERE t.status = 'failed' ORDER BY t.finished_at DESC LIMIT 30`,
+      ),
+      log: q(
+        `SELECT m.id, m.action, m.target, m.note, m.created_at AS createdAt, u.name AS admin FROM mod_log m JOIN users u ON u.id = m.admin_user ORDER BY m.id DESC LIMIT 50`,
       ),
     });
   });
+  // Поиск компании по названию, БИН или телефону сотрудника
+  app.get('/api/admin/search', auth, L.admin, (req, res) => {
+    const term = String(req.query.q || '').trim();
+    if (term.length < 3) return res.json([]);
+    const digits = term.replace(/\D/g, '');
+    res.json(q(
+      `SELECT c.id, c.name, c.form, c.bin, c.verified, c.banned, c.ban_reason AS reason,
+         (SELECT GROUP_CONCAT(u.name || ' ' || u.phone, ', ') FROM users u WHERE u.company_id = c.id) AS people
+       FROM companies c WHERE c.name LIKE :t OR (:d != '' AND (c.bin LIKE :dl OR EXISTS (SELECT 1 FROM users u WHERE u.company_id = c.id AND u.phone LIKE :dl)))
+       ORDER BY c.id DESC LIMIT 30`,
+      { t: `%${term}%`, d: digits.length >= 4 ? digits : '', dl: `%${digits}%` },
+    ).map((c) => ({ ...c, banned: !!c.banned })));
+  });
   app.post('/api/admin/complaints/:id', auth, L.admin, (req, res) => {
     const { action } = parse(z.object({ action: z.enum(['dismiss', 'close_listing']) }), req.body);
-    const c = q1('SELECT * FROM complaints WHERE id = ?', id(req));
+    const c = q1('SELECT c.*, t.name FROM complaints c JOIN companies t ON t.id = c.company_id WHERE c.id = ?', id(req));
     if (!c) throw bad('not_found', 'Жалоба не найдена', 404);
     if (action === 'close_listing' && c.listing_id) {
       const l = q1('SELECT user_id FROM listings WHERE id = ?', c.listing_id);
       run(`UPDATE listings SET status = 'removed', closed_at = ? WHERE id = ?`, L.now(), c.listing_id);
       if (l) notify(l.user_id, { kind: 'system', title: 'Объявление №{n} снято модератором', vars: { n: c.listing_id }, body: 'Причина: жалоба пользователей. Если это ошибка, напишите в поддержку.', link: '/help' });
-    }
+      // остальные жалобы на то же объявление решены этим же действием
+      run(`UPDATE complaints SET status = 'closed' WHERE listing_id = ?`, c.listing_id);
+      L.modLog(req.user, 'listing_remove', `№${c.listing_id} · ${c.name}`, c.text);
+    } else L.modLog(req.user, 'complaint_dismiss', c.name, c.text);
     run(`UPDATE complaints SET status = 'closed' WHERE id = ?`, c.id);
     res.json({ ok: true });
   });
-  // Блокировка компании: её объявления пропадают из поиска, размещать и откликаться она не может.
+  // Блокировка обратима: причина сохраняется, компания видит её и может обжаловать через поддержку.
   app.post('/api/admin/companies/:id/ban', auth, L.admin, (req, res) => {
-    const { banned } = parse(z.object({ banned: z.boolean() }), req.body);
-    if (q1('SELECT 1 FROM users WHERE company_id = ? AND is_admin = 1', id(req))) throw bad('forbidden', 'Нельзя заблокировать компанию модератора', 403);
-    run('UPDATE companies SET banned = ? WHERE id = ?', banned ? 1 : 0, id(req));
-    if (banned) run('DELETE FROM sessions WHERE user_id IN (SELECT id FROM users WHERE company_id = ?)', id(req));
+    const { banned, reason } = parse(z.object({ banned: z.boolean(), reason: reasonSchema }), req.body);
+    const c = q1('SELECT id, name, banned FROM companies WHERE id = ?', id(req));
+    if (!c) throw bad('not_found', 'Компания не найдена', 404);
+    if (q1('SELECT 1 FROM users WHERE company_id = ? AND is_admin = 1', c.id)) throw bad('forbidden', 'Нельзя заблокировать компанию модератора', 403);
+    if (banned && reason.length < 5) throw bad('reason', 'Укажите причину блокировки — компания её увидит');
+    run('UPDATE companies SET banned = ?, ban_reason = ? WHERE id = ?', banned ? 1 : 0, banned ? reason : '', c.id);
+    if (banned) run(`UPDATE complaints SET status = 'closed' WHERE company_id = ? AND status = 'open'`, c.id);
+    L.modLog(req.user, banned ? 'ban' : 'unban', c.name, reason);
+    if (!!c.banned !== banned) {
+      notify(q('SELECT id FROM users WHERE company_id = ?', c.id).map((u) => u.id), banned
+        ? { kind: 'system', title: 'Компания заблокирована модератором', body: reason, link: '/help/support' }
+        : { kind: 'system', title: 'Блокировка компании снята', body: 'Вы снова можете размещать объявления и откликаться.', link: '/' });
+    }
     res.json({ ok: true });
   });
+  // Ответ поддержки: человек получает уведомление и видит ответ в «Моих обращениях».
   app.post('/api/admin/feedback/:id', auth, L.admin, (req, res) => {
-    run(`UPDATE feedback SET status = 'closed' WHERE id = ?`, id(req));
+    const { reply } = parse(z.object({ reply: z.string().trim().max(2000).default('') }), req.body);
+    const f = q1('SELECT * FROM feedback WHERE id = ?', id(req));
+    if (!f) throw bad('not_found', 'Обращение не найдено', 404);
+    run(`UPDATE feedback SET status = 'closed', reply = ?, replied_at = ? WHERE id = ?`, reply, L.now(), f.id);
+    notify(f.user_id, reply
+      ? { kind: 'system', title: 'Поддержка ответила на ваше обращение', body: reply.slice(0, 200), link: '/help/support' }
+      : { kind: 'system', title: 'Ваше обращение закрыто', body: f.text.slice(0, 120), link: '/help/support' });
     res.json({ ok: true });
   });
 }

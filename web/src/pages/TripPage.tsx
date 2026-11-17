@@ -110,6 +110,8 @@ export function TripSummary({ trip }: { trip: Trip }) {
 /** Передача позиции с этого устройства: геолокация браузера + экран, который не гаснет. */
 function useGeoSender(active: boolean, send: (body: { lat: number; lon: number; speed: number | null }) => Promise<unknown>) {
   const [error, setError] = useState('');
+  const [attempt, setAttempt] = useState(0);
+  const [jump, setJump] = useState(false);
   const sendRef = useRef(send);
   sendRef.current = send;
   useEffect(() => {
@@ -124,7 +126,7 @@ function useGeoSender(active: boolean, send: (body: { lat: number; lon: number; 
         setError('');
         if (simulating.on || Date.now() - last < 15000) return;
         last = Date.now();
-        sendRef.current({ lat: pos.coords.latitude, lon: pos.coords.longitude, speed: pos.coords.speed != null ? Math.round(pos.coords.speed * 3.6) : null }).catch(() => {});
+        sendRef.current({ lat: pos.coords.latitude, lon: pos.coords.longitude, speed: pos.coords.speed != null ? Math.round(pos.coords.speed * 3.6) : null }).then((r: any) => setJump(r?.reason === 'jump')).catch(() => {});
       },
       (e) => setError(e.code === 1 ? t('Доступ к геолокации запрещён. Разрешите его для этого сайта в настройках браузера') : t('Не удаётся определить местоположение. Проверьте, что на телефоне включён GPS')),
       { enableHighAccuracy: true, maximumAge: 10000 },
@@ -140,9 +142,37 @@ function useGeoSender(active: boolean, send: (body: { lat: number; lon: number; 
       document.removeEventListener('visibilitychange', onVisible);
       lock?.release?.().catch(() => {});
     };
-  }, [active]);
-  return error;
+  }, [active, attempt]);
+  return { error, jump, retry: () => { setError(''); setAttempt((n) => n + 1); } };
 }
+
+/** Что делать, если телефон не отдаёт геолокацию: шаги и кнопка «Повторить». */
+function GpsHelp({ error, retry }: { error: string; retry: () => void }) {
+  return (
+    <div className="gps-help">
+      <b>{error}</b>
+      <ol>
+        <li>{t('Нажмите на значок замка или «ⓘ» слева от адреса сайта.')}</li>
+        <li>{t('Откройте «Разрешения» и включите «Местоположение» для этого сайта.')}</li>
+        <li>{t('Проверьте, что на телефоне включена геолокация (шторка сверху → «Местоположение»), и нажмите «Повторить».')}</li>
+      </ol>
+      <button className="btn soft block" onClick={retry}><RefreshCw size={16} /> {t('Повторить')}</button>
+    </div>
+  );
+}
+// Кнопки этапов — действием, а не названием статуса
+const STAGE_ACT: Record<string, string> = {
+  to_loading: 'Выехал на погрузку', loading: 'Приехал на погрузку', in_transit: 'Загрузился — выезжаю', unloading: 'Приехал на выгрузку', delivered: 'Груз выгружен',
+};
+const confirmStage = (s: string) => confirm(t('Отметить: «{s}»? Заказчик сразу это увидит, отменить отметку нельзя.', { s: t(STAGE_ACT[s]) }));
+/** Копирование с понятной ошибкой: в части браузеров буфер обмена недоступен. */
+const copyText = async (text: string) => {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    throw new Error(t('Не удалось скопировать — выделите ссылку и скопируйте вручную'));
+  }
+};
 
 /** Невидимый передатчик в приложении: работает на любом экране, пока рейс включён на этом устройстве. */
 export function TripBeacon({ tripId }: { tripId: number }) {
@@ -209,7 +239,7 @@ export default function TripPage() {
     // включаем передачу именно с этого устройства
     setDeviceShare(id, on);
     setOnDevice(on);
-    if (on !== trip.shareGps && !(await post('gps', { share: on }, on ? t('Передача GPS включена') : t('Передача GPS выключена'))) && on) {
+    if (on !== trip.shareGps && !(await post('gps', { share: on }, on ? t('GPS включён — ждём первую позицию с телефона') : t('Передача GPS выключена'))) && on) {
       setDeviceShare(id, false);
       setOnDevice(false);
     }
@@ -218,9 +248,9 @@ export default function TripPage() {
   return (
     <div className="stack">
       <button className="link back" onClick={() => nav('/cabinet/trips')}><ArrowLeft size={16} /> {t('Все рейсы')}</button>
-      <div className="detail-layout">
+      <div className="detail-layout trip-layout">
         <div className="stack">
-          <div className="card">
+          <div className="card t-head">
             <div className="row between wrap">
               <h1 className="detail-title"><RouteTitle points={trip.points} /></h1>
               <span className={`status big ${statusClass(trip)}`}>{statusText(trip)}</span>
@@ -238,7 +268,7 @@ export default function TripPage() {
 
         <aside className="stack">
           {active && carrier && (
-            <div className="card stack-s">
+            <div className="card stack-s t-ctl">
               <b>{t('Управление рейсом')}</b>
               <label className="switch">
                 <input type="checkbox" checked={trip.shareGps && onDevice} onChange={(e) => toggleGps(e.target.checked)} />
@@ -249,10 +279,10 @@ export default function TripPage() {
                 <span>{t('Включайте на телефоне, который едет в машине. Пока Jolda открыта, позиция уходит заказчику, а экран не гаснет. Если за рулём другой человек — отправьте ему ссылку для водителя ниже.')}</span>
               </div>
               {trip.shareGps && !onDevice && <div className="info-line">{t('Передача включена на другом устройстве или у водителя по ссылке.')}</div>}
-              {trip.shareGps && onDevice && !trip.position && <div className="form-error">{t('Позиция ещё не получена. Проверьте, что на телефоне включена геолокация и она разрешена для сайта.')}</div>}
+              {trip.shareGps && onDevice && !trip.position && <div className="info-line">{t('Ждём первую позицию с этого телефона. Если она не появится за минуту — проверьте, что геолокация включена и разрешена для сайта.')}</div>}
               {next && (
-                <button className="btn primary block" onClick={() => post('stage', { stage: next }, t('Этап обновлён'))}>
-                  <Check size={16} /> {t('Отметить')}: {t(STAGE_L[next])}
+                <button className="btn primary block big" onClick={() => confirmStage(next) && post('stage', { stage: next }, t('Этап обновлён'))}>
+                  <Check size={18} /> {t(STAGE_ACT[next])}
                 </button>
               )}
               {!next && (
@@ -275,7 +305,7 @@ export default function TripPage() {
               <p className="muted small">{t('Отправьте её водителю: без регистрации он откроет рейс на телефоне, включит GPS и будет отмечать этапы. Цену сделки он не увидит.')}</p>
               <div className="copy-row">
                 <input readOnly value={driveUrl} onFocus={(e) => e.target.select()} aria-label={t('Ссылка для водителя')} />
-                <button className="btn soft" aria-label={t('Скопировать')} onClick={() => act(() => navigator.clipboard.writeText(driveUrl), t('Ссылка скопирована'))}><Copy size={16} /></button>
+                <button className="btn soft" onClick={() => act(() => copyText(driveUrl), t('Ссылка скопирована'))}><Copy size={16} /> {t('Скопировать')}</button>
               </div>
               <div className="row wrap">
                 <a className="btn soft wa" href={waLink('', `${t('Рейс на Jolda — откройте ссылку на телефоне и включите GPS')}: ${driveUrl}`)} target="_blank" rel="noreferrer"><MessageSquare size={16} /> WhatsApp</a>
@@ -294,7 +324,7 @@ export default function TripPage() {
                   {trip.autoCompleteAt && <p className="muted small">{t('Без вашего ответа рейс завершится сам {d}.', { d: fmtWhen(trip.autoCompleteAt) })}</p>}
                 </>
               ) : (
-                <p className="muted small">{t('Вы видите местоположение водителя и этап пути. Когда перевозчик отметит доставку, здесь появится кнопка подтверждения.')}</p>
+                <p className="muted small">{trip.position ? t('Вы видите местоположение водителя и этап пути. Когда перевозчик отметит доставку, здесь появится кнопка подтверждения.') : t('Как только водитель включит GPS, машина появится на карте. Когда перевозчик отметит доставку, здесь появится кнопка подтверждения.')}</p>
               )}
             </div>
           )}
@@ -338,7 +368,7 @@ export default function TripPage() {
             <p className="muted small">{t('По этой ссылке рейс виден на карте без регистрации — отправьте её грузополучателю.')}</p>
             <div className="copy-row">
               <input readOnly value={trackUrl} onFocus={(e) => e.target.select()} aria-label={t('Ссылка для получателя')} />
-              <button className="btn soft" aria-label={t('Скопировать')} onClick={() => act(() => navigator.clipboard.writeText(trackUrl), t('Ссылка скопирована'))}><Copy size={16} /></button>
+              <button className="btn soft" onClick={() => act(() => copyText(trackUrl), t('Ссылка скопирована'))}><Copy size={16} /> {t('Скопировать')}</button>
             </div>
           </div>
 
@@ -348,6 +378,7 @@ export default function TripPage() {
                 <button className="btn ghost danger" onClick={() => confirm(t('Отменить рейс? Объявление вернётся в поиск.')) && post('cancel', undefined, t('Рейс отменён'))}>{t('Отменить рейс')}</button>
               )}
               <button className="btn ghost danger" onClick={() => setFail('')}><TriangleAlert size={15} /> {t('Рейс сорван')}</button>
+              <p className="muted small">{t('«Отменить рейс» — если планы изменились до выезда: объявление вернётся в поиск. «Рейс сорван» — если машина не приехала, груз не доставлен или вторая сторона пропала.')}</p>
             </div>
           )}
         </aside>
@@ -409,7 +440,8 @@ export function DrivePage() {
   const { data: trip, loading, reload } = useLoad(() => api<Trip>(`/drive/${token}`), [token]);
   const map = useTripMap(trip);
   const sharing = !!trip && trip.status === 'active' && trip.shareGps;
-  const geoError = useGeoSender(sharing, (body) => api(`/drive/${token}/position`, 'POST', body).then(() => reload()));
+  const geo = useGeoSender(sharing, (body) => api(`/drive/${token}/position`, 'POST', body).then(() => reload()));
+  const geoError = geo.error;
   useEffect(() => {
     const id = setInterval(reload, 20000);
     return () => clearInterval(id);
@@ -448,16 +480,18 @@ export function DrivePage() {
                     <Navigation size={20} />
                     <div>
                       <b>{geoError ? t('GPS не работает') : trip.position ? t('GPS передаётся') : t('Определяем местоположение…')}</b>
-                      <span>{geoError || (trip.position ? `${t('Позиция обновлена')}: ${fmtWhen(trip.position.at)}` : t('Обычно это занимает несколько секунд'))}</span>
+                      <span>{geoError ? t('Заказчик не видит машину') : trip.position ? `${t('Позиция обновлена')}: ${fmtWhen(trip.position.at)}` : t('Обычно это занимает несколько секунд')}</span>
                     </div>
                   </div>
+                  {geoError && <GpsHelp error={geoError} retry={geo.retry} />}
+                  {!geoError && geo.jump && <div className="form-error">{t('Новая точка не принята: она слишком далеко от предыдущей. Так бывает при сбое GPS — позиция обновится сама через несколько минут.')}</div>}
                   <p className="muted small">{t('Не закрывайте эту страницу до конца рейса: пока она открыта, экран не погаснет и позиция будет уходить заказчику.')}</p>
                   {next ? (
-                    <button className="btn primary block big" onClick={() => post('stage', { stage: next }, t('Этап обновлён'))}><Check size={20} /> {t(STAGE_L[next])}</button>
+                    <button className="btn primary block big" onClick={() => confirmStage(next) && post('stage', { stage: next }, t('Этап обновлён'))}><Check size={20} /> {t(STAGE_ACT[next])}</button>
                   ) : (
                     <div className="info-line">{t('Доставка отмечена. Ждём подтверждения заказчика.')}</div>
                   )}
-                  {next && <p className="muted small center">{t('Нажмите, когда этап начался')}</p>}
+                  {next && <p className="muted small center">{t('Сейчас: {s}. Нажмите кнопку, когда это произойдёт.', { s: t(STAGE_L[trip.stage]) })}</p>}
                 </>
               )}
             </div>

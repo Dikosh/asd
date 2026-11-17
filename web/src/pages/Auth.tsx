@@ -1,5 +1,5 @@
 // Вход по номеру телефона и регистрация одной формой; для гостей — витрина свежих объявлений.
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, BadgeCheck, FileCheck2, Lock, MapPinned, Users } from 'lucide-react';
 import { api, BODY_L, CARGO_L, fmtDates, Me, money, num, ROLE_HINT, ROLE_L, t, useApp, useLoad } from '../core';
@@ -14,7 +14,7 @@ interface Invite { name: string; companyName: string; companyForm: string; role:
 interface PublicListing { id: number; kind: 'cargo' | 'truck'; points: string[]; bodyType: string | null; cargoType: string | null; weight: number | null; dateFrom: string; dateTo: string; rate: number | null; currency: string; distanceKm: number }
 
 export default function AuthPage() {
-  const { meta, setMe, act, routeName } = useApp();
+  const { meta, setMe, act, routeName, toast } = useApp();
   const [step, setStep] = useState<'phone' | 'code' | 'reg'>('phone');
   const [prefix, setPrefix] = useState('+7');
   const [number, setNumber] = useState('');
@@ -26,6 +26,13 @@ export default function AuthPage() {
   const [accept, setAccept] = useState(false);
   const [reg, setReg] = useState({ name: '', email: '', companyName: '', companyForm: 'ТОО', role: 'customer' });
   const [busy, setBusy] = useState(false);
+  // повторная отправка кода — не чаще раза в минуту
+  const [wait, setWait] = useState(0);
+  useEffect(() => {
+    if (wait <= 0) return;
+    const id = setTimeout(() => setWait((n) => n - 1), 1000);
+    return () => clearTimeout(id);
+  }, [wait]);
   const phoneInput = useRef<HTMLInputElement>(null);
   const feed = useLoad(() => api<PublicListing[]>('/public/listings').catch(() => []));
   const phone = prefix + number.replace(/\D/g, '');
@@ -35,12 +42,16 @@ export default function AuthPage() {
     setBusy(false);
   };
   const joining = !!invite && join;
+  // водителю своя компания не нужна: записываем его как ИП на его же имя
+  const isDriver = reg.role === 'driver';
+  const emailOptional = joining ? invite!.role === 'driver' : isDriver;
 
   const requestCode = () =>
     run(async () => {
       const r = await api('/auth/request-code', 'POST', { phone });
       setDevCode(r.devCode || '');
       setCode('');
+      setWait(60);
       setStep('code');
     });
   const verify = () =>
@@ -56,7 +67,7 @@ export default function AuthPage() {
       }
     });
   const register = () =>
-    run(async () => setMe(await api<Me>('/auth/register', 'POST', joining ? { regToken, name: reg.name, email: reg.email, joinInvite: true, accept } : { regToken, ...reg, accept })));
+    run(async () => setMe(await api<Me>('/auth/register', 'POST', joining ? { regToken, name: reg.name, email: reg.email, joinInvite: true, accept } : { regToken, ...reg, ...(isDriver ? { companyName: reg.name.trim(), companyForm: 'ИП' } : {}), accept })));
   const demo = (role: string) => run(async () => setMe(await api<Me>('/auth/demo', 'POST', { role })));
 
   const features = [
@@ -75,6 +86,8 @@ export default function AuthPage() {
         </div>
         <h1>{t('Грузы и транспорт находят друг друга напрямую')}</h1>
         <p className="lead">{t('Биржа грузоперевозок Казахстана и СНГ: размещайте объявления, откликайтесь, договаривайтесь в чате и ведите рейс с GPS.')}</p>
+      </section>
+      <section className="auth-more">
         <div className="auth-stats">
           <div><b>{num(meta.stats.cargo)}</b><span>{t('грузов сейчас')}</span></div>
           <div><b>{num(meta.stats.truck)}</b><span>{t('машин свободно')}</span></div>
@@ -92,7 +105,7 @@ export default function AuthPage() {
           <div className="feed">
             <b>{t('Свежие объявления')}</b>
             {feed.data.slice(0, 5).map((l) => (
-              <button key={l.id} className="feed-item" onClick={() => { phoneInput.current?.focus(); act(() => Promise.reject(new Error('Войдите, чтобы увидеть контакты и откликнуться'))); }}>
+              <button key={l.id} className="feed-item" onClick={() => { toast(t('Войдите, чтобы увидеть контакты и откликнуться')); phoneInput.current?.scrollIntoView({ block: 'center', behavior: 'smooth' }); phoneInput.current?.focus({ preventScroll: true }); }}>
                 <span className={`tag ${l.kind}`}>{l.kind === 'cargo' ? t('Груз') : t('Транспорт')}</span>
                 <span className="feed-route">{routeName([l.points[0], l.points[l.points.length - 1]])}</span>
                 <span className="feed-meta">
@@ -129,6 +142,7 @@ export default function AuthPage() {
                 <input className="code-input" inputMode="numeric" autoFocus maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} autoComplete="one-time-code" />
               </Field>
               <button className="btn primary block" disabled={busy || code.length < 6}>{t('Продолжить')}</button>
+              <button type="button" className="btn ghost block" disabled={busy || wait > 0} onClick={requestCode}>{wait > 0 ? t('Отправить код ещё раз через {n} с', { n: wait }) : t('Отправить код ещё раз')}</button>
               <button type="button" className="btn ghost block" onClick={() => setStep('phone')}>{t('Изменить номер')}</button>
             </>
           )}
@@ -144,36 +158,40 @@ export default function AuthPage() {
                   </div>
                 </div>
               ) : (
-                <p className="muted">{t('Номер {phone} подтверждён. Осталось четыре поля.', { phone })}</p>
+                <p className="muted">{t('Номер {phone} подтверждён. Осталось немного — расскажите о себе.', { phone })}</p>
               )}
               <Field label={t('ФИО')}>
-                <input autoFocus required value={reg.name} onChange={(e) => setReg({ ...reg, name: e.target.value })} autoComplete="name" />
+                <input autoFocus required minLength={2} maxLength={100} value={reg.name} onChange={(e) => setReg({ ...reg, name: e.target.value })} autoComplete="name" />
               </Field>
-              <Field label={t('Почта')}>
-                <input type="email" required value={reg.email} onChange={(e) => setReg({ ...reg, email: e.target.value })} autoComplete="email" />
+              <Field label={emailOptional ? t('Почта (необязательно)') : t('Почта')}>
+                <input type="email" required={!emailOptional} maxLength={120} value={reg.email} onChange={(e) => setReg({ ...reg, email: e.target.value })} autoComplete="email" />
               </Field>
               {!joining && (
                 <>
-                  <Field label={t('Наименование компании')} hint={t('Работаете один? Выберите ИП и впишите свою фамилию.')}>
-                    <div className="phone-row">
-                      <Select value={reg.companyForm} onChange={(v) => setReg({ ...reg, companyForm: v })} options={[{ value: 'ТОО', label: t('ТОО') }, { value: 'ИП', label: t('ИП') }]} />
-                      <input required value={reg.companyName} onChange={(e) => setReg({ ...reg, companyName: e.target.value })} placeholder={t('Без кавычек и формы')} autoComplete="organization" />
-                    </div>
-                  </Field>
                   <div className="field">
-                    <span className="field-label">{t('Роль')}</span>
+                    <span className="field-label">{t('Кто вы')}</span>
                     <div className="role-grid">
                       {meta.roles.map((r) => (
-                        <button type="button" key={r} className={`role ${reg.role === r ? 'on' : ''}`} aria-pressed={reg.role === r} onClick={() => setReg({ ...reg, role: r })}>
+                        <button type="button" key={r} className={`role ${reg.role === r ? 'on' : ''}`} aria-pressed={reg.role === r} onClick={() => setReg({ ...reg, role: r, companyForm: reg.companyName ? reg.companyForm : r === 'carrier' ? 'ИП' : 'ТОО' })}>
                           <b>{t(ROLE_L[r])}</b>
                           <span>{t(ROLE_HINT[r])}</span>
                         </button>
                       ))}
                     </div>
                   </div>
+                  {isDriver ? (
+                    <p className="muted small">{t('Компания водителю не нужна. Работаете у перевозчика? Попросите его добавить ваш номер в «Команду» — рейсы компании появятся у вас сами.')}</p>
+                  ) : (
+                    <Field label={t('Наименование компании')} hint={t('Работаете один? Выберите ИП и впишите свою фамилию.')}>
+                      <div className="phone-row">
+                        <Select value={reg.companyForm} onChange={(v) => setReg({ ...reg, companyForm: v })} options={[{ value: 'ТОО', label: t('ТОО') }, { value: 'ИП', label: t('ИП') }]} />
+                        <input required minLength={2} maxLength={120} value={reg.companyName} onChange={(e) => setReg({ ...reg, companyName: e.target.value })} placeholder={t('Без кавычек и формы')} autoComplete="organization" />
+                      </div>
+                    </Field>
+                  )}
                 </>
               )}
-              <label className="switch small">
+              <label className="switch small consent">
                 <input type="checkbox" checked={accept} onChange={(e) => setAccept(e.target.checked)} />
                 <span>{t('Принимаю правила платформы и согласен на обработку персональных данных')}. <Link to="/rules" target="_blank">{t('Читать правила')}</Link></span>
               </label>

@@ -47,10 +47,10 @@ export default function PricesPage() {
                     {data.directions.map((d) => (
                       <tr key={d.fromId + d.toId}>
                         <td><Link to={`/search/${kind}?from=${d.fromId}&to=${d.toId}`}>{cityName(d.fromId)} → {cityName(d.toId)}</Link></td>
-                        <td className="r">{num(d.distanceKm)}</td>
-                        <td className="r"><b>{money(d.rate)}</b></td>
-                        <td className="r">{num(d.perKm)}</td>
-                        <td className="r muted">{d.count}</td>
+                        <td className="r" data-l={t('км')}>{num(d.distanceKm)}</td>
+                        <td className="r" data-l={t('Обычная цена')}><b>{money(d.rate)}</b></td>
+                        <td className="r" data-l={`₸/${t('км')}`}>{num(d.perKm)}</td>
+                        <td className="r muted" data-l={t('Объявлений')}>{d.count}{d.count < 5 ? ` · ${t('мало данных')}` : ''}</td>
                       </tr>
                     ))}
                   </tbody>

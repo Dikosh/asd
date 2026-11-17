@@ -1,6 +1,8 @@
 // Демо-данные: компании, объявления, рейсы, отзывы — чтобы платформа выглядела живой сразу после запуска.
 import { fileURLToPath } from 'node:url';
-import { db, q1, run, insert, tx } from './db.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { db, q1, run, insert, tx, UPLOAD_DIR } from './db.js';
 import { cityById, roadKm, isValidBin } from './geo.js';
 import { token } from './lib.js';
 
@@ -58,6 +60,18 @@ const BODY_FOR = { food: ['ref', 'isotherm', 'tent'], building: ['tent', 'board'
 const TRUCKS = [['DAF XF 105', 'tent', 20, 86], ['Volvo FH', 'ref', 20, 82], ['MAN TGX', 'tent', 22, 92], ['Scania R450', 'ref', 20, 86], ['КамАЗ 5490', 'tent', 20, 82],
   ['Mercedes Actros', 'isotherm', 20, 86], ['Shacman X3000', 'tipper', 25, 20], ['ГАЗель Next', 'van', 1.5, 16], ['Hyundai HD78', 'van', 5, 22], ['Howo T5G', 'board', 20, 60], ['Sitrak C7H', 'container', 26, 76]];
 
+const DEMO_PDF = `%PDF-1.4
+1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj
+2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj
+3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 420 200]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj
+4 0 obj<</Length 58>>stream
+BT /F1 18 Tf 40 110 Td (Jolda demo document) Tj ET
+endstream endobj
+5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj
+trailer<</Root 1 0 R>>
+%%EOF
+`;
+
 export function seed() {
   tx(() => {
     const comp = {};
@@ -69,6 +83,17 @@ export function seed() {
       comp[name] = cid;
       user[name] = insert('INSERT INTO users(name, phone, email, role, company_id, is_admin, is_demo, accepted_terms) VALUES(?, ?, ?, ?, ?, ?, 1, ?)',
         person, phone, `demo${i}@jolda.local`, kind, cid, i === 0 ? 1 : 0, ago(500));
+    });
+    // ---- документы проверенных компаний: отметка «Проверена» в демо подкреплена принятыми документами ----
+    fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+    COMPANIES.forEach(([name, , kind, , , , verified]) => {
+      if (verified !== 'verified' || name === 'Jolda Модерация') return;
+      for (const [docKind, title] of [['registration', 'Свидетельство о регистрации.pdf'], ...(kind === 'broker' ? [['customs_license', 'Свидетельство таможенного представителя.pdf']] : [])]) {
+        const file = `demo-${comp[name]}-${docKind}.pdf`;
+        fs.writeFileSync(path.join(UPLOAD_DIR, file), DEMO_PDF);
+        insert(`INSERT INTO documents(company_id, user_id, kind, filename, mime, path, status, created_at) VALUES(?, ?, ?, ?, 'application/pdf', ?, 'approved', ?)`,
+          comp[name], user[name], docKind, title, file, ago(400));
+      }
     });
     const carriers = COMPANIES.filter((c) => c[2] === 'carrier').map((c) => c[0]);
     const customers = COMPANIES.filter((c) => c[2] === 'customer' || (c[2] === 'logist' && c[0] !== 'Jolda Модерация')).map((c) => c[0]);

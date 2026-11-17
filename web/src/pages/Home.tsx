@@ -23,8 +23,27 @@ export default function HomePage() {
           <h1>{t('Здравствуйте, {name}!', { name: me!.user.name.split(' ')[0] })}</h1>
           <p>{t('Jolda — биржа грузов и транспорта: заказчики и перевозчики договариваются напрямую, а рейс виден на карте.')}</p>
           <div className="row wrap">
-            <Link to="/my/cargo/new" className="btn white"><Plus size={17} /> {t('Разместить груз')}</Link>
-            <Link to="/my/truck/new" className="btn white-ghost"><Plus size={17} /> {t('Разместить транспорт')}</Link>
+            {role === 'driver' ? (
+              <>
+                <Link to="/cabinet/trips" className="btn white"><Truck size={17} /> {t('Мои рейсы')}</Link>
+                <Link to="/jobs" className="btn white-ghost">{t('Найти работу')}</Link>
+              </>
+            ) : role === 'carrier' ? (
+              <>
+                <Link to="/search/cargo" className="btn white"><Package size={17} /> {t('Найти груз')}</Link>
+                <Link to="/my/truck/new" className="btn white-ghost"><Plus size={17} /> {t('Разместить транспорт')}</Link>
+              </>
+            ) : role === 'broker' ? (
+              <>
+                <Link to="/search/cargo?flags=customs" className="btn white"><Package size={17} /> {t('Грузы, где нужен брокер')}</Link>
+                <Link to="/search/cargo?intl=1" className="btn white-ghost">{t('Международные грузы')}</Link>
+              </>
+            ) : (
+              <>
+                <Link to="/my/cargo/new" className="btn white"><Plus size={17} /> {t('Разместить груз')}</Link>
+                <Link to={role === 'customer' ? '/search/truck' : '/my/truck/new'} className="btn white-ghost">{role === 'customer' ? <><Truck size={17} /> {t('Найти транспорт')}</> : <><Plus size={17} /> {t('Разместить транспорт')}</>}</Link>
+              </>
+            )}
           </div>
         </div>
         <div className="hero-stats">
@@ -55,7 +74,7 @@ export default function HomePage() {
           <TripSummary trip={active} />
         ) : (
           <div className="card">
-            <Empty icon={<Truck size={26} />} title={t('Активных рейсов нет')} text={t('Рейс появится, когда отклик будет принят. Вся история — во вкладке «Рейсы».')}>
+            <Empty icon={<Truck size={26} />} title={t('Активных рейсов нет')} text={t('Рейс появится, когда отклик будет принят.')}>
               <Link to="/cabinet/trips" className="btn soft">{t('Открыть рейсы')}</Link>
             </Empty>
           </div>

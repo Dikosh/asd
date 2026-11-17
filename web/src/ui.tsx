@@ -7,18 +7,34 @@ import { BadgeCheck, ChevronDown, MapPin, Star, X } from 'lucide-react';
 import { City, Company, COUNTRY_L, Lang, placeName, t, useApp } from './core';
 
 export function Modal({ title, onClose, children, wide }: { title: string; onClose?: () => void; children: ReactNode; wide?: boolean }) {
+  const box = useRef<HTMLDivElement>(null);
+  const close = useRef(onClose);
+  close.current = onClose;
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose?.();
+    const before = document.activeElement as HTMLElement | null;
+    const focusable = () => [...(box.current?.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])') || [])];
+    // фокус остаётся внутри окна, а после закрытия возвращается туда, откуда окно открыли
+    if (!box.current?.contains(document.activeElement)) (focusable().find((x) => !x.classList.contains('icon-btn')) || focusable()[0])?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') return close.current?.();
+      if (e.key !== 'Tab') return;
+      const f = focusable();
+      if (!f.length) return;
+      const first = f[0], last = f[f.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    };
     document.addEventListener('keydown', onKey);
     document.body.style.overflow = 'hidden';
     return () => {
       document.removeEventListener('keydown', onKey);
       document.body.style.overflow = '';
+      before?.focus?.();
     };
-  }, [onClose]);
+  }, []);
   return (
     <div className="overlay" onMouseDown={(e) => e.target === e.currentTarget && onClose?.()}>
-      <div className={`modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
+      <div ref={box} className={`modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}>
         <header>
           <h3>{title}</h3>
           {onClose && (
@@ -78,82 +94,179 @@ export function Select({ value, onChange, options, placeholder }: { value: strin
   );
 }
 
-/** Выбор города из справочника с поиском по русскому и казахскому названию. */
-export function CitySelect({ value, onChange, placeholder }: { value: string | null; onChange: (id: string | null) => void; placeholder?: string }) {
+// ---------- выбор города ----------
+// Для поиска названия упрощаются: без регистра, «ё» = «е», казахские буквы приравнены к русским, дефис = пробел.
+const FOLD: Record<string, string> = { ё: 'е', ә: 'а', ғ: 'г', қ: 'к', ң: 'н', ө: 'о', ұ: 'у', ү: 'у', һ: 'х', і: 'и' };
+const fold = (s: string) => s.toLowerCase().replace(/[ёәғқңөұүһі]/g, (ch) => FOLD[ch]).replace(/[\s\-–.,]+/g, ' ').trim();
+const cityIndex = new WeakMap<City[], string[][]>();
+/** Упрощённые названия (ru/kz/en) каждого места; считаются один раз на справочник. */
+function cityNames(cities: City[]) {
+  let idx = cityIndex.get(cities);
+  if (!idx) {
+    idx = cities.map((c) => [...new Set([fold(c.ru), fold(c.kz), fold(c.en)])]);
+    cityIndex.set(cities, idx);
+  }
+  return idx;
+}
+const rows = [new Uint8Array(64), new Uint8Array(64), new Uint8Array(64)];
+/** Сколько правок (замена, лишняя или пропущенная буква, перестановка соседних) отделяет набранное от начала названия; больше max — возвращает max + 1. */
+function prefixDist(q: string, name: string, max: number) {
+  const n = q.length;
+  const m = Math.min(name.length, n + max);
+  if (m < n - max) return max + 1;
+  let [pp, prev, cur] = rows;
+  for (let j = 0; j <= m; j++) prev[j] = j;
+  for (let i = 1; i <= n; i++) {
+    cur[0] = i;
+    let best = i;
+    for (let j = 1; j <= m; j++) {
+      let v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (q[i - 1] === name[j - 1] ? 0 : 1));
+      if (i > 1 && j > 1 && q[i - 1] === name[j - 2] && q[i - 2] === name[j - 1]) v = Math.min(v, pp[j - 2] + 1);
+      cur[j] = v;
+      if (v < best) best = v;
+    }
+    if (best > max) return max + 1;
+    [pp, prev, cur] = [prev, cur, pp];
+  }
+  let d = max + 1;
+  for (let j = 0; j <= m; j++) if (prev[j] < d) d = prev[j];
+  return d;
+}
+/** Подсказки по набранному: сначала названия, которые так начинаются, затем содержащие; если начал нет — похожие с опечаткой. */
+function searchCities(cities: City[], text: string): City[] {
+  const s = fold(text);
+  if (!s) return cities.slice(0, 40);
+  const idx = cityNames(cities);
+  const starts: City[] = [];
+  const inside: City[] = [];
+  for (let k = 0; k < cities.length; k++) {
+    const names = idx[k];
+    if (names.some((n) => n.startsWith(s))) starts.push(cities[k]);
+    else if (inside.length < 40 && names.some((n) => n.includes(s))) inside.push(cities[k]);
+  }
+  // справочник отсортирован по населению, поэтому крупные города оказываются выше
+  if (starts.length || s.length < 4 || s.length > 40) return [...starts, ...inside].slice(0, 40);
+  const max = s.length < 6 ? 1 : 2;
+  const near: City[][] = [[], [], []];
+  for (let k = 0; k < cities.length; k++) {
+    let d = max + 1;
+    for (const n of idx[k]) d = Math.min(d, prefixDist(s, n, max));
+    if (d <= max) near[d].push(cities[k]);
+  }
+  return [...new Set([...near[0], ...near[1], ...inside, ...near[2]])].slice(0, 40);
+}
+let citySeq = 0;
+
+/** Выбор города из справочника: поиск по русскому, казахскому и английскому названию, прощает опечатки. `error` — текст ошибки под полем. */
+export function CitySelect({ value, onChange, placeholder, error }: { value: string | null; onChange: (id: string | null) => void; placeholder?: string; error?: string }) {
   const { cities, cityName, lang } = useApp();
   const [text, setText] = useState('');
   const [open, setOpen] = useState(false);
   const [hi, setHi] = useState(0);
-  const box = useRef<HTMLDivElement>(null);
+  const [miss, setMiss] = useState(false); // набранный текст не удалось сопоставить с городом
+  const keep = useRef(false);
+  const input = useRef<HTMLInputElement>(null);
+  const hintId = useRef('');
+  if (!hintId.current) hintId.current = `city-hint-${++citySeq}`;
   useEffect(() => {
-    setText(value ? cityName(value) : '');
-  }, [value, lang]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    const away = (e: MouseEvent) => {
-      if (!box.current?.contains(e.target as Node)) {
-        setOpen(false);
-        setText(value ? cityName(value) : '');
-      }
-    };
-    document.addEventListener('mousedown', away);
-    return () => document.removeEventListener('mousedown', away);
-  });
-  const list = useMemo(() => {
-    const s = text.trim().toLowerCase();
-    const all = cities;
-    if (!s || (value && text === cityName(value))) return all.slice(0, 40);
-    const starts: City[] = [];
-    const inside: City[] = [];
-    for (const c of all) {
-      const a = c.ru.toLowerCase();
-      const b = c.kz.toLowerCase();
-      const e = c.en.toLowerCase();
-      if (a.startsWith(s) || b.startsWith(s) || e.startsWith(s)) starts.push(c);
-      else if (starts.length + inside.length < 200 && (a.includes(s) || b.includes(s) || e.includes(s))) inside.push(c);
+    if (keep.current) {
+      keep.current = false; // город сбросили сами, а набранный текст оставили на виду
+      return;
     }
-    // справочник отсортирован по населению, поэтому крупные города оказываются выше
-    return [...starts, ...inside].slice(0, 40);
-  }, [text, cities, value]); // eslint-disable-line react-hooks/exhaustive-deps
+    setText(value ? cityName(value) : '');
+    setMiss(false);
+  }, [value, lang]); // eslint-disable-line react-hooks/exhaustive-deps
+  const chosen = !!value && text === cityName(value);
+  const list = useMemo(() => (chosen ? cities.slice(0, 40) : searchCities(cities, text)), [text, cities, chosen]);
   const choose = (c: City) => {
     onChange(c.id);
     setText(placeName(c));
     setOpen(false);
+    setMiss(false);
   };
+  /** Поле покидают: принимаем точное совпадение или первую подсказку; если подобрать нечего — текст остаётся, под полем подсказка. */
+  const settle = () => {
+    setOpen(false);
+    const s = fold(text);
+    if (!s) {
+      if (text) setText('');
+      if (value) onChange(null);
+      return;
+    }
+    if (chosen) return;
+    const idx = cityNames(cities);
+    const pick = cities.find((_, k) => idx[k].includes(s)) ?? (list.length === 1 || s.length >= 2 ? list[hi] ?? list[0] : undefined);
+    if (pick) return choose(pick);
+    setMiss(true);
+    if (value) {
+      keep.current = true;
+      onChange(null);
+    }
+  };
+  const hint = !open && (miss ? (list.length ? t('Выберите город из списка') : t('Такого города нет в справочнике — проверьте написание')) : error);
   return (
-    <div className="city-select" ref={box}>
+    <div className={`city-select ${hint ? 'invalid' : ''}`}>
       <MapPin size={16} className="city-pin" />
       <input
+        ref={input}
         value={text}
         placeholder={placeholder || t('Город')}
         onFocus={(e) => {
-          setOpen(true);
+          // у заполненного поля список не раскрываем, пока не начали печатать: на телефоне он закрывал бы следующее поле
+          if (!chosen) setOpen(true);
           e.target.select();
         }}
+        onBlur={settle}
         onChange={(e) => {
           setText(e.target.value);
           setOpen(true);
           setHi(0);
-          if (!e.target.value) onChange(null);
+          setMiss(false);
+          if (!e.target.value && value) onChange(null);
         }}
         onKeyDown={(e) => {
-          if (e.key === 'ArrowDown') setHi((h) => Math.min(h + 1, list.length - 1));
-          else if (e.key === 'ArrowUp') setHi((h) => Math.max(h - 1, 0));
-          else if (e.key === 'Enter' && open && list[hi]) {
+          if (e.key === 'ArrowDown') {
+            e.preventDefault();
+            if (open) setHi((h) => Math.min(h + 1, list.length - 1));
+            else setOpen(true);
+          } else if (e.key === 'ArrowUp') {
+            e.preventDefault();
+            setHi((h) => Math.max(h - 1, 0));
+          } else if (e.key === 'Enter' && open && list[hi]) {
             e.preventDefault();
             choose(list[hi]);
+          } else if (e.key === 'Enter' && text.trim() && !chosen) {
+            e.preventDefault(); // текст набран, а город не выбран — сначала показываем подсказки
+            setOpen(true);
           } else if (e.key === 'Escape') setOpen(false);
         }}
         role="combobox"
         aria-expanded={open}
         aria-autocomplete="list"
+        aria-invalid={hint ? true : undefined}
+        aria-describedby={hint ? hintId.current : undefined}
+        autoComplete="off"
       />
-      {value && (
-        <button type="button" className="city-clear" onClick={() => onChange(null)} aria-label={t('Очистить')}>
+      {(value || text) && (
+        <button
+          type="button"
+          className="city-clear"
+          tabIndex={-1}
+          aria-label={t('Очистить')}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => {
+            setText('');
+            setMiss(false);
+            if (value) onChange(null);
+            input.current?.focus();
+            setOpen(true);
+          }}
+        >
           <X size={14} />
         </button>
       )}
       {open && (
-        <ul className="city-list" role="listbox">
+        <ul className="city-list" role="listbox" onMouseDown={(e) => e.preventDefault()}>
           {list.length === 0 && <li className="muted">{t('Город не найден')}</li>}
           {list.map((c, i) => (
             <li key={c.id} role="option" aria-selected={i === hi} className={i === hi ? 'hi' : ''} onMouseEnter={() => setHi(i)} onMouseDown={(e) => { e.preventDefault(); choose(c); }}>
@@ -163,19 +276,37 @@ export function CitySelect({ value, onChange, placeholder }: { value: string | n
           ))}
         </ul>
       )}
+      {hint && <span className="city-hint" id={hintId.current} role="alert">{hint}</span>}
     </div>
   );
 }
 
 export function Tabs({ items, value, onChange }: { items: { value: string; label: string; count?: number }[]; value: string; onChange: (v: string) => void }) {
+  // на телефоне вкладки листаются: выбранная всегда на виду, а справа — подсказка, что есть ещё
+  const el = useRef<HTMLDivElement>(null);
+  const [more, setMore] = useState(false);
+  const check = () => {
+    const d = el.current;
+    if (d) setMore(d.scrollWidth - d.clientWidth - d.scrollLeft > 8);
+  };
+  useEffect(() => {
+    const d = el.current;
+    const on = d?.querySelector<HTMLElement>('.on');
+    if (d && on) d.scrollLeft = Math.max(0, on.offsetLeft - (d.clientWidth - on.offsetWidth) / 2);
+    check();
+    window.addEventListener('resize', check);
+    return () => window.removeEventListener('resize', check);
+  }, [value, items.length]);
   return (
-    <div className="tabs" role="tablist">
-      {items.map((i) => (
-        <button key={i.value} role="tab" aria-selected={value === i.value} className={value === i.value ? 'on' : ''} onClick={() => onChange(i.value)}>
-          {i.label}
-          {i.count !== undefined && i.count > 0 && <span className="tab-count">{i.count}</span>}
-        </button>
-      ))}
+    <div className={`tabs-wrap ${more ? 'more' : ''}`}>
+      <div className="tabs" role="tablist" ref={el} onScroll={check}>
+        {items.map((i) => (
+          <button key={i.value} role="tab" aria-selected={value === i.value} className={value === i.value ? 'on' : ''} onClick={() => onChange(i.value)}>
+            {i.label}
+            {i.count !== undefined && i.count > 0 && <span className="tab-count">{i.count}</span>}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -204,6 +335,24 @@ export function Stars({ value, onChange, size = 18 }: { value: number; onChange?
   );
 }
 
+/** Окно с обязательным текстом: причина отказа, блокировки, ответ на обращение. */
+export function ReasonModal({ title, hint, label, min = 5, confirm, danger, onSubmit, onClose }: {
+  title: string; hint?: string; label: string; min?: number; confirm: string; danger?: boolean; onSubmit: (text: string) => void | Promise<unknown>; onClose: () => void;
+}) {
+  const [text, setText] = useState('');
+  const [busy, setBusy] = useState(false);
+  return (
+    <Modal title={title} onClose={onClose}>
+      {hint && <p className="muted small">{hint}</p>}
+      <Field label={label}><textarea autoFocus rows={4} maxLength={500} value={text} onChange={(e) => setText(e.target.value)} /></Field>
+      <div className="row end">
+        <button className="btn ghost" onClick={onClose}>{t('Отмена')}</button>
+        <button className={`btn ${danger ? 'danger' : 'primary'}`} disabled={busy || text.trim().length < min} onClick={async () => { setBusy(true); await onSubmit(text.trim()); setBusy(false); }}>{confirm}</button>
+      </div>
+    </Modal>
+  );
+}
+
 const IND_TEXT = { green: 'Хорошая репутация', red: 'Много плохих отзывов', gray: 'Пока мало отзывов' };
 /** Компания с индикатором репутации: зелёный — хорошая, красный — много плохих отзывов. */
 export function CompanyBadge({ c, link = true }: { c: Company; link?: boolean }) {
@@ -215,6 +364,7 @@ export function CompanyBadge({ c, link = true }: { c: Company; link?: boolean })
       </span>
       {c.verified === 'verified' && <BadgeCheck size={16} className="verified" aria-label={t('Компания проверена')} />}
       {c.pro && <span className="pro" title={t('Тариф Pro')}>PRO</span>}
+      {c.indicator === 'red' && <span className="cb-warn">{c.banned ? t('Заблокирована') : t('Плохая репутация')}</span>}
       {c.rating != null && (
         <span className="cb-rating">
           <Star size={13} fill="currentColor" /> {c.rating.toFixed(1)}
@@ -242,7 +392,9 @@ export function MapView({ routes, markers, height = 320, fitKey }: { routes: Map
   const fitted = useRef<string | null>(null);
 
   useEffect(() => {
-    const m = L.map(el.current!, { zoomControl: true, attributionControl: true, scrollWheelZoom: false, zoomAnimation: false, markerZoomAnimation: false }).setView([48, 68], 5);
+    // на телефоне один палец листает страницу, карту двигают двумя — иначе под ней не прокрутить экран
+    const touch = window.matchMedia?.('(pointer: coarse)').matches;
+    const m = L.map(el.current!, { zoomControl: true, attributionControl: true, scrollWheelZoom: false, zoomAnimation: false, markerZoomAnimation: false, dragging: !touch }).setView([48, 68], 5);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 18, attribution: '© OpenStreetMap' }).addTo(m);
     layer.current = L.layerGroup().addTo(m);
     map.current = m;
@@ -278,7 +430,7 @@ export function MapView({ routes, markers, height = 320, fitKey }: { routes: Map
     }
   }, [routes, markers, fitKey]);
 
-  return <div ref={el} className="map" style={{ height }} />;
+  return <div ref={el} className="map" style={{ height }} data-hint={t('Двигайте карту двумя пальцами')} />;
 }
 
 export function Logo() {

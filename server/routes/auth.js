@@ -14,10 +14,13 @@ const { bad, parse } = L;
 
 // Ограничение частоты: сколько раз за окно времени. Устаревшие записи вычищаются, чтобы таблица не росла.
 const attempts = new Map();
-export function rateLimit(key, max, windowMs, message = 'Слишком много попыток, попробуйте позже') {
+export function rateLimit(key, max, windowMs, message = '') {
   const t = Date.now();
   const list = (attempts.get(key) || []).filter((x) => t - x < windowMs);
-  if (list.length >= max) throw bad('rate_limit', message, 429);
+  if (list.length >= max) {
+    if (message) throw bad('rate_limit', message, 429);
+    throw L.tbad('rate_limit', 'Слишком много попыток. Попробуйте через {n} мин', { n: Math.max(1, Math.ceil((windowMs - (t - list[0])) / 60_000)) }, 429);
+  }
   list.push(t);
   attempts.set(key, list);
 }
@@ -96,7 +99,7 @@ export default function authRoutes(app) {
   app.post('/api/auth/request-code', async (req, res) => {
     const phone = L.normPhone(req.body?.phone);
     rateLimit('code:' + phone, 5, 10 * 60_000);
-    rateLimit('ip:' + req.ip, 30, 10 * 60_000);
+    rateLimit('ip:' + req.ip, 100, 10 * 60_000); // за одним адресом мобильного оператора — много людей
     // учётные записи из демо-данных вне демо-режима не действуют
     if (!L.DEMO && q1('SELECT 1 FROM users WHERE phone = ? AND is_demo = 1', phone)) throw bad('forbidden', 'Этот номер недоступен', 403);
     const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
@@ -142,7 +145,7 @@ export default function authRoutes(app) {
   const regSchema = z.object({
     regToken: z.string().min(10),
     name: z.string().trim().min(2).max(100),
-    email: z.string().trim().email().max(120),
+    email: z.union([z.literal(''), z.string().trim().email().max(120)]).default(''),
     companyName: z.string().trim().min(2).max(120).optional(),
     companyForm: z.enum(['ИП', 'ТОО']).optional(),
     role: z.enum(L.ROLES).optional(),
@@ -218,7 +221,7 @@ export default function authRoutes(app) {
   // Данные компании меняет только владелец.
   const companySchema = z.object({
     about: z.string().max(1000).optional(),
-    cityId: z.string().refine((c) => cityById.has(c), 'неизвестный город').nullable().optional(),
+    cityId: z.string().refine((c) => cityById.has(c), 'Неизвестный город').nullable().optional(),
     bin: z.string().trim().max(12).optional(),
   });
   app.patch('/api/company', L.auth, L.owner, (req, res) => {

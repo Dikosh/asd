@@ -1,7 +1,7 @@
 import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { BrowserRouter, NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import { Bell, Bookmark, Building2, Calculator, ChevronDown, Home as HomeIcon, LifeBuoy, Menu, MessageSquare, Package, Search as SearchIcon, TrendingUp, Truck, UserRound } from 'lucide-react';
+import { Link, BrowserRouter, NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { Bell, Bookmark, Building2, Calculator, ChevronDown, Home as HomeIcon, LifeBuoy, Menu, MessageSquare, Package, Search as SearchIcon, TrendingUp, Truck, UserRound, Ban } from 'lucide-react';
 import './styles.css';
 import { api, AppCtx, City, connectEvents, Ctx, getLang, Lang, Me, Meta, placeName, storeLang, t, Trip, useApp, useEvent } from './core';
 import { registerWorker } from './push';
@@ -161,6 +161,12 @@ function Layout() {
         </div>
       </header>
       <main className="content">
+        {me!.company.banned && (
+          <Link to="/help/support" className="banner bad ban-banner">
+            <Ban size={20} />
+            <div><b>{t('Компания заблокирована модератором')}</b><span>{me!.company.banReason ? `${t('Причина')}: ${me!.company.banReason}. ` : ''}{t('Размещать объявления и откликаться нельзя. Не согласны — напишите в поддержку.')}</span></div>
+          </Link>
+        )}
         <Routes>
           <Route path="/" element={<HomePage />} />
           <Route path="/my/:kind" element={<MyListings />} />
@@ -234,7 +240,8 @@ function App() {
     };
     const toast = (text: string, kind: 'ok' | 'error' = 'ok') => {
       const id = ++seq.current;
-      setToasts((x) => [...x, { id, text, kind }]);
+      // одинаковые подряд не копим, на экране не больше трёх
+      setToasts((x) => [...x.filter((y) => y.text !== text), { id, text, kind }].slice(-3));
       setTimeout(() => setToasts((x) => x.filter((y) => y.id !== id)), 3800);
     };
     return {
