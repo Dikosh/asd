@@ -37,6 +37,10 @@ if ! command -v caddy >/dev/null; then
 fi
 
 say "Код приложения"
+# перед обновлением — копия текущей базы: если новая версия что-то испортит, будет к чему вернуться
+if [ -f "$DATA/jolda.db" ] && [ -f "$APP/scripts/backup.mjs" ]; then
+  DATA_DIR="$DATA" node "$APP/scripts/backup.mjs" /var/backups/jolda || echo "Копия перед обновлением не удалась"
+fi
 id jolda >/dev/null 2>&1 || useradd --system --home "$DATA" --shell /usr/sbin/nologin jolda
 if [ -d "$APP/.git" ]; then git -C "$APP" fetch -q origin main && git -C "$APP" reset -q --hard origin/main
 else git clone -q --depth 1 "$REPO" "$APP"; fi
@@ -74,6 +78,61 @@ EOF
 systemctl daemon-reload
 systemctl enable -q jolda
 systemctl restart jolda
+
+say "Резервные копии и сторож"
+# Каждую ночь — копия базы и документов в /var/backups/jolda (последние 14). Для надёжности копируйте их и за пределы сервера.
+cat > /etc/systemd/system/jolda-backup.service <<EOF
+[Unit]
+Description=Jolda nightly backup
+
+[Service]
+Type=oneshot
+Environment=DATA_DIR=$DATA
+ExecStart=/usr/bin/node $APP/scripts/backup.mjs /var/backups/jolda
+EOF
+cat > /etc/systemd/system/jolda-backup.timer <<'EOF'
+[Unit]
+Description=Jolda nightly backup
+
+[Timer]
+OnCalendar=*-*-* 03:30
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+# Сторож: раз в минуту спрашивает сайт; если тот трижды подряд не ответил — перезапускает службу.
+cat > /usr/local/bin/jolda-watchdog <<'EOF'
+#!/usr/bin/env bash
+F=/run/jolda-watchdog.fails
+if curl -fs -m 10 localhost:3000/api/meta >/dev/null; then echo 0 > "$F"; exit 0; fi
+n=$(( $(cat "$F" 2>/dev/null || echo 0) + 1 )); echo "$n" > "$F"
+if [ "$n" -ge 3 ]; then logger -t jolda-watchdog "сайт не отвечает 3 минуты — перезапуск"; systemctl restart jolda; echo 0 > "$F"; fi
+EOF
+chmod +x /usr/local/bin/jolda-watchdog
+cat > /etc/systemd/system/jolda-watchdog.service <<'EOF'
+[Unit]
+Description=Jolda watchdog
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/jolda-watchdog
+EOF
+cat > /etc/systemd/system/jolda-watchdog.timer <<'EOF'
+[Unit]
+Description=Jolda watchdog
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target
+EOF
+systemctl daemon-reload
+systemctl enable -q --now jolda-backup.timer jolda-watchdog.timer
+# копия сразу после установки или обновления — чтобы было к чему вернуться
+systemctl start jolda-backup.service || echo "Не удалось сделать копию — проверьте: journalctl -u jolda-backup"
 
 say "Веб-сервер"
 SITE="${DOMAIN:-:80}"
