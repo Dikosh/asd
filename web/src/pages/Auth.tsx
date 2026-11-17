@@ -156,7 +156,7 @@ export default function AuthPage() {
                 <>
                   <Field label={t('Наименование компании')} hint={t('Работаете один? Выберите ИП и впишите свою фамилию.')}>
                     <div className="phone-row">
-                      <Select value={reg.companyForm} onChange={(v) => setReg({ ...reg, companyForm: v })} options={[{ value: 'ТОО', label: 'ТОО' }, { value: 'ИП', label: 'ИП' }]} />
+                      <Select value={reg.companyForm} onChange={(v) => setReg({ ...reg, companyForm: v })} options={[{ value: 'ТОО', label: t('ТОО') }, { value: 'ИП', label: t('ИП') }]} />
                       <input required value={reg.companyName} onChange={(e) => setReg({ ...reg, companyName: e.target.value })} placeholder={t('Без кавычек и формы')} autoComplete="organization" />
                     </div>
                   </Field>
@@ -175,7 +175,7 @@ export default function AuthPage() {
               )}
               <label className="switch small">
                 <input type="checkbox" checked={accept} onChange={(e) => setAccept(e.target.checked)} />
-                <span>{t('Принимаю')} <Link to="/rules" target="_blank">{t('правила платформы')}</Link> {t('и согласен на обработку персональных данных')}</span>
+                <span>{t('Принимаю правила платформы и согласен на обработку персональных данных')}. <Link to="/rules" target="_blank">{t('Читать правила')}</Link></span>
               </label>
               <button className="btn primary block" disabled={busy || !accept}>{joining ? t('Присоединиться') : t('Зарегистрироваться')}</button>
             </>
