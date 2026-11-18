@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Bookmark, BookmarkCheck, Check, ChevronRight, Clock, Eye, FileCheck2, Flag, Globe2, MapPin, MessageSquare, Send, Share2, ShieldAlert, StickyNote, TrendingUp, Truck, X } from 'lucide-react';
-import { api, Company, fmtDates, fmtWhen, Listing, ListingTrip, money, num, PAY_L, ROLE_L, STAGE_L, t, useApp, useEvent, useLoad } from '../core';
+import { api, Company, fmtDates, fmtWhen, Listing, ListingTrip, money, num, PAY_L, ROLE_L, KIND_L, stageLabel, t, useApp, useEvent, useLoad } from '../core';
 import { CompanyBadge, Empty, Field, Loading, MapView, Select } from '../ui';
 import { AcceptResponseModal, canRespondTo, ComplaintModal, ContactButtons, ListingCard, NoteModal, RateBlock, RouteTitle, SpecChips, useShare } from '../listing';
 
@@ -93,10 +93,12 @@ export default function ListingPage() {
   const unknown = l.company.verified !== 'verified' && l.company.trips === 0;
   const prepay = l.payTerms.includes('prepay');
   const free = Math.max(0, l.trucks - l.booked);
+  const reloc = l.kind === 'relocation';
   const myTrips = l.trips.filter((x) => x.status === 'active' || x.status === 'completed');
   // пустое сообщение не мешает откликнуться: отправляем понятный текст по умолчанию
   const defaultMsg = broker
     ? t('Здравствуйте! Готовы помочь с таможенным оформлением этой перевозки.')
+    : l.kind === 'relocation' ? t('Здравствуйте! Готов перегнать вашу машину. Давайте обсудим детали.')
     : l.kind === 'cargo' ? t('Здравствуйте! Готовы перевезти ваш груз. Давайте обсудим детали.') : t('Здравствуйте! Есть груз для вашей машины. Давайте обсудим детали.');
 
   /** Один запрос за раз: пока он идёт, кнопки заблокированы. */
@@ -144,7 +146,7 @@ export default function ListingPage() {
             <div className="lcard-top">
               <div>
                 <div className="lcard-tags">
-                  <span className={`tag ${l.kind}`}>{l.kind === 'cargo' ? t('Груз') : t('Транспорт')}</span>
+                  <span className={`tag ${l.kind}`}>{t(KIND_L[l.kind])}</span>
                   {l.status !== 'active' && <span className="tag">{l.status === 'closed' ? t('Закрыто') : t('В архиве')}</span>}
                   {l.international && <span className="tag intl"><Globe2 size={12} /> {t('Международный')}</span>}
                   {l.tripId && <span className="tag trip">{t('В рейсе')}</span>}
@@ -157,13 +159,13 @@ export default function ListingPage() {
             <SpecChips l={l} />
             {(l.loadAddress || l.unloadAddress || l.loadTime) && (
               <div className="addr">
-                {l.loadAddress && <div className="kv"><span><MapPin size={14} /> {t('Адрес погрузки')}</span><b>{l.loadAddress}</b></div>}
-                {l.unloadAddress && <div className="kv"><span><MapPin size={14} /> {t('Адрес выгрузки')}</span><b>{l.unloadAddress}</b></div>}
-                {l.loadTime && <div className="kv"><span><Clock size={14} /> {t('Время погрузки')}</span><b>{l.loadTime}</b></div>}
+                {l.loadAddress && <div className="kv"><span><MapPin size={14} /> {reloc ? t('Где забрать машину') : t('Адрес погрузки')}</span><b>{l.loadAddress}</b></div>}
+                {l.unloadAddress && <div className="kv"><span><MapPin size={14} /> {reloc ? t('Куда доставить машину') : t('Адрес выгрузки')}</span><b>{l.unloadAddress}</b></div>}
+                {l.loadTime && <div className="kv"><span><Clock size={14} /> {reloc ? t('Когда забрать') : t('Время погрузки')}</span><b>{l.loadTime}</b></div>}
               </div>
             )}
-            {l.kind === 'cargo' && l.trucks > 1 && (
-              <div className="kv"><span><Truck size={14} /> {t('Нужно машин')}</span><b>{l.trucks}{l.booked > 0 ? ` · ${t('найдено: {n}', { n: l.booked })}` : ''}</b></div>
+            {l.kind !== 'truck' && l.trucks > 1 && (
+              <div className="kv"><span><Truck size={14} /> {reloc ? t('Машин на перегон') : t('Нужно машин')}</span><b>{l.trucks}{l.booked > 0 ? ` · ${t('найдено: {n}', { n: l.booked })}` : ''}</b></div>
             )}
             {l.payTerms.length > 0 && <div className="kv"><span>{t('Условия оплаты')}</span><b>{l.payTerms.map((p) => t(PAY_L[p])).join(', ')}</b></div>}
             {l.description && <p className="desc full">{l.description}</p>}
@@ -274,7 +276,7 @@ export default function ListingPage() {
 
         <aside className="stack">
           <div className="card d-company">
-            <div className="muted small">{l.kind === 'cargo' ? t('Заказчик') : t('Перевозчик')}</div>
+            <div className="muted small">{l.kind === 'truck' ? t('Перевозчик') : t('Заказчик')}</div>
             <CompanyBadge c={l.company} />
             <div className="company-stats">
               <div><b>{l.company.trips}</b><span>{t('рейсов')}</span></div>
@@ -293,11 +295,11 @@ export default function ListingPage() {
               {myTrips.map((x) => (
                 <Link key={x.id} to={`/trip/${x.id}`} className="trip-line">
                   <span>
-                    <b>№{x.id}</b> · {l.mine && l.kind === 'cargo' ? x.carrierName : l.mine ? x.customerName : x.carrierName}
+                    <b>№{x.id}</b> · {l.mine && l.kind !== 'truck' ? x.carrierName : l.mine ? x.customerName : x.carrierName}
                     {x.plate ? ` · ${x.plate}` : ''}
                   </span>
                   <span className={`status ${x.status === 'completed' ? 'accepted' : 'sent'}`}>
-                    {x.status === 'completed' ? t('Завершён') : !x.confirmed ? t('Ждёт подтверждения') : t(STAGE_L[x.stage])}
+                    {x.status === 'completed' ? t('Завершён') : !x.confirmed ? t('Ждёт подтверждения') : stageLabel(x.stage, l.kind)}
                   </span>
                 </Link>
               ))}
@@ -308,8 +310,8 @@ export default function ListingPage() {
               <b>{t('Это ваше объявление')}</b>
               <div className="muted small"><Eye size={14} /> {t('просмотров: {n}', { n: l.views })} · {t('откликов: {n}', { n: l.responsesCount })}</div>
               <button className="btn soft block" onClick={() => share(l)}><Share2 size={16} /> {t('Поделиться объявлением')}</button>
-              {!l.tripId && <Link to={`/my/${l.kind}/${l.id}/edit`} className="btn soft block">{t('Изменить')}</Link>}
-              {l.kind === 'cargo' && l.trucks > 1 && l.status === 'active' && (
+              {!l.tripId && <Link to={reloc ? `/relocation/${l.id}/edit` : `/my/${l.kind}/${l.id}/edit`} className="btn soft block">{t('Изменить')}</Link>}
+              {l.kind !== 'truck' && l.trucks > 1 && l.status === 'active' && (
                 <p className="muted small">{l.full ? t('Все машины найдены — объявление скрыто из поиска.') : t('Осталось найти машин: {n}', { n: free })}</p>
               )}
             </div>
@@ -333,7 +335,7 @@ export default function ListingPage() {
                   <b>{broker ? t('Предложить услуги брокера') : t('Откликнуться')}</b>
                   <Field label={t('Сообщение (необязательно)')} hint={msg.trim() ? undefined : t('Если оставить пустым, отправим: «{text}»', { text: defaultMsg })}>
                     <textarea rows={3} value={msg} onChange={(e) => setMsg(e.target.value)} maxLength={1000}
-                      placeholder={broker ? t('Какие услуги и сроки предлагаете') : l.kind === 'cargo' ? t('Какая машина, когда готовы встать на погрузку') : t('Какой груз, когда и откуда забирать')} />
+                      placeholder={broker ? t('Какие услуги и сроки предлагаете') : l.kind === 'relocation' ? t('Ваш опыт, категории прав и когда готовы выехать') : l.kind === 'cargo' ? t('Какая машина, когда готовы встать на погрузку') : t('Какой груз, когда и откуда забирать')} />
                   </Field>
                   {offersTruck && free > 1 && (
                     <Field label={t('Сколько машин можете дать')} hint={t('Нужно ещё: {n}', { n: free })}>

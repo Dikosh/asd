@@ -50,6 +50,14 @@ const T = {
   'Перевозчик подтвердил рейс: {route}': ['Тасымалдаушы рейсті растады: {route}', 'The carrier confirmed the trip: {route}', '承运商已确认行程：{route}'],
   'Перевозчик заменил машину или водителя: {route}': ['Тасымалдаушы көлікті немесе жүргізушіні ауыстырды: {route}', 'The carrier changed the truck or driver: {route}', '承运商已更换车辆或司机：{route}'],
   'Новый документ в рейсе: {route}': ['Рейсте жаңа құжат: {route}', 'New document in the trip: {route}', '行程中有新文件：{route}'],
+  'Новая заявка на перегон: {route}': ['Айдауға жаңа өтінім: {route}', 'New vehicle relocation request: {route}', '新的代驾转运需求：{route}'],
+  'Подходит под ваши права и город': ['Куәлігіңізге және қалаңызға сай келеді', 'Matches your licence and city', '符合您的驾照类别和所在城市'],
+  'Перегонщик едет к машине: {route}': ['Айдаушы көлікке бара жатыр: {route}', 'The driver is heading to the vehicle: {route}', '转运司机正前往车辆所在地：{route}'],
+  'Перегонщик принимает машину: {route}': ['Айдаушы көлікті қабылдап жатыр: {route}', 'The driver is taking over the vehicle: {route}', '转运司机正在接车：{route}'],
+  'Машина в пути: {route}': ['Көлік жолда: {route}', 'Vehicle on the way: {route}', '车辆在途：{route}'],
+  'Перегонщик сдаёт машину: {route}': ['Айдаушы көлікті тапсырып жатыр: {route}', 'The driver is handing over the vehicle: {route}', '转运司机正在交车：{route}'],
+  'Машина доставлена: {route}': ['Көлік жеткізілді: {route}', 'Vehicle delivered: {route}', '车辆已送达：{route}'],
+  'Проверьте машину и подтвердите приёмку': ['Көлікті тексеріп, қабылдауды растаңыз', 'Check the vehicle and confirm receipt', '请检查车辆并确认接收'],
   'Вас назначили на рейс: {route}': ['Сізді рейске тағайындады: {route}', 'You were assigned to a trip: {route}', '您已被指派到行程：{route}'],
 };
 export const TEMPLATES = Object.keys(T);

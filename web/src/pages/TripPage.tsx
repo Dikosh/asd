@@ -4,7 +4,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, Camera, Check, Clock, Copy, FileText, MapPin, MessageSquare, Navigation, Paperclip, Phone, Play, RefreshCw, Share2, Smartphone, Square, TriangleAlert, Truck, User, WifiOff,
 } from 'lucide-react';
-import { api, BODY_L, CARGO_L, deviceKind, FILE_KIND_L, fmtDates, fmtStamp, fmtWhen, LOADING_L, money, num, opts, prepareUpload, STAGE_L, t, Trip, useApp, useEvent, useLoad, waLink } from '../core';
+import { api, BODY_L, CARGO_L, deviceKind, FILE_KIND_L, fmtDates, fmtStamp, fmtWhen, LOADING_L, money, num, opts, prepareUpload, stageLabel, t, Trip, useApp, useEvent, useLoad, waLink } from '../core';
 import { Empty, Field, Loading, Logo, MapMarker, MapRoute, MapView, Modal, Select, Stars } from '../ui';
 import { ContactButtons, RouteTitle } from '../listing';
 
@@ -32,7 +32,7 @@ const setDeviceShare = (id: number, on: boolean) => {
 
 const STATUS_L: Record<string, string> = { completed: 'Завершён', cancelled: 'Отменён', failed: 'Сорван' };
 const statusClass = (tr: Trip) => (tr.status === 'active' ? 'sent' : tr.status === 'completed' ? 'accepted' : 'declined');
-const statusText = (tr: Trip) => (tr.status === 'active' ? (tr.confirmed ? t(STAGE_L[tr.stage]) : t('Ждёт подтверждения')) : t(STATUS_L[tr.status]));
+const statusText = (tr: Trip) => (tr.status === 'active' ? (tr.confirmed ? stageLabel(tr.stage, tr.kind) : t('Ждёт подтверждения')) : t(STATUS_L[tr.status]));
 
 function useTripMap(trip: Trip | null) {
   const { city, cityName } = useApp();
@@ -57,7 +57,7 @@ export function StageBar({ trip }: { trip: Trip }) {
         return (
           <li key={s} className={i < cur || trip.status === 'completed' ? 'done' : i === cur ? 'on' : ''}>
             <span className="stage-dot">{i < cur || trip.status === 'completed' ? <Check size={12} /> : null}</span>
-            <span className="stage-l">{t(STAGE_L[s])}</span>
+            <span className="stage-l">{stageLabel(s, trip.kind)}</span>
             {at && <span className="stage-t">{fmtStamp(at)}</span>}
           </li>
         );
@@ -179,7 +179,11 @@ function GpsHelp({ error, retry }: { error: string; retry: () => void }) {
 const STAGE_ACT: Record<string, string> = {
   to_loading: 'Выехал на погрузку', loading: 'Приехал на погрузку', in_transit: 'Загрузился — выезжаю', unloading: 'Приехал на выгрузку', delivered: 'Груз выгружен',
 };
-const confirmStage = (s: string) => confirm(t('Отметить: «{s}»? Заказчик сразу это увидит, отменить отметку нельзя.', { s: t(STAGE_ACT[s]) }));
+const RELOC_STAGE_ACT: Record<string, string> = {
+  to_loading: 'Выехал к машине', loading: 'Приехал к машине', in_transit: 'Принял машину — выезжаю', unloading: 'Приехал на место сдачи', delivered: 'Машину сдал',
+};
+const stageAct = (s: string, kind?: string) => t((kind === 'relocation' ? RELOC_STAGE_ACT : STAGE_ACT)[s]);
+const confirmStage = (s: string, kind?: string) => confirm(t('Отметить: «{s}»? Заказчик сразу это увидит, отменить отметку нельзя.', { s: stageAct(s, kind) }));
 /** Копирование с понятной ошибкой: в части браузеров буфер обмена недоступен. */
 const copyText = async (text: string) => {
   try {
@@ -319,7 +323,9 @@ function AssignModal({ trip, onClose, onDone }: { trip: Trip; onClose: () => voi
       setPhone(p.phone);
     }
   };
-  const ok = brand.trim() && plate.trim().length >= 4 && name.trim().length >= 2 && phone.replace(/\D/g, '').length >= 10;
+  // при перегоне у новой машины или спецтехники номера может ещё не быть
+  const reloc = trip.kind === 'relocation';
+  const ok = brand.trim() && (reloc || plate.trim().length >= 4) && name.trim().length >= 2 && phone.replace(/\D/g, '').length >= 10;
   const save = async () => {
     if (busy) return;
     setBusy(true);
@@ -340,9 +346,9 @@ function AssignModal({ trip, onClose, onDone }: { trip: Trip; onClose: () => voi
       )}
       <div className="grid2">
         <Field label={t('Марка')}><input value={brand} onChange={(e) => { setBrand(e.target.value); setVehicle(''); }} maxLength={60} placeholder="Volvo FH" /></Field>
-        <Field label={t('Госномер')}><input value={plate} onChange={(e) => { setPlate(e.target.value.toUpperCase()); setVehicle(''); }} maxLength={20} placeholder="123 ABC 02" /></Field>
+        <Field label={reloc ? t('Госномер (если есть)') : t('Госномер')}><input value={plate} onChange={(e) => { setPlate(e.target.value.toUpperCase()); setVehicle(''); }} maxLength={20} placeholder="123 ABC 02" /></Field>
       </div>
-      <Field label={t('Госномер прицепа (необязательно)')}><input value={trailer} onChange={(e) => setTrailer(e.target.value.toUpperCase())} maxLength={20} /></Field>
+      {!reloc && <Field label={t('Госномер прицепа (необязательно)')}><input value={trailer} onChange={(e) => setTrailer(e.target.value.toUpperCase())} maxLength={20} /></Field>}
       {(team.length > 0 || people.length > 0) && (
         <Field label={t('Водитель')}>
           <Select value={driver} onChange={pickDriver} placeholder={t('Другой водитель — ввести вручную')}
@@ -502,8 +508,8 @@ export default function TripPage() {
 
               {trip.shareGps && onDevice && !trip.position && <div className="info-line">{t('Ждём первую позицию с этого телефона. Если она не появится за минуту — проверьте, что геолокация включена и разрешена для сайта.')}</div>}
               {next && (
-                <button className="btn primary block big" onClick={() => confirmStage(next) && post('stage', { stage: next }, t('Этап обновлён'))}>
-                  <Check size={18} /> {t(STAGE_ACT[next])}
+                <button className="btn primary block big" onClick={() => confirmStage(next, trip.kind) && post('stage', { stage: next }, t('Этап обновлён'))}>
+                  <Check size={18} /> {stageAct(next, trip.kind)}
                 </button>
               )}
               {!next && (
@@ -719,13 +725,13 @@ export function DrivePage() {
                   <p className="muted small">{t('Не закрывайте эту страницу до конца рейса: пока она открыта, экран не погаснет и позиция будет уходить заказчику.')}</p>
                   {next ? (
                     <>
-                    <button className="btn primary block big" disabled={!!geoError && meta.stages.indexOf(next) >= meta.stages.indexOf('in_transit')} onClick={() => confirmStage(next) && post('stage', { stage: next }, t('Этап обновлён'))}><Check size={20} /> {t(STAGE_ACT[next])}</button>
+                    <button className="btn primary block big" disabled={!!geoError && meta.stages.indexOf(next) >= meta.stages.indexOf('in_transit')} onClick={() => confirmStage(next, trip.kind) && post('stage', { stage: next }, t('Этап обновлён'))}><Check size={20} /> {stageAct(next, trip.kind)}</button>
                     {!!geoError && meta.stages.indexOf(next) >= meta.stages.indexOf('in_transit') && <p className="muted small center">{t('Сначала включите геолокацию — без неё этот этап не отметить')}</p>}
                     </>
                   ) : (
                     <div className="info-line">{t('Доставка отмечена. Ждём подтверждения заказчика.')}</div>
                   )}
-                  {next && <p className="muted small center">{t('Сейчас: {s}. Нажмите кнопку, когда это произойдёт.', { s: t(STAGE_L[trip.stage]) })}</p>}
+                  {next && <p className="muted small center">{t('Сейчас: {s}. Нажмите кнопку, когда это произойдёт.', { s: stageLabel(trip.stage, trip.kind) })}</p>}
                 </>
               )}
             </div>

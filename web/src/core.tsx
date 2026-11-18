@@ -11,14 +11,14 @@ export interface Company {
   reviews: number; trips: number; blacklisted: number; pro?: boolean; banned?: boolean; indicator: 'green' | 'red' | 'gray';
 }
 export interface Listing {
-  id: number; kind: 'cargo' | 'truck'; status: 'active' | 'closed' | 'archived' | 'removed'; points: string[]; fromId: string; toId: string;
+  id: number; kind: Kind; status: 'active' | 'closed' | 'archived' | 'removed'; points: string[]; fromId: string; toId: string;
   brand: string; bodyType: string | null; cargoType: string | null; weight: number | null; volume: number | null; loading: string[];
   dateFrom: string; dateTo: string; payTerms: string[]; rate: number | null; currency: string; description: string; distanceKm: number;
   international: boolean; boosted: boolean; boostedUntil?: string | null; createdAt: string; tripId: number | null; company: Company;
   user: { id: number; name: string; phone: string | null }; mine: boolean; mark: { marked: boolean; note: string; hidden: boolean };
   adrClass: number | null; flags: string[]; views: number; partner: boolean; blocked: boolean; countries: string[];
   responsesCount: number; myResponse: { id: number; status: string } | null; match?: { score: number; detourKm: number }; detourKm?: number;
-  trucks: number; booked: number; full: boolean; loadAddress: string; unloadAddress: string; loadTime: string;
+  trucks: number; booked: number; full: boolean; loadAddress: string; unloadAddress: string; loadTime: string; vehicleKind: string | null; licenses: string[];
 }
 /** Рейс по объявлению — в карточке объявления (у груза на несколько машин их несколько). */
 export interface ListingTrip {
@@ -30,14 +30,17 @@ export interface Me {
   counters: { notifications: number; unread: number; responses: number; trips: number };
   pendingReviews: { tripId: number; companyName: string; finishedAt: string }[];
 }
+/** Вид объявления: груз, транспорт или заявка на перегон машины своим ходом. */
+export type Kind = 'cargo' | 'truck' | 'relocation';
+
 export interface Meta {
   demo: boolean; cities: City[]; roles: string[]; body: string[]; cargo: string[]; loading: string[]; pay: string[]; currencies: string[];
-  stages: string[]; docKinds: string[]; boostPrice: number; flags: string[]; places: number;
+  stages: string[]; docKinds: string[]; boostPrice: number; flags: string[]; places: number; relocVehicles: string[]; licenses: string[];
   support: { phone: string; telegram: string; hours: string }; tiles: { url: string; attribution: string }; limits: { activeFree: number; activePro: number; perHour: number; boostsPro: number };
-  plan: { price: number; days: number; free: { seats: number; alerts: number }; pro: { seats: number; alerts: number } }; stats: { cargo: number; truck: number; companies: number; trips: number };
+  plan: { price: number; days: number; free: { seats: number; alerts: number }; pro: { seats: number; alerts: number } }; stats: { cargo: number; truck: number; relocation: number; companies: number; trips: number };
 }
 export interface Trip {
-  id: number; status: 'active' | 'completed' | 'cancelled' | 'failed'; stage: string; signalLost?: boolean; failReason?: string; driverToken?: string; autoCompleteAt?: string | null; shareGps: boolean; points: string[]; listingId: number;
+  id: number; status: 'active' | 'completed' | 'cancelled' | 'failed'; kind?: Kind; stage: string; signalLost?: boolean; failReason?: string; driverToken?: string; autoCompleteAt?: string | null; shareGps: boolean; points: string[]; listingId: number;
   cargoType: string | null; bodyType: string | null; weight: number | null; volume: number | null; distanceKm: number; price?: number | null; currency: string;
   createdAt: string; finishedAt: string | null; carrier: { companyId: number; name: string; userName: string; phone?: string; form?: string; bin?: string | null };
   customer: { companyId: number; name: string; userName?: string; phone?: string; form?: string; bin?: string | null };
@@ -216,6 +219,18 @@ export const ROLE_HINT: Record<string, string> = {
 export const STAGE_L: Record<string, string> = {
   planned: 'Рейс назначен', to_loading: 'Еду на погрузку', loading: 'Погрузка', in_transit: 'В пути', unloading: 'Выгрузка', delivered: 'Доставлено',
 };
+// у перегона свои названия этапов: перегонщик едет к машине, принимает её, ведёт и сдаёт
+export const RELOC_STAGE_L: Record<string, string> = {
+  planned: 'Перегон назначен', to_loading: 'Еду к машине', loading: 'Приёмка машины', in_transit: 'В пути', unloading: 'Сдача машины', delivered: 'Машина сдана',
+};
+/** Название этапа рейса с учётом вида: у перегона — свои. */
+export const stageLabel = (stage: string, kind?: string) => t((kind === 'relocation' ? RELOC_STAGE_L : STAGE_L)[stage] || stage);
+export const KIND_L: Record<string, string> = { cargo: 'Груз', truck: 'Транспорт', relocation: 'Перегон' };
+export const RELOC_VEHICLE_L: Record<string, string> = {
+  car: 'Легковой автомобиль', truck: 'Грузовик или тягач', special: 'Спецтехника: погрузчик, трактор, экскаватор', bus: 'Автобус или микроавтобус', moto: 'Мотоцикл', other: 'Другое',
+};
+/** Категории прав: буквы одинаковы на всех языках, кроме удостоверения тракториста-машиниста. */
+export const licenseLabel = (x: string) => (x === 'tractor' ? t('Тракторист-машинист') : x);
 export const DOC_L: Record<string, string> = {
   id_card: 'Удостоверение личности', selfie: 'Фото с удостоверением в руках', registration: 'Свидетельство о регистрации', license: 'Лицензия', customs_license: 'Свидетельство таможенного представителя', driver_license: 'Водительские права', other: 'Другое',
 };

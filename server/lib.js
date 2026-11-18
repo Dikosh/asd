@@ -27,6 +27,11 @@ export const FLAGS = ['tir', 'cmr', 'ekmt', 't1', 'customs'];
 export const PLAN = { price: 9900, days: 30, free: { seats: 2, alerts: 3 }, pro: { seats: 10, alerts: 50 } };
 export const CARGO = ['food', 'building', 'equipment', 'consumer', 'agro', 'metal', 'fuel', 'groupage', 'adr', 'oversize', 'cars', 'furniture', 'other'];
 export const LOADING = ['top', 'rear', 'full', 'side'];
+export const KINDS = ['cargo', 'truck', 'relocation'];
+// Перегон: машину или технику заказчика ведёт своим ходом перегонщик
+export const RELOC_VEHICLES = ['car', 'truck', 'special', 'bus', 'moto', 'other'];
+// категории прав РК; tractor — удостоверение тракториста-машиниста (погрузчики, тракторы, экскаваторы)
+export const LICENSES = ['A', 'B', 'BE', 'C', 'CE', 'D', 'DE', 'tractor'];
 export const PAY = ['prepay', 'cash', 'card', 'cashless_vat', 'cashless_novat'];
 export const CURRENCIES = ['KZT', 'USD', 'RUB'];
 export const STAGES = ['planned', 'to_loading', 'loading', 'in_transit', 'unloading', 'delivered'];
@@ -276,7 +281,7 @@ function activePool() {
     const ver = dataVersion();
     const rows = q(
       `SELECT l.id, l.kind, l.points, l.body_type, l.cargo_type, l.weight, l.volume, l.loading, l.date_from, l.date_to, l.pay_terms, l.adr_class, l.flags,
-         l.rate, l.currency, l.distance_km, l.created_at, l.boosted_until, l.company_id, l.trucks, ${BOOKED('l')} AS booked
+         l.rate, l.currency, l.distance_km, l.created_at, l.boosted_until, l.company_id, l.trucks, l.vehicle_kind, l.licenses, ${BOOKED('l')} AS booked
        FROM listings l JOIN companies c ON c.id = l.company_id
        WHERE l.status = 'active' AND c.banned = 0 AND l.date_to >= ? ORDER BY l.id DESC`,
       today(),
@@ -289,6 +294,7 @@ function activePool() {
           id: r.id, kind: r.kind, points, bodyType: r.body_type, cargoType: r.cargo_type, weight: r.weight, volume: r.volume, loading: j(r.loading, []),
           dateFrom: r.date_from, dateTo: r.date_to, payTerms: j(r.pay_terms, []), adrClass: r.adr_class, flags: j(r.flags, []), rate: r.rate, currency: r.currency,
           distanceKm: r.distance_km, createdAt: r.created_at, boostedUntil: r.boosted_until, companyId: r.company_id,
+          vehicleKind: r.vehicle_kind, licenses: j(r.licenses, []),
           international: new Set(points.map((id) => cityById.get(id)?.country)).size > 1,
         };
       }),
@@ -365,6 +371,8 @@ export function listingOut(r, viewer) {
     loadAddress: r.load_address,
     unloadAddress: r.unload_address,
     loadTime: r.load_time,
+    vehicleKind: r.vehicle_kind || null,
+    licenses: j(r.licenses, []),
     company: companyOut(r, 'c_'),
     // владелец может скрыть телефон в настройках — тогда связь только через отклик и чат
     user: { id: r.user_id, name: r.user_name, phone: mine || r.user_show_phone ? r.user_phone : null },

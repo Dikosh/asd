@@ -156,6 +156,13 @@ db.exec(`CREATE TABLE IF NOT EXISTS files(
   by_driver_link INTEGER NOT NULL DEFAULT 0, created_at ${TS});
 CREATE INDEX IF NOT EXISTS files_ref ON files(scope, ref_id);`);
 addColumn('messages', 'file_id', 'INTEGER');
+// перегон: что перегнать и какие права нужны; профиль перегонщика у пользователя
+addColumn('listings', 'vehicle_kind', 'TEXT');
+addColumn('listings', 'licenses', `TEXT NOT NULL DEFAULT '[]'`);
+addColumn('users', 'relocator', 'INTEGER NOT NULL DEFAULT 0');
+addColumn('users', 'licenses', `TEXT NOT NULL DEFAULT '[]'`);
+addColumn('users', 'relocator_city', 'TEXT');
+addColumn('users', 'relocator_note', `TEXT NOT NULL DEFAULT ''`);
 // рейсы, созданные до появления подтверждения, считаются подтверждёнными — их не останавливаем
 if (addColumn('trips', 'confirmed_at', 'TEXT')) db.exec('UPDATE trips SET confirmed_at = created_at');
 db.exec(`

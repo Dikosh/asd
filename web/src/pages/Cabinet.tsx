@@ -5,7 +5,7 @@ import {
   ArrowLeft, BadgeCheck, Ban, Bookmark, Briefcase, Building2, Calculator, ChevronRight, FileText, Handshake, Inbox, LifeBuoy, LogOut, MessageSquare, Paperclip, Pencil, Plus,
   Route as RouteIcon, Search, Send, Settings, ShieldCheck, Trash2, TrendingUp, Truck, Upload, UserRound, Users, UsersRound, Wallet,
 } from 'lucide-react';
-import { api, companyTitle, BODY_L, Company, DOC_L, fmtDate, fmtStamp, fmtTime, fmtWhen, LOADING_L, Me, money, num, opts, prepareUpload, ROLE_L, t, Trip, useApp, useEvent, useLoad } from '../core';
+import { api, companyTitle, BODY_L, Company, DOC_L, fmtDate, fmtStamp, fmtTime, fmtWhen, KIND_L, LOADING_L, Me, money, num, opts, prepareUpload, ROLE_L, t, Trip, useApp, useEvent, useLoad } from '../core';
 import { Chips, CitySelect, CompanyBadge, Empty, Field, LangSwitch, Loading, Modal, Select, Tabs, ReasonModal } from '../ui';
 import { TripSummary } from './TripPage';
 import { ContactButtons } from '../listing';
@@ -211,7 +211,7 @@ function Responses() {
           {list.map((r) => (
             <div className="card resp" key={r.id}>
               <div className="row between wrap">
-                <Link to={`/listing/${r.listingId}`} className="lcard-title small">{r.kind === 'cargo' ? t('Груз') : t('Транспорт')}: {cityName(r.fromId)} → {cityName(r.toId)}</Link>
+                <Link to={`/listing/${r.listingId}`} className="lcard-title small">{t(KIND_L[r.kind])}: {cityName(r.fromId)} → {cityName(r.toId)}</Link>
                 <span className={`status ${r.status}`}>{t(RESP_L[r.status])}</span>
               </div>
               <p>{r.message}</p>
@@ -304,7 +304,7 @@ function Messages({ chatId }: { chatId: number | null }) {
             {chat && (
               <div className="grow">
                 <Link to={`/company/${chat.peerCompanyId}`}><b>{chat.peerCompany}</b></Link>
-                <div className="muted small"><Link to={`/listing/${chat.listingId}`}>{chat.kind === 'cargo' ? t('Груз') : t('Транспорт')}: {cityName(chat.fromId)} → {cityName(chat.toId)}</Link></div>
+                <div className="muted small"><Link to={`/listing/${chat.listingId}`}>{t(KIND_L[chat.kind])}: {cityName(chat.fromId)} → {cityName(chat.toId)}</Link></div>
               </div>
             )}
             {chat?.peerPhone && <div className="row chat-contacts"><ContactButtons phone={chat.peerPhone} /></div>}

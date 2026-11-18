@@ -258,9 +258,52 @@ export function seed() {
     for (const name of [A, B, 'Silk Way Logistics', 'КеденСервис', 'Тулегенов Б.'])
       run(`INSERT INTO transactions(company_id, amount, kind, note) VALUES(?, 5000, 'topup', 'Приветственный бонус')`, comp[name]);
   });
+  seedRelocation();
   console.log('[seed] демо-данные загружены');
 }
 
+/**
+ * Демо раздела «Перегон»: заявки на перегон техники и перегонщики в каталоге. Компании ищутся по названию,
+ * поэтому это можно добавить и в уже заполненную демо-базу: node server/seed.js --relocation (повторно не дублирует).
+ */
+export function seedRelocation() {
+  if (q1(`SELECT 1 FROM listings WHERE kind = 'relocation' LIMIT 1`)) return false;
+  const who = (name) => q1('SELECT u.id AS user, c.id AS company FROM companies c JOIN users u ON u.company_id = c.id AND u.company_role = \'owner\' WHERE c.name = ? ORDER BY u.id LIMIT 1', name);
+  const add = (owner, points, vehicle, brand, licenses, o = {}) => {
+    const w = who(owner);
+    if (!w) return;
+    const km = roadKm(points.map((p) => cityById.get(p)));
+    insert(
+      `INSERT INTO listings(kind, user_id, company_id, status, points, from_id, to_id, brand, date_from, date_to, pay_terms, rate, currency, description,
+         distance_km, trucks, load_address, unload_address, load_time, vehicle_kind, licenses, created_at)
+       VALUES('relocation', ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, 'KZT', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      w.user, w.company, JSON.stringify(points), points[0], points[points.length - 1], brand, day(o.from ?? 0), day((o.from ?? 0) + 5),
+      JSON.stringify(o.pay || ['cashless_vat']), o.rate ?? null, o.description || '', km, o.trucks || 1, o.load || '', o.unload || '', o.time || '',
+      vehicle, JSON.stringify(licenses), ago(o.ago ?? 5),
+    );
+  };
+  add('СтройМаркет KZ', ['khorgos', 'almaty'], 'special', 'Погрузчик Hyundai 50D', ['tractor'], {
+    rate: 120000, trucks: 3, load: 'СЭЗ «Хоргос — Восточные ворота», таможенный склад', unload: 'Алматы, ул. Бокейханова 510, склад', time: '9:00–17:00',
+    description: 'Три новых вилочных погрузчика после растаможки. Номера не нужны — перегон по трассе в сопровождении. Топливо за наш счёт.', ago: 2,
+  });
+  add('Алатау Агро', ['almaty', 'kaskelen'], 'special', 'Трактор МТЗ-82', ['tractor'], { rate: 40000, description: 'Трактор с базы на поле, около 40 км. Документы при тракторе.', ago: 6 });
+  add('Астана Трейд', ['astana', 'karaganda'], 'truck', 'Тягач Volvo FH 460', ['C', 'CE'], { rate: 90000, from: 1, unload: 'Караганда, СТО на ул. Ермекова', description: 'Тягач без прицепа после ремонта, вернуть в парк.', ago: 12 });
+  add('Каспий Металл', ['aktau', 'atyrau'], 'car', 'Toyota Camry 2023', ['B'], { rate: 60000, pay: ['card'], from: 2, description: 'Легковая машина из салона, пробег минимальный.', ago: 20 });
+  add('Silk Way Logistics', ['urumqi', 'khorgos', 'almaty'], 'bus', 'Автобус Yutong ZK6122', ['D'], { rate: null, from: 3, description: 'Новый автобус из Урумчи, нужен водитель с категорией D и опытом международных поездок.', ago: 30 });
+  // перегонщики в каталоге
+  const profile = (phone, licenses, city, note) =>
+    run('UPDATE users SET relocator = 1, licenses = ?, relocator_city = ?, relocator_note = ? WHERE phone = ?', JSON.stringify(licenses), city, note, phone);
+  profile('+77010000005', ['B', 'C', 'CE', 'tractor'], 'shymkent', 'Стаж 14 лет: тягачи, самосвалы, погрузчики. Готов к дальним перегонам.');
+  profile('+77015550105', ['B', 'C', 'CE'], 'almaty', 'Перегоняю тягачи и грузовики после ремонта и из салонов.');
+  profile('+77015550107', ['B', 'C', 'tractor'], 'pavlodar', 'Тракторы и спецтехника по Павлодарской области.');
+  profile('+77015550110', ['B', 'D'], 'astana', 'Автобусы и микроавтобусы, есть опыт поездок в Китай.');
+  return true;
+}
+
+if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv.includes('--relocation')) {
+  console.log(seedRelocation() ? '[seed] демо раздела «Перегон» добавлено' : '[seed] демо раздела «Перегон» уже есть');
+  process.exit(0);
+}
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (q1('SELECT 1 FROM users LIMIT 1')) {
     if (!process.argv.includes('--reset')) {

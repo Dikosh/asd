@@ -5,7 +5,7 @@ import {
   ArrowRight, Ban, Bookmark, BookmarkCheck, Check, EyeOff, Eye, ExternalLink, FileCheck2, Flag, Globe2, Handshake, MessageCircle, MoreHorizontal, Phone, Share2, StickyNote,
   TriangleAlert, X, Zap,
 } from 'lucide-react';
-import { api, BODY_L, CARGO_L, Company, FLAG_L, fmtDates, Listing, LOADING_L, money, num, PAY_L, ROLE_L, t, useApp, waLink } from './core';
+import { api, BODY_L, CARGO_L, Company, FLAG_L, fmtDates, KIND_L, licenseLabel, Listing, LOADING_L, money, num, PAY_L, RELOC_VEHICLE_L, ROLE_L, t, useApp, waLink } from './core';
 import { CompanyBadge, Field, Modal, Select } from './ui';
 
 export function RouteTitle({ points }: { points: string[] }) {
@@ -22,10 +22,12 @@ export function RouteTitle({ points }: { points: string[] }) {
   );
 }
 
-export function SpecChips({ l }: { l: Pick<Listing, 'kind' | 'cargoType' | 'bodyType' | 'weight' | 'volume' | 'loading' | 'brand'> & Partial<Pick<Listing, 'adrClass' | 'flags'>> }) {
+export function SpecChips({ l }: { l: Pick<Listing, 'kind' | 'cargoType' | 'bodyType' | 'weight' | 'volume' | 'loading' | 'brand'> & Partial<Pick<Listing, 'adrClass' | 'flags' | 'vehicleKind' | 'licenses'>> }) {
   return (
     <div className="chips">
-      {l.kind === 'truck' && l.brand && <span className="chip strong">{l.brand}</span>}
+      {l.kind === 'relocation' && l.vehicleKind && <span className="chip strong">{t(RELOC_VEHICLE_L[l.vehicleKind])}</span>}
+      {l.kind !== 'cargo' && l.brand && <span className="chip strong">{l.brand}</span>}
+      {l.kind === 'relocation' && l.licenses && l.licenses.length > 0 && <span className="chip docflag">{t('Права: {list}', { list: l.licenses.map(licenseLabel).join(', ') })}</span>}
       {l.cargoType && <span className="chip strong">{t(CARGO_L[l.cargoType])}</span>}
       {l.bodyType && <span className="chip">{t(BODY_L[l.bodyType])}</span>}
       {l.weight != null && <span className="chip">{num(l.weight)} {t('т')}</span>}
@@ -100,7 +102,7 @@ export function useShare() {
   const { toast, routeName } = useApp();
   return async (l: Listing) => {
     const url = `${location.origin}/listing/${l.id}`;
-    const title = `${l.kind === 'cargo' ? t('Груз') : t('Транспорт')}: ${routeName(l.points)}${l.rate ? ` · ${money(l.rate, l.currency)}` : ''}`;
+    const title = `${t(KIND_L[l.kind])}: ${routeName(l.points)}${l.rate ? ` · ${money(l.rate, l.currency)}` : ''}`;
     try {
       if (navigator.share) await navigator.share({ title, text: title, url });
       else {
@@ -320,7 +322,7 @@ export function ListingCard({ l, onChange, footer }: { l: Listing; onChange: () 
       <div className="lcard-top">
         <div>
           <div className="lcard-tags">
-            <span className={`tag ${l.kind}`}>{l.kind === 'cargo' ? t('Груз') : t('Транспорт')}</span>
+            <span className={`tag ${l.kind}`}>{t(KIND_L[l.kind])}</span>
             {l.boosted && <span className="tag top"><Zap size={12} /> {t('В топе')}</span>}
             {customs && broker && <span className="tag customs"><FileCheck2 size={12} /> {t(FLAG_L.customs)}</span>}
             {l.international && <span className="tag intl"><Globe2 size={12} /> {t('Международный')}</span>}
@@ -329,7 +331,7 @@ export function ListingCard({ l, onChange, footer }: { l: Listing; onChange: () 
             {l.mark.marked && <span className="tag marked"><BookmarkCheck size={12} /> {t('Отмечено')}</span>}
             {l.myResponse?.status === 'sent' && <span className="tag sent">{t('Вы откликнулись')}</span>}
             {l.tripId && <span className="tag trip">{t('В рейсе')}</span>}
-            {l.kind === 'cargo' && l.trucks > 1 && <span className="tag">{l.booked > 0 ? t('Машин: {a} из {b}', { a: l.booked, b: l.trucks }) : t('Нужно машин: {n}', { n: l.trucks })}</span>}
+            {l.kind !== 'truck' && l.trucks > 1 && <span className="tag">{l.booked > 0 ? t('Машин: {a} из {b}', { a: l.booked, b: l.trucks }) : t('Нужно машин: {n}', { n: l.trucks })}</span>}
           </div>
           <Link to={`/listing/${l.id}`} className="lcard-title"><RouteTitle points={l.points} /></Link>
           <div className="muted small">

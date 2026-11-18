@@ -1,6 +1,6 @@
 // Главная: информация о платформе, активный рейс и рекомендации по роли.
 import { Link } from 'react-router-dom';
-import { ArrowRight, BadgeCheck, Briefcase, Building2, Calculator, LifeBuoy, Package, Plus, ShieldAlert, TrendingUp, Truck } from 'lucide-react';
+import { ArrowRight, BadgeCheck, Briefcase, Building2, Calculator, LifeBuoy, Package, Plus, ShieldAlert, TrendingUp, Truck, CarFront } from 'lucide-react';
 import { api, companyTitle, Listing, num, ROLE_L, t, Trip, useApp, useEvent, useLoad } from '../core';
 import { Empty, Loading } from '../ui';
 import { ListingCard } from '../listing';
@@ -85,12 +85,20 @@ export default function HomePage() {
 
       <nav className="quick" aria-label={t('Сервисы')}>
         <Link to="/tools"><Calculator size={20} /><b>{t('Инструменты')}</b><span>{t('Расстояние, стоимость рейса, нагрузка на оси')}</span></Link>
+        {!teamDriver && <Link to="/relocation"><CarFront size={20} /><b>{t('Перегон')}</b><span>{t('Перегнать машину или технику своим ходом')}</span></Link>}
         <Link to="/prices"><TrendingUp size={20} /><b>{t('Цены')}</b><span>{t('Ставки по направлениям и кузовам')}</span></Link>
         <Link to="/cabinet/catalog"><Building2 size={20} /><b>{t('Проверка компаний')}</b><span>{t('Рейтинг, отзывы, чёрный список')}</span></Link>
         <Link to="/jobs"><Briefcase size={20} /><b>{t('Работа')}</b><span>{t('Вакансии и резюме водителей')}</span></Link>
         <Link to="/help"><LifeBuoy size={20} /><b>{t('Помощь')}</b><span>{t('Ответы, безопасность, поддержка')}</span></Link>
       </nav>
 
+      {role === 'driver' && !teamDriver && (
+        <Link to="/relocation?tab=profile" className="banner">
+          <CarFront size={20} />
+          <div><b>{t('Подработка перегонщиком')}</b><span>{t('Отметьте права и город — пришлём заявки на перегон машин и техники рядом с вами.')}</span></div>
+          <ArrowRight size={18} />
+        </Link>
+      )}
       {role === 'driver' && (
         <Link to="/jobs" className="banner">
           <Briefcase size={20} />

@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, BadgeCheck, FileCheck2, Lock, MapPinned, Users } from 'lucide-react';
-import { api, BODY_L, CARGO_L, fmtDates, Me, money, num, ROLE_HINT, ROLE_L, t, useApp, useLoad } from '../core';
+import { api, BODY_L, CARGO_L, fmtDates, Me, money, num, KIND_L, ROLE_HINT, ROLE_L, t, useApp, useLoad } from '../core';
 import { Field, LangSwitch, Logo, Select } from '../ui';
 
 const CODES = [
@@ -11,7 +11,7 @@ const CODES = [
   { value: '+995', label: '🇬🇪 +995' }, { value: '+90', label: '🇹🇷 +90' },
 ];
 interface Invite { name: string; companyName: string; companyForm: string; role: string }
-interface PublicListing { id: number; kind: 'cargo' | 'truck'; points: string[]; bodyType: string | null; cargoType: string | null; weight: number | null; dateFrom: string; dateTo: string; rate: number | null; currency: string; distanceKm: number }
+interface PublicListing { id: number; kind: 'cargo' | 'truck' | 'relocation'; points: string[]; bodyType: string | null; cargoType: string | null; weight: number | null; dateFrom: string; dateTo: string; rate: number | null; currency: string; distanceKm: number }
 
 export default function AuthPage() {
   const { meta, setMe, act, routeName, toast } = useApp();
@@ -119,7 +119,7 @@ export default function AuthPage() {
             <b>{t('Свежие объявления')}</b>
             {feed.data.slice(0, 5).map((l) => (
               <button key={l.id} className="feed-item" onClick={() => { toast(t('Войдите, чтобы увидеть контакты и откликнуться')); phoneInput.current?.scrollIntoView({ block: 'center', behavior: 'smooth' }); phoneInput.current?.focus({ preventScroll: true }); }}>
-                <span className={`tag ${l.kind}`}>{l.kind === 'cargo' ? t('Груз') : t('Транспорт')}</span>
+                <span className={`tag ${l.kind}`}>{t(KIND_L[l.kind])}</span>
                 <span className="feed-route">{routeName([l.points[0], l.points[l.points.length - 1]])}</span>
                 <span className="feed-meta">
                   {[l.cargoType && t(CARGO_L[l.cargoType]), l.bodyType && t(BODY_L[l.bodyType]), l.weight && `${l.weight} ${t('т')}`, fmtDates(l.dateFrom, l.dateTo)].filter(Boolean).join(' · ')}

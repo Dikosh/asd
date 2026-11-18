@@ -53,6 +53,8 @@ export default function authRoutes(app) {
       body: L.BODY,
       cargo: L.CARGO,
       loading: L.LOADING,
+      relocVehicles: L.RELOC_VEHICLES,
+      licenses: L.LICENSES,
       pay: L.PAY,
       currencies: L.CURRENCIES,
       stages: L.STAGES,
@@ -64,6 +66,7 @@ export default function authRoutes(app) {
       stats: {
         cargo: active('cargo'),
         truck: active('truck'),
+        relocation: active('relocation'),
         companies: q1('SELECT COUNT(*) AS n FROM companies WHERE banned = 0').n,
         trips: q1(`SELECT COUNT(*) AS n FROM trips WHERE status = 'completed'`).n,
       },

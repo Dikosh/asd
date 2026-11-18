@@ -16,7 +16,7 @@ const cityId = z.string().refine((id) => cityById.has(id), 'Неизвестны
 
 const listingSchema = z
   .object({
-    kind: z.enum(['cargo', 'truck']),
+    kind: z.enum(L.KINDS),
     points: z.array(cityId).min(2).max(8),
     brand: z.string().trim().max(60).default(''),
     bodyType: z.enum(L.BODY).nullable().optional(),
@@ -37,12 +37,17 @@ const listingSchema = z
     loadAddress: z.string().trim().max(200).default(''),
     unloadAddress: z.string().trim().max(200).default(''),
     loadTime: z.string().trim().max(40).default(''),
+    // перегон: что перегнать и какие права нужны перегонщику
+    vehicleKind: z.enum(L.RELOC_VEHICLES).nullable().optional(),
+    licenses: z.array(z.enum(L.LICENSES)).max(8).default([]),
   })
   .refine((b) => b.dateTo >= b.dateFrom, 'Дата окончания раньше даты начала')
   .refine((b) => b.dateTo <= new Date(Date.now() + 180 * 86400_000).toISOString().slice(0, 10), 'Период размещения — не дальше полугода')
   .refine((b) => b.points.every((p, i) => i === 0 || p !== b.points[i - 1]), 'Соседние пункты маршрута совпадают')
   // опасный груз без класса ADR перевозчик не сможет оценить: нужны допуск водителя и оснащение машины
-  .refine((b) => b.cargoType !== 'adr' || b.adrClass, 'Для опасного груза укажите класс ADR (1–9)');
+  .refine((b) => b.cargoType !== 'adr' || b.adrClass, 'Для опасного груза укажите класс ADR (1–9)')
+  .refine((b) => b.kind !== 'relocation' || b.vehicleKind, 'Укажите, что нужно перегнать');
+const kindOf = (v) => (L.KINDS.includes(v) ? v : 'cargo');
 
 const pts = (l) => l.points.map((id) => cityById.get(id)).filter(Boolean);
 const n = (v) => (v === undefined || v === '' || v === null || isNaN(Number(v)) ? undefined : Number(v));
@@ -98,6 +103,12 @@ export function passes(l, f) {
   if (f.fresh === '1' && Date.now() - Date.parse(l.createdAt) > 24 * 3600_000) return false;
   if (f.intl === '1' && !l.international) return false;
   if (f.intl === '0' && l.international) return false;
+  // перегон: вид техники и права перегонщика — подходят заявки, где нужны только те категории, что у него есть
+  if (L.RELOC_VEHICLES.includes(f.vehicle) && l.vehicleKind !== f.vehicle) return false;
+  if (has(f.lic)) {
+    const own = String(f.lic).split(',');
+    if ((l.licenses || []).some((x) => !own.includes(x))) return false;
+  }
 
   const from = cityById.get(f.from);
   const to = cityById.get(f.to);
@@ -125,6 +136,7 @@ const VISIBLE = `COALESCE(m.hidden, 0) = 0
 
 /** Встречные объявления, подходящие к данному. */
 function matchesFor(user, listing, limit = 10) {
+  if (listing.kind === 'relocation') return []; // перегонщика ищут в разделе «Перегон», встречных объявлений у заявки нет
   const otherKind = listing.kind === 'cargo' ? 'truck' : 'cargo';
   const best = L.lightListings(user, otherKind, { exceptCompany: listing.company.id })
     .map((o) => ({ ...o, match: listing.kind === 'cargo' ? matchScore(listing, o) : matchScore(o, listing) }))
@@ -198,6 +210,29 @@ export function marketRate(kind, { exceptId = 0, bodyType = null, km = null, wei
   return null;
 }
 
+/**
+ * Новая заявка на перегон — перегонщикам рядом с пунктом отправления (до 150 км), у которых есть нужные права.
+ * Не больше 50 человек и не чаще одного уведомления в час от одной компании.
+ */
+function alertRelocators(listingId, author) {
+  const l = q1('SELECT points, licenses FROM listings WHERE id = ?', listingId);
+  const start = cityById.get(L.j(l.points, [])[0]);
+  const need = L.j(l.licenses, []);
+  const hourAgo = new Date(Date.now() - 3600_000).toISOString();
+  const users = q(`SELECT id, company_id, licenses, relocator_city FROM users WHERE relocator = 1 AND company_id != ? AND company_role != 'driver'`, author.company_id)
+    .filter((u) => {
+      const c = cityById.get(u.relocator_city);
+      const has = L.j(u.licenses, []);
+      return c && start && haversine(c, start) <= 150 && need.every((x) => has.includes(x));
+    })
+    .filter((u) => !q1('SELECT 1 FROM blocks WHERE company_id = ? AND blocked_id = ?', author.company_id, u.company_id))
+    .filter((u) => !q1(`SELECT 1 FROM notifications WHERE user_id = ? AND kind = 'match' AND created_at > ? AND json_extract(vars, '$.by') = ?`, u.id, hourAgo, author.company_id))
+    .slice(0, 50);
+  for (const u of users) {
+    notify(u.id, { kind: 'match', title: 'Новая заявка на перегон: {route}', body: 'Подходит под ваши права и город', vars: { route: L.j(l.points, []), by: author.company_id }, link: `/listing/${listingId}` });
+  }
+}
+
 /** Сообщить подписчикам сохранённых поисков о новом объявлении. */
 function alertSubscribers(listingId, author) {
   const subs = q(
@@ -218,7 +253,7 @@ function alertSubscribers(listingId, author) {
     sent.add(s.user_id);
     notify(s.user_id, {
       kind: 'match',
-      title: l.kind === 'cargo' ? 'Новый груз: {route}' : 'Новая машина: {route}',
+      title: { cargo: 'Новый груз: {route}', truck: 'Новая машина: {route}', relocation: 'Новая заявка на перегон: {route}' }[l.kind],
       body: 'По вашему поиску «{name}»',
       vars: { route: l.points, name: s.name, by: author.company_id },
       link: `/listing/${l.id}`,
@@ -226,7 +261,7 @@ function alertSubscribers(listingId, author) {
   }
 }
 
-const FILTER_KEYS = ['from', 'to', 'radius', 'fromCountry', 'toCountry', 'dateFrom', 'dateTo', 'body', 'cargoType', 'wMin', 'wMax', 'vMin', 'vMax', 'loading',
+const FILTER_KEYS = ['vehicle', 'lic', 'from', 'to', 'radius', 'fromCountry', 'toCountry', 'dateFrom', 'dateTo', 'body', 'cargoType', 'wMin', 'wMax', 'vMin', 'vMax', 'loading',
   'rateMin', 'rateMax', 'currency', 'pay', 'flags', 'adr', 'withRate', 'verified', 'noRed', 'direct', 'partners', 'fresh', 'intl', 'sort'];
 
 /** Истёкшие объявления сами уходят в «Закрытые». */
@@ -243,7 +278,7 @@ export default function listingRoutes(app) {
   // ---- поиск ----
   app.get('/api/listings', auth, (req, res) => {
     const f = req.query;
-    const kind = f.kind === 'truck' ? 'truck' : 'cargo';
+    const kind = kindOf(f.kind);
     // отбор и сортировка — по лёгким данным, полные карточки — только для первых 200
     const items = L.lightListings(req.user, kind).filter((l) => passes(l, f));
     const kzt = (l) => toKzt(l.rate, l.currency);
@@ -262,7 +297,7 @@ export default function listingRoutes(app) {
   });
 
   app.get('/api/listings/mine', auth, (req, res) => {
-    const kind = req.query.kind === 'truck' ? 'truck' : 'cargo';
+    const kind = kindOf(req.query.kind);
     res.json(L.listings(req.user, 'l.kind = :kind AND l.company_id = :c', { kind, c: req.user.company_id }, 'ORDER BY l.id DESC LIMIT 500'));
   });
 
@@ -336,7 +371,7 @@ export default function listingRoutes(app) {
     );
   });
   app.post('/api/searches', auth, (req, res) => {
-    const b = parse(z.object({ kind: z.enum(['cargo', 'truck']), name: z.string().trim().min(1).max(80), params: z.record(z.enum(FILTER_KEYS), z.string().max(120)), notify: z.boolean().default(false) }), req.body);
+    const b = parse(z.object({ kind: z.enum(L.KINDS), name: z.string().trim().min(1).max(80), params: z.record(z.enum(FILTER_KEYS), z.string().max(120)), notify: z.boolean().default(false) }), req.body);
     if (q1('SELECT COUNT(*) AS n FROM searches WHERE user_id = ?', req.user.id).n >= 30) throw bad('limit', 'Не более 30 сохранённых поисков');
     const limit = alertLimit(req.user);
     if (b.notify && q1('SELECT COUNT(*) AS n FROM searches WHERE user_id = ? AND notify = 1', req.user.id).n >= limit)
@@ -363,7 +398,8 @@ export default function listingRoutes(app) {
       JSON.stringify(b.points), b.points[0], b.points[b.points.length - 1], b.brand, b.bodyType ?? null, b.cargoType ?? null,
       b.weight ?? null, b.volume ?? null, JSON.stringify(b.loading), b.dateFrom, b.dateTo, JSON.stringify(b.payTerms),
       b.rate ?? null, b.currency, b.description, km, b.adrClass ?? null, JSON.stringify(b.flags),
-      b.kind === 'cargo' ? b.trucks : 1, b.loadAddress, b.unloadAddress, b.loadTime,
+      b.kind === 'truck' ? 1 : b.trucks, b.loadAddress, b.unloadAddress, b.loadTime,
+      b.kind === 'relocation' ? b.vehicleKind : null, JSON.stringify(b.kind === 'relocation' ? [...new Set(b.licenses)] : []),
     ];
   };
   app.post('/api/listings', auth, staff, async (req, res) => {
@@ -387,13 +423,15 @@ export default function listingRoutes(app) {
       throw bad('removed', 'Такое объявление недавно снял модератор. Если это ошибка, напишите в поддержку', 409);
     const id = insert(
       `INSERT INTO listings(kind, user_id, company_id, points, from_id, to_id, brand, body_type, cargo_type, weight, volume, loading,
-         date_from, date_to, pay_terms, rate, currency, description, distance_km, adr_class, flags, trucks, load_address, unload_address, load_time)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         date_from, date_to, pay_terms, rate, currency, description, distance_km, adr_class, flags, trucks, load_address, unload_address, load_time,
+         vehicle_kind, licenses)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       b.kind, req.user.id, req.user.company_id, ...(await save(b)),
     );
     res.json({ id });
     try {
       alertSubscribers(id, req.user);
+      if (b.kind === 'relocation') alertRelocators(id, req.user);
     } catch (e) {
       console.error('[alerts]', e); // сбой рассылки не должен ломать размещение
     }
@@ -412,11 +450,11 @@ export default function listingRoutes(app) {
     if (q1(`SELECT 1 FROM trips WHERE listing_id = ? AND status = 'active'`, l.id)) throw bad('in_trip', 'По объявлению идёт рейс — изменить его нельзя', 409);
     const b = parse(listingSchema, { ...req.body, kind: l.kind });
     const booked = q1(`SELECT COUNT(*) AS n FROM trips WHERE listing_id = ? AND status = 'completed'`, l.id).n;
-    if (l.kind === 'cargo' && b.trucks < booked) throw bad('validation', `По объявлению уже выполнено рейсов: ${booked} — машин не может быть меньше`);
+    if (l.kind !== 'truck' && b.trucks < booked) throw bad('validation', `По объявлению уже выполнено рейсов: ${booked} — машин не может быть меньше`);
     run(
       `UPDATE listings SET points = ?, from_id = ?, to_id = ?, brand = ?, body_type = ?, cargo_type = ?, weight = ?, volume = ?, loading = ?,
          date_from = ?, date_to = ?, pay_terms = ?, rate = ?, currency = ?, description = ?, distance_km = ?, adr_class = ?, flags = ?,
-         trucks = ?, load_address = ?, unload_address = ?, load_time = ? WHERE id = ?`,
+         trucks = ?, load_address = ?, unload_address = ?, load_time = ?, vehicle_kind = ?, licenses = ? WHERE id = ?`,
       ...(await save(b)), l.id,
     );
     res.json({ id: l.id });

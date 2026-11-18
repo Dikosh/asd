@@ -9,7 +9,11 @@ import { ListingCard } from '../listing';
 type Kind = 'cargo' | 'truck';
 
 export default function MyListings() {
-  const kind = (useParams().kind === 'truck' ? 'truck' : 'cargo') as Kind;
+  const k = useParams().kind;
+  const kind = (k === 'truck' || k === 'relocation' ? k : 'cargo') as Kind | 'relocation';
+  // заявки на перегон размещаются своей короткой формой в разделе «Перегон»
+  const newUrl = kind === 'relocation' ? '/relocation/new' : `/my/${kind}/new`;
+  const editUrl = (id: number) => (kind === 'relocation' ? `/relocation/${id}/edit` : `/my/${kind}/${id}/edit`);
   const { act, me, meta, reloadMe } = useApp();
   const nav = useNavigate();
   const [status, setStatus] = useState('active');
@@ -31,17 +35,17 @@ export default function MyListings() {
     if (!confirm(t('Закрыть объявление? Оно пропадёт из поиска, а отклики без ответа будут отклонены. Вернуть его можно на вкладке «Закрытые».'))) return;
     setSt(l, 'closed', t('Объявление закрыто'));
   };
-  const repeat = (l: Listing) => nav(`/my/${kind}/new?copy=${l.id}`);
+  const repeat = (l: Listing) => nav(`${newUrl}?copy=${l.id}`);
 
   return (
     <div className="stack">
       <div className="page-head">
         <Tabs
-          items={[{ value: 'cargo', label: t('Мои грузы') }, { value: 'truck', label: t('Мои машины') }]}
+          items={[{ value: 'cargo', label: t('Мои грузы') }, { value: 'truck', label: t('Мои машины') }, { value: 'relocation', label: t('Мои перегоны') }]}
           value={kind}
           onChange={(v) => nav(`/my/${v}`)}
         />
-        <Link to={`/my/${kind}/new`} className="btn primary"><Plus size={17} /> {kind === 'cargo' ? t('Разместить груз') : t('Разместить транспорт')}</Link>
+        <Link to={newUrl} className="btn primary"><Plus size={17} /> {kind === 'cargo' ? t('Разместить груз') : kind === 'truck' ? t('Разместить транспорт') : t('Заказать перегон')}</Link>
       </div>
       <Tabs
         items={[
@@ -67,7 +71,7 @@ export default function MyListings() {
                       {l.tripId ? (
                         <Link to={`/trip/${l.tripId}`} className="btn primary">{t('Открыть рейс')}</Link>
                       ) : (
-                        <Link to={`/my/${kind}/${l.id}/edit`} className="btn soft"><Pencil size={16} /> {t('Изменить')}</Link>
+                        <Link to={editUrl(l.id)} className="btn soft"><Pencil size={16} /> {t('Изменить')}</Link>
                       )}
                       <button type="button" className="btn soft" onClick={() => repeat(l)}><Copy size={16} /> {t('Разместить снова')}</button>
                       {!l.tripId && <button type="button" className="btn ghost" onClick={() => close(l)}><Check size={16} /> {t('Закрыть')}</button>}
@@ -99,8 +103,8 @@ export default function MyListings() {
             <div className="card">
               <Empty
                 icon={kind === 'cargo' ? <Package size={26} /> : <Truck size={26} />}
-                title={status === 'active' ? (kind === 'cargo' ? t('У вас нет активных грузов') : t('У вас нет активного транспорта')) : t('Здесь пока пусто')}
-                text={status === 'active' ? t('Разместите объявление — это занимает четыре коротких шага.') : status === 'closed' ? t('Сюда попадают выполненные, истёкшие и закрытые вами объявления. Их можно разместить снова.') : t('Архив хранит историю закрытых объявлений.')}
+                title={status === 'active' ? (kind === 'cargo' ? t('У вас нет активных грузов') : kind === 'truck' ? t('У вас нет активного транспорта') : t('У вас нет активных заявок на перегон')) : t('Здесь пока пусто')}
+                text={status === 'active' ? (kind === 'relocation' ? t('Нужно перегнать машину или технику своим ходом? Оформите заявку — перегонщики рядом получат уведомление.') : t('Разместите объявление — это занимает четыре коротких шага.')) : status === 'closed' ? t('Сюда попадают выполненные, истёкшие и закрытые вами объявления. Их можно разместить снова.') : t('Архив хранит историю закрытых объявлений.')}
               />
             </div>
           )}

@@ -13,6 +13,8 @@ const { bad, parse, auth, staff } = L;
 /** Маршрут объявления для подстановки {route} в уведомление. */
 const routeOf = (listingId) => ({ route: L.j(q1('SELECT points FROM listings WHERE id = ?', listingId)?.points, []) });
 const STAGE_TITLE = { to_loading: 'Машина едет на погрузку: {route}', loading: 'Идёт погрузка: {route}', in_transit: 'Груз в пути: {route}', unloading: 'Идёт выгрузка: {route}', delivered: 'Груз доставлен: {route}' };
+// перегон: перегонщик едет к машине заказчика, принимает её и ведёт своим ходом
+const RELOC_STAGE_TITLE = { to_loading: 'Перегонщик едет к машине: {route}', loading: 'Перегонщик принимает машину: {route}', in_transit: 'Машина в пути: {route}', unloading: 'Перегонщик сдаёт машину: {route}', delivered: 'Машина доставлена: {route}' };
 
 // Сделки ведёт компания, а не один человек: чат и рейс видят все её сотрудники.
 const usersOf = (companyId) => q('SELECT id FROM users WHERE company_id = ?', companyId).map((u) => u.id);
@@ -64,6 +66,7 @@ function tripOut(t, viewer, full = false, mode = 'party') {
   const out = {
     id: t.id,
     status: t.status,
+    kind: t.l_kind,
     stage: t.stage,
     shareGps: !!t.share_gps,
     points,
@@ -223,7 +226,11 @@ function setStage(t, stage) {
   run('UPDATE trips SET stage = ? WHERE id = ?', stage, t.id);
   run('INSERT INTO trip_events(trip_id, stage) VALUES(?, ?)', t.id, stage);
   L.push(tripUsers(t), 'trip', { tripId: t.id });
-  notify(staffOf(t.customer_company), { kind: 'trip', title: STAGE_TITLE[stage], vars: routeOf(t.listing_id), body: stage === 'delivered' ? 'Проверьте груз и подтвердите доставку' : '', link: `/trip/${t.id}` });
+  const reloc = q1('SELECT kind FROM listings WHERE id = ?', t.listing_id)?.kind === 'relocation';
+  notify(staffOf(t.customer_company), {
+    kind: 'trip', title: (reloc ? RELOC_STAGE_TITLE : STAGE_TITLE)[stage], vars: routeOf(t.listing_id),
+    body: stage === 'delivered' ? (reloc ? 'Проверьте машину и подтвердите приёмку' : 'Проверьте груз и подтвердите доставку') : '', link: `/trip/${t.id}`,
+  });
 }
 /** Объявление закрывается, когда по нему не осталось идущих рейсов и найдены все машины (или рейс сорван). */
 function closeListingIfDone(listingId, force = false) {
@@ -288,7 +295,7 @@ export default function dealRoutes(app) {
     if (q1(`SELECT 1 FROM responses WHERE listing_id = ? AND company_id = ? AND status = 'sent'`, l.id, req.user.company_id)) throw bad('duplicate', 'Вы уже откликнулись', 409);
     const out = tx(() => {
       const id = insert('INSERT INTO responses(listing_id, user_id, company_id, message, price, currency, trucks, vehicle_id) VALUES(?, ?, ?, ?, ?, ?, ?, ?)',
-        l.id, req.user.id, req.user.company_id, b.message, b.price ?? null, b.currency, l.kind === 'cargo' ? b.trucks : 1, b.vehicleId ?? null);
+        l.id, req.user.id, req.user.company_id, b.message, b.price ?? null, b.currency, l.kind === 'truck' ? 1 : b.trucks, b.vehicleId ?? null);
       let chat = q1('SELECT id FROM chats WHERE listing_id = ? AND peer_company = ?', l.id, req.user.company_id);
       if (!chat) chat = { id: insert('INSERT INTO chats(listing_id, owner_id, peer_id, owner_company, peer_company) VALUES(?, ?, ?, ?, ?)', l.id, l.user_id, req.user.id, l.company_id, req.user.company_id) };
       return { id, chatId: chat.id };
@@ -297,7 +304,7 @@ export default function dealRoutes(app) {
     const v = b.vehicleId ? q1('SELECT brand, plate FROM vehicles WHERE id = ?', b.vehicleId) : null;
     const extra = [
       b.price ? `— ${String(Math.round(b.price)).replace(/\B(?=(\d{3})+(?!\d))/g, ' ')} ${sym}${b.trucks > 1 ? ' за машину' : ''}` : '',
-      l.kind === 'cargo' && b.trucks > 1 ? `— машин: ${b.trucks}` : '',
+      l.kind !== 'truck' && b.trucks > 1 ? `— машин: ${b.trucks}` : '',
       v ? `— машина: ${v.brand}${v.plate ? `, ${v.plate}` : ''}` : '',
     ].filter(Boolean);
     postMessage(out.chatId, req.user, [b.message, ...extra].join('\n'));
@@ -351,7 +358,7 @@ export default function dealRoutes(app) {
         // заказчик — тот, чей груз; перевозчик — тот, чей транспорт
         const owner = { user: row.owner_user, company: row.owner_company };
         const peer = { user: row.user_id, company: row.company_id };
-        const [customer, carrier] = row.kind === 'cargo' ? [owner, peer] : [peer, owner];
+        const [customer, carrier] = row.kind === 'truck' ? [peer, owner] : [owner, peer];
         // брокер оформляет документы, а не везёт груз: рейс с ним как с перевозчиком не создаётся
         if (q1('SELECT kind FROM companies WHERE id = ?', carrier.company)?.kind === 'broker')
           throw bad('broker', 'Брокер не перевозит груз — договоритесь об услугах в чате', 409);
@@ -361,6 +368,9 @@ export default function dealRoutes(app) {
         const v = row.vehicle_id ? q1('SELECT brand, plate FROM vehicles WHERE id = ? AND company_id = ?', row.vehicle_id, row.company_id) : null;
         // на груз из нескольких машин — отдельный рейс на каждую машину: у каждой свой водитель, GPS и этапы
         const n = Math.min(row.trucks || 1, free);
+        // перегон: машина — заказчика (марка из заявки), за рулём сам откликнувшийся перегонщик — рейс сразу подтверждён.
+        // Если перегонщиков несколько (компания взяла несколько машин), водителей она назначает сама.
+        const reloc = row.kind === 'relocation' ? q1('SELECT l.brand, u.name, u.phone FROM listings l, users u WHERE l.id = ? AND u.id = ?', row.listing_id, row.user_id) : null;
         for (let i = 0; i < n; i++) {
           const id = insert(
             `INSERT INTO trips(listing_id, response_id, customer_user, customer_company, carrier_user, carrier_company, price, currency, track_token, driver_token, terms, vehicle_brand, plate)
@@ -370,6 +380,10 @@ export default function dealRoutes(app) {
             n === 1 && v ? v.brand : '', n === 1 && v ? v.plate : '',
           );
           run(`INSERT INTO trip_events(trip_id, stage) VALUES(?, 'planned')`, id);
+          if (reloc) {
+            run('UPDATE trips SET vehicle_brand = ? WHERE id = ?', reloc.brand, id);
+            if (n === 1) run('UPDATE trips SET driver_user = ?, driver_name = ?, driver_phone = ?, confirmed_at = ? WHERE id = ?', row.user_id, reloc.name, reloc.phone, L.now(), id);
+          }
           tripId ??= id;
         }
       } else throw bad('forbidden', 'Действие недоступно', 403);
@@ -380,9 +394,10 @@ export default function dealRoutes(app) {
     if (tripId) {
       L.push(both, 'trip', { tripId });
       // подтвердить рейс — машину и водителя — должен перевозчик
-      const carrierCompany = r.kind === 'cargo' ? r.company_id : r.owner_company;
+      const carrierCompany = r.kind === 'truck' ? r.owner_company : r.company_id;
       notify(staffOf(r.company_id), { kind: 'trip', title: 'Отклик принят — рейс создан: {route}', vars: routeOf(r.listing_id), link: `/trip/${tripId}` });
-      if (carrierCompany === r.company_id) notify(staffOf(carrierCompany), { kind: 'trip', title: 'Подтвердите рейс: {route}', vars: routeOf(r.listing_id), body: 'Укажите машину и водителя', link: `/trip/${tripId}` });
+      const autoConfirmed = r.kind === 'relocation' && q1('SELECT confirmed_at FROM trips WHERE id = ?', tripId)?.confirmed_at;
+      if (carrierCompany === r.company_id && !autoConfirmed) notify(staffOf(carrierCompany), { kind: 'trip', title: 'Подтвердите рейс: {route}', vars: routeOf(r.listing_id), body: 'Укажите машину и водителя', link: `/trip/${tripId}` });
     }
     L.push(both, 'response', { listingId: r.listing_id });
     res.json({ ok: true, tripId });
@@ -580,7 +595,10 @@ export default function dealRoutes(app) {
       [driverUser, driverName, driverPhone] = [d.id, d.name, d.phone];
     }
     plate = plate.toUpperCase().replace(/\s+/g, ' ');
-    if (plate.length < 4) throw bad('validation', 'Госномер: укажите номер машины', 400);
+    // при перегоне у новой машины или спецтехники номера может ещё не быть
+    const reloc = t.l_kind === 'relocation';
+    if (!reloc && plate.length < 4) throw bad('validation', 'Госномер: укажите номер машины', 400);
+    if (!brand && reloc) brand = t.vehicle_brand || t.l_brand || '';
     if (!brand) throw bad('validation', 'Марка: укажите марку машины', 400);
     if (driverName.length < 2) throw bad('validation', 'Водитель: укажите имя водителя', 400);
     driverPhone = L.normPhone(driverPhone);
