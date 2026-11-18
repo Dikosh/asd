@@ -163,6 +163,12 @@ addColumn('users', 'relocator', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('users', 'licenses', `TEXT NOT NULL DEFAULT '[]'`);
 addColumn('users', 'relocator_city', 'TEXT');
 addColumn('users', 'relocator_note', `TEXT NOT NULL DEFAULT ''`);
+// платный каталог услуг: перегон, сопровождение негабарита, таможенный брокер. Карточка видна, пока оплачено размещение
+db.exec(`CREATE TABLE IF NOT EXISTS services(
+  id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL REFERENCES companies(id), user_id INTEGER NOT NULL REFERENCES users(id),
+  category TEXT NOT NULL, title TEXT NOT NULL, cities TEXT NOT NULL DEFAULT '[]', all_country INTEGER NOT NULL DEFAULT 0,
+  description TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', paid_until TEXT, removed INTEGER NOT NULL DEFAULT 0, views INTEGER NOT NULL DEFAULT 0, created_at ${TS});
+CREATE INDEX IF NOT EXISTS services_cat ON services(category, paid_until);`);
 // рейсы, созданные до появления подтверждения, считаются подтверждёнными — их не останавливаем
 if (addColumn('trips', 'confirmed_at', 'TEXT')) db.exec('UPDATE trips SET confirmed_at = created_at');
 db.exec(`

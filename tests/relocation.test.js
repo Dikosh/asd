@@ -93,3 +93,24 @@ test('перегон: заявка, перегонщик, уведомление
   assert.ok(n.includes('Перегонщик едет к машине'), 'у перегона свои подписи этапов');
   assert.ok(near.id > id);
 });
+
+test('каталог услуг: карточка видна только после оплаты, фильтр по городу', async () => {
+  const escort = await signIn('+77063330011', { name: 'Сопровождение', companyName: 'Прикрытие KZ', companyForm: 'ТОО', role: 'carrier' });
+  const customer = await signIn('+77063330012', { name: 'Заказчик', companyName: 'Негабарит Строй', companyForm: 'ТОО', role: 'customer' });
+  assert.equal((await escort.call('POST', '/api/services', { category: 'escort', title: 'Машина прикрытия', cities: [] })).status, 400, 'без городов нельзя');
+  const { id } = await escort.post('/api/services', { category: 'escort', title: 'Машина прикрытия', cities: ['pavlodar', 'astana'], description: 'Маячки, табличка' });
+  assert.equal((await customer.get('/api/services?category=escort')).length, 0, 'неоплаченная карточка не видна');
+  const poor = await escort.call('POST', `/api/services/${id}/pay`);
+  assert.equal(poor.status, 402);
+  await escort.post('/api/balance/topup', { amount: 5000 });
+  const { paidUntil } = await escort.post(`/api/services/${id}/pay`);
+  assert.ok(paidUntil > new Date().toISOString());
+  assert.equal((await escort.get('/api/balance')).balance, 0);
+  assert.equal((await customer.get('/api/services?category=escort&city=astana')).length, 1);
+  assert.equal((await customer.get('/api/services?category=escort&city=almaty')).length, 0);
+  assert.equal((await customer.get('/api/services?category=broker')).length, 0);
+  // чужую карточку удалить нельзя, свою — можно
+  assert.equal((await customer.call('DELETE', `/api/services/${id}`)).status, 403);
+  await escort.call('DELETE', `/api/services/${id}`);
+  assert.equal((await customer.get('/api/services?category=escort')).length, 0);
+});

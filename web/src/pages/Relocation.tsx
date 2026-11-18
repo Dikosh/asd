@@ -37,6 +37,7 @@ export default function RelocationPage() {
       {tab === 'requests' && <Requests profile={profile.data} />}
       {tab === 'drivers' && <Drivers />}
       {tab === 'profile' && !teamDriver && (profile.data ? <ProfileForm initial={profile.data} onSaved={profile.reload} /> : <Loading />)}
+      {tab === 'drivers' && <p className="muted small center"><Link to="/services?cat=relocation">{t('Компании, которые занимаются перегоном')}</Link> · <Link to="/services?cat=escort">{t('Сопровождение негабарита')}</Link></p>}
       <p className="muted small center"><Link to="/my/relocation">{t('Мои заявки на перегон')}</Link></p>
     </div>
   );

@@ -28,6 +28,9 @@ export const PLAN = { price: 9900, days: 30, free: { seats: 2, alerts: 3 }, pro:
 export const CARGO = ['food', 'building', 'equipment', 'consumer', 'agro', 'metal', 'fuel', 'groupage', 'adr', 'oversize', 'cars', 'furniture', 'other'];
 export const LOADING = ['top', 'rear', 'full', 'side'];
 export const KINDS = ['cargo', 'truck', 'relocation'];
+// Платный каталог услуг: исполнитель платит за показ своей карточки, заказчики звонят ему напрямую
+export const SERVICE_CATEGORIES = ['relocation', 'escort', 'broker'];
+export const SERVICE_PLAN = { price: 5000, days: 30 };
 // Перегон: машину или технику заказчика ведёт своим ходом перегонщик
 export const RELOC_VEHICLES = ['car', 'truck', 'special', 'bus', 'moto', 'other'];
 // категории прав РК; tractor — удостоверение тракториста-машиниста (погрузчики, тракторы, экскаваторы)

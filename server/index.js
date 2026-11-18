@@ -11,6 +11,7 @@ import dealRoutes, { autoCompleteTrips } from './routes/deals.js';
 import companyRoutes from './routes/company.js';
 import extraRoutes from './routes/extras.js';
 import relocationRoutes from './routes/relocation.js';
+import serviceRoutes from './routes/services.js';
 import { loadRates } from './rates.js';
 import { seed } from './seed.js';
 
@@ -56,6 +57,7 @@ export function createApp() {
   companyRoutes(app);
   extraRoutes(app);
   relocationRoutes(app);
+  serviceRoutes(app);
 
   app.use('/api', (_req, _res, next) => next(new HttpError(404, 'not_found', 'Нет такого метода')));
 

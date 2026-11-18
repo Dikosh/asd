@@ -1,7 +1,7 @@
 // «Работа»: вакансии владельцев транспорта и резюме водителей. Связь — по телефону или в WhatsApp.
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Briefcase, MapPin, Plus, Trash2, UserPlus } from 'lucide-react';
+import { Briefcase, CarFront, MapPin, Megaphone, Plus, Trash2, UserPlus } from 'lucide-react';
 import { api, fmtDate, t, useApp, useLoad } from '../core';
 import { CitySelect, Empty, Field, Loading, Modal, Tabs } from '../ui';
 import { ContactButtons } from '../listing';
@@ -43,6 +43,11 @@ export default function JobsPage() {
         </div>
       </div>
       <p className="muted">{t('Поиск водителей и работы внутри платформы — без перехода на другие сайты.')}</p>
+      {/* подработка для водителей: перегон машин и сопровождение негабарита */}
+      <div className="row wrap">
+        <Link to="/relocation" className="btn soft"><CarFront size={16} /> {t('Перегон: заявки и перегонщики')}</Link>
+        <Link to="/services?cat=escort" className="btn soft"><Megaphone size={16} /> {t('Сопровождение негабарита')}</Link>
+      </div>
       <div className="page-head">
         <Tabs value={kind} onChange={setKind} items={[{ value: 'vacancy', label: t('Вакансии') }, { value: 'resume', label: t('Резюме водителей') }]} />
         <div className="city-filter"><CitySelect value={city} onChange={setCity} placeholder={t('Любой город')} /></div>

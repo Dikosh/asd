@@ -33,7 +33,7 @@ export default function Cabinet() {
   // водитель из команды ведёт рейсы; сделки, деньги и документы — у владельца и сотрудников
   // водителю-одиночке не показываем то, что нужно только компаниям
   const visible = me!.user.companyRole === 'driver' ? items.filter((i) => ['profile', 'trips', 'team', 'catalog', 'settings'].includes(i.key))
-    : me!.user.role === 'driver' ? items.filter((i) => !['employees', 'balance', 'partners'].includes(i.key))
+    : me!.user.role === 'driver' ? items.filter((i) => !['employees', 'partners'].includes(i.key))
     // заказчику парк машин и список водителей не нужны; деньги и тариф — у владельца компании
     : items.filter((i) => !(me!.user.role === 'customer' && ['vehicles', 'employees'].includes(i.key)) && !(me!.user.companyRole !== 'owner' && i.key === 'balance'));
   const current = visible.find((i) => i.key === tab);
@@ -489,14 +489,14 @@ function Employees() {
 function Balance() {
   const { act, meta, reloadMe } = useApp();
   const { data, loading, reload } = useLoad(() => api<{ balance: number; transactions: any[] }>('/balance'));
-  const KIND: Record<string, string> = { topup: 'Пополнение', boost: 'Поднятие в топ', plan: 'Тариф Pro' };
+  const KIND: Record<string, string> = { topup: 'Пополнение', boost: 'Поднятие в топ', plan: 'Тариф Pro', service: 'Каталог услуг' };
   const topup = async (amount: number) => (await act(() => api('/balance/topup', 'POST', { amount }), t('Баланс пополнен'))) && (reload(), reloadMe());
   return (
     <div className="stack">
       <h1 className="page-title">{t('Баланс и тариф')}</h1>
       <div className="card balance">
         <div><span className="muted">{t('На счёте компании')}</span><b>{money(data?.balance ?? 0)}</b></div>
-        <p className="muted small">{t('С баланса оплачивается поднятие объявлений в топ ({n} ₸ за 24 часа). Размещение, поиск и отклики бесплатны.', { n: meta.boostPrice })}</p>
+        <p className="muted small">{t('С баланса оплачиваются поднятие объявлений в топ ({n} ₸ за 24 часа) и показ в каталоге услуг. Размещение, поиск и отклики бесплатны.', { n: meta.boostPrice })}</p>
         {meta.demo ? (
           <div className="row wrap">
             {[1000, 5000, 10000].map((a) => <button key={a} className="btn soft" onClick={() => topup(a)}>+ {num(a)} ₸</button>)}
@@ -562,6 +562,8 @@ function txNote(note: string) {
   if (ad) return t('Объявление №{n}', { n: ad[1] });
   const plan = /^Тариф Pro до (\d{4}-\d\d-\d\d)$/.exec(note);
   if (plan) return t('Тариф Pro до {d}', { d: fmtDate(plan[1]) });
+  const svc = /^Каталог услуг до (\d{4}-\d\d-\d\d)$/.exec(note);
+  if (svc) return t('Показ в каталоге услуг до {d}', { d: fmtDate(svc[1]) });
   return t(note);
 }
 

@@ -259,6 +259,7 @@ export function seed() {
       run(`INSERT INTO transactions(company_id, amount, kind, note) VALUES(?, 5000, 'topup', 'Приветственный бонус')`, comp[name]);
   });
   seedRelocation();
+  seedServices();
   console.log('[seed] демо-данные загружены');
 }
 
@@ -300,8 +301,28 @@ export function seedRelocation() {
   return true;
 }
 
+/** Демо каталога услуг: оплаченные карточки перегонщиков, сопровождения и брокеров. Повторно не дублирует. */
+export function seedServices() {
+  if (q1('SELECT 1 FROM services LIMIT 1')) return false;
+  const until = new Date(Date.now() + 25 * 86400_000).toISOString();
+  const add = (company, category, title, cities, description, all = false) => {
+    const w = q1(`SELECT u.id AS user, c.id AS company, u.phone FROM companies c JOIN users u ON u.company_id = c.id AND u.company_role = 'owner' WHERE c.name = ? ORDER BY u.id LIMIT 1`, company);
+    if (!w) return;
+    insert('INSERT INTO services(company_id, user_id, category, title, cities, all_country, description, phone, paid_until, views) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      w.company, w.user, category, title, JSON.stringify(cities), all ? 1 : 0, description, w.phone, until, 0);
+  };
+  add('Оңтүстік Транс', 'relocation', 'Перегон тягачей и спецтехники', ['almaty', 'shymkent', 'taraz', 'khorgos'], 'Водители с категориями C, CE и удостоверением тракториста. Перегоняем из салонов, с таможни и после ремонта. Страховка на время перегона.');
+  add('Тулегенов Б.', 'relocation', 'Перегонщик — легковые и грузовые', ['shymkent', 'turkistan', 'kyzylorda'], 'Стаж 14 лет. Категории B, C, CE, тракторист-машинист.');
+  add('Сарыарка Карго', 'escort', 'Сопровождение негабарита 24/7', [], 'Две машины прикрытия с проблесковыми маячками и табличками «Крупногабаритный груз». Опыт с тралами и бурильным оборудованием, согласование маршрута.', true);
+  add('Ертіс Авто', 'escort', 'Машина прикрытия — Павлодар и север', ['pavlodar', 'ekibastuz', 'astana', 'semey'], 'Сопровождение спецтехники и негабарита, работаем ночью.');
+  add('КеденСервис', 'broker', 'Таможенное оформление на Хоргосе', ['khorgos', 'almaty'], 'Импорт и экспорт с Китаем, декларации, сертификаты, СВХ.');
+  add('Евразия Брокер', 'broker', 'Брокер — декларирование и сертификация', [], 'Все таможенные режимы, электронное декларирование.', true);
+  return true;
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv.includes('--relocation')) {
   console.log(seedRelocation() ? '[seed] демо раздела «Перегон» добавлено' : '[seed] демо раздела «Перегон» уже есть');
+  console.log(seedServices() ? '[seed] демо каталога услуг добавлено' : '[seed] демо каталога услуг уже есть');
   process.exit(0);
 }
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
