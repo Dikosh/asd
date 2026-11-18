@@ -82,7 +82,8 @@ function tripOut(t, viewer, full = false, mode = 'party') {
     // связь с машиной считается потерянной, если позиции нет дольше 20 минут
     signalLost: t.status === 'active' && !!t.share_gps && !!last && Date.now() - Date.parse(last.at) > 20 * 60_000,
     remainingKm,
-    etaHours: remainingKm !== null && t.stage === 'in_transit' ? Math.max(1, Math.round(remainingKm / 55)) : null,
+    // на месте (меньше 5 км) время в пути не показываем: «≈ 1 ч» на финише сбивает с толку
+    etaHours: remainingKm !== null && t.stage === 'in_transit' && remainingKm >= 5 ? Math.max(1, Math.round(remainingKm / 55)) : null,
     // перевозчик подтвердил рейс: назначил машину и водителя
     confirmed: !!t.confirmed_at,
     vehicle: { brand: t.vehicle_brand || '', plate: t.plate || '', trailerPlate: t.trailer_plate || '', bodyType: t.body_type },
@@ -169,7 +170,8 @@ function tripByDriverToken(req) {
 
 // ---------- действия водителя: одинаковы для сотрудника перевозчика и для водителя по ссылке ----------
 function setGps(t, share) {
-  if (!share && t.status === 'active' && t.stage !== 'planned') throw bad('gps_required', 'В пути отключить GPS нельзя', 409);
+  if (t.status !== 'active') throw bad('state', 'Рейс уже завершён', 409);
+  if (!share && t.stage !== 'planned') throw bad('gps_required', 'После выезда на погрузку отключить GPS нельзя — до конца рейса заказчик должен видеть машину', 409);
   run('UPDATE trips SET share_gps = ? WHERE id = ?', share ? 1 : 0, t.id);
   L.push(tripUsers(t), 'trip', { tripId: t.id });
 }
@@ -208,8 +210,8 @@ function setStage(t, stage) {
     const far = dest ? Math.round(haversine(last, dest)) : 0;
     // выгрузка может начаться в любом пункте после погрузки (частичная выгрузка по пути), доставка — только в конечном
     const nearStop = Math.round(Math.min(...points.slice(1).map((p) => cityById.get(p)).filter(Boolean).map((c) => haversine(last, c)), far || Infinity));
-    if (stage === 'unloading' && nearStop > 80) throw L.tbad('gps_far', 'До ближайшего пункта выгрузки ещё {n} км — отметить выгрузку можно на месте', { n: nearStop }, 409);
-    if (stage === 'delivered' && far > 80) throw L.tbad('gps_far', 'До пункта выгрузки ещё {n} км — отметить доставку можно на месте', { n: far }, 409);
+    if (stage === 'unloading' && nearStop > 80) throw L.tbad('gps_far', 'До ближайшего пункта выгрузки ещё {n} км. Отметить выгрузку можно, когда машина будет ближе 80 км к нему', { n: nearStop }, 409);
+    if (stage === 'delivered' && far > 80) throw L.tbad('gps_far', 'До пункта выгрузки ещё {n} км. Отметить доставку можно, когда машина будет ближе 80 км к нему', { n: far }, 409);
     // рейс не может закончиться быстрее, чем машина способна проехать маршрут: так его не «нарисовать» за минуту
     if (stage === 'delivered' && !(L.DEMO && q1('SELECT sim FROM trips WHERE id = ?', t.id).sim)) {
       const started = q1(`SELECT at FROM trip_events WHERE trip_id = ? AND stage = 'in_transit'`, t.id)?.at;
@@ -401,12 +403,11 @@ export default function dealRoutes(app) {
          JOIN companies pc ON pc.id = CASE WHEN c.owner_company = :c THEN c.peer_company ELSE c.owner_company END
          WHERE c.owner_company = :c OR c.peer_company = :c ORDER BY lastAt DESC LIMIT 300`,
         { c: req.user.company_id },
-      ).map(({ peerSettings, peerUserCompany, ...c }) => ({
-        ...c,
-        // если одна из компаний скрыла другую, контакты в чате не показываем
-        peerPhone: q1('SELECT 1 FROM blocks WHERE (company_id = :a AND blocked_id = :b) OR (company_id = :b AND blocked_id = :a)', { a: req.user.company_id, b: c.peerCompanyId })
-          ? null : L.phoneFor(req.user, { phone: c.peerPhone, settings: peerSettings, company_id: peerUserCompany }),
-      })),
+      ).map(({ peerSettings, peerUserCompany, ...c }) => {
+        // если одна из компаний скрыла другую, переписка закрыта и контакты не показываем
+        const blocked = !!q1('SELECT 1 FROM blocks WHERE (company_id = :a AND blocked_id = :b) OR (company_id = :b AND blocked_id = :a)', { a: req.user.company_id, b: c.peerCompanyId });
+        return { ...c, blocked, peerPhone: blocked ? null : L.phoneFor(req.user, { phone: c.peerPhone, settings: peerSettings, company_id: peerUserCompany }) };
+      }),
     );
   });
   app.get('/api/chats/:id/messages', auth, staff, (req, res) => {
@@ -420,8 +421,10 @@ export default function dealRoutes(app) {
       q(
         `SELECT m.id, m.sender_id AS senderId, u.name AS senderName, u.company_id AS companyId, m.text, m.is_read AS isRead, m.created_at AS createdAt,
            f.id AS f_id, f.filename AS f_name, f.mime AS f_mime, f.kind AS f_kind, f.size AS f_size
-         FROM messages m JOIN users u ON u.id = m.sender_id LEFT JOIN files f ON f.id = m.file_id WHERE m.chat_id = ? ORDER BY m.id DESC LIMIT 300`,
-        chat.id,
+         FROM messages m JOIN users u ON u.id = m.sender_id LEFT JOIN files f ON f.id = m.file_id
+         WHERE m.chat_id = ? AND m.id < ? ORDER BY m.id DESC LIMIT 300`,
+        // ?before=<id> — более ранние сообщения: длинная переписка подгружается порциями
+        chat.id, Number(req.query.before) > 0 ? Number(req.query.before) : Number.MAX_SAFE_INTEGER,
       )
         .reverse()
         .map((m) => ({
@@ -501,12 +504,14 @@ export default function dealRoutes(app) {
   app.get('/api/track/:token', (req, res) => {
     const t = withTerms(q1(`${TRIP_SQL} WHERE t.track_token = ?`, String(req.params.token)));
     // ссылка действует, пока идёт рейс, и ещё неделю после него
-    if (!t || (t.finished_at && Date.now() - Date.parse(t.finished_at) > 7 * 86400_000)) throw bad('not_found', 'Ссылка недействительна', 404);
+    // сорванный рейс получателю не показываем: машина к нему не едет
+    if (!t || t.status === 'failed' || (t.finished_at && Date.now() - Date.parse(t.finished_at) > 7 * 86400_000)) throw bad('not_found', 'Ссылка недействительна', 404);
     const out = tripOut(t, null, true, 'public');
-    // получателю хватает маршрута, этапа и положения машины: ни цены, ни имён, ни ссылок на объявление
+    // получателю хватает маршрута, этапа и положения машины: ни цены, ни заказчика, ни ссылок на объявление.
+    // Название перевозчика нужно, чтобы узнать машину на погрузке.
     delete out.listingId;
     out.carrier = { name: t.carrier_name };
-    out.customer = { name: t.customer_name };
+    out.customer = {};
     if (!t.share_gps && t.status === 'active') Object.assign(out, { position: null, track: [], remainingKm: null, etaHours: null });
     res.json(out);
   });

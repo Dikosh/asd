@@ -40,7 +40,9 @@ const listingSchema = z
   })
   .refine((b) => b.dateTo >= b.dateFrom, 'Дата окончания раньше даты начала')
   .refine((b) => b.dateTo <= new Date(Date.now() + 180 * 86400_000).toISOString().slice(0, 10), 'Период размещения — не дальше полугода')
-  .refine((b) => b.points.every((p, i) => i === 0 || p !== b.points[i - 1]), 'Соседние пункты маршрута совпадают');
+  .refine((b) => b.points.every((p, i) => i === 0 || p !== b.points[i - 1]), 'Соседние пункты маршрута совпадают')
+  // опасный груз без класса ADR перевозчик не сможет оценить: нужны допуск водителя и оснащение машины
+  .refine((b) => b.cargoType !== 'adr' || b.adrClass, 'Для опасного груза укажите класс ADR (1–9)');
 
 const pts = (l) => l.points.map((id) => cityById.get(id)).filter(Boolean);
 const n = (v) => (v === undefined || v === '' || v === null || isNaN(Number(v)) ? undefined : Number(v));
@@ -376,7 +378,8 @@ export default function listingRoutes(app) {
     if (q1('SELECT COUNT(*) AS n FROM listings WHERE company_id = ? AND created_at > ?', c, new Date(Date.now() - 3600_000).toISOString()).n >= L.LIMITS.perHour)
       throw bad('rate_limit', 'Слишком много объявлений за час — попробуйте позже', 429);
     if (q1(`SELECT 1 FROM listings WHERE company_id = ? AND status = 'active' AND kind = ? AND points = ? AND date_from = ? AND date_to = ?
-              AND COALESCE(weight, 0) = ? AND COALESCE(body_type, '') = ?`, c, b.kind, JSON.stringify(b.points), b.dateFrom, b.dateTo, b.weight ?? 0, b.bodyType ?? ''))
+              AND COALESCE(weight, 0) = ? AND COALESCE(body_type, '') = ? AND COALESCE(cargo_type, '') = ? AND COALESCE(adr_class, 0) = ?`,
+              c, b.kind, JSON.stringify(b.points), b.dateFrom, b.dateTo, b.weight ?? 0, b.bodyType ?? '', b.cargoType ?? '', b.adrClass ?? 0))
       throw bad('duplicate', 'Такое объявление у вас уже размещено', 409);
     // снятое модератором нельзя просто разместить заново
     if (q1(`SELECT 1 FROM listings WHERE company_id = ? AND status = 'removed' AND kind = ? AND from_id = ? AND to_id = ? AND closed_at > ?`,
@@ -429,7 +432,8 @@ export default function listingRoutes(app) {
       if (q1(`SELECT 1 FROM trips WHERE listing_id = ? AND status IN ('completed', 'failed')`, l.id)) throw bad('state', 'По этому объявлению уже был рейс. Нажмите «Разместить снова»', 409);
       if (l.date_to < L.today()) throw bad('state', 'Срок объявления истёк. Нажмите «Разместить снова»', 409);
     }
-    run('UPDATE listings SET status = ?, closed_at = ? WHERE id = ?', status, status === 'active' ? null : L.now(), l.id);
+    // у закрытого объявления поднятие в топ снимается: метка «В топе» у него только сбивает с толку
+    run(`UPDATE listings SET status = ?, closed_at = ?, boosted_until = CASE WHEN ? = 'active' THEN boosted_until ELSE NULL END WHERE id = ?`, status, status === 'active' ? null : L.now(), status, l.id);
     if (status !== 'active') run(`UPDATE responses SET status = 'declined' WHERE listing_id = ? AND status = 'sent'`, l.id);
     res.json({ ok: true });
   });
@@ -487,8 +491,10 @@ export default function listingRoutes(app) {
       ).map((r) => ({ id: r.id, message: r.message, price: r.price, currency: r.currency, status: r.status, trucks: r.trucks, createdAt: r.createdAt, chatId: r.chatId,
         vehicle: r.v_brand ? { brand: r.v_brand, plate: r.v_plate, bodyType: r.v_body, weight: r.v_weight } : null,
         user: { id: r.userId, name: r.userName, phone: L.phoneFor(req.user, { phone: r.phone, settings: r.settings, company_id: r.u_company }) }, company: L.companyOut(r, 'c_') }));
-    } else if (l.myResponse) {
-      out.chatId = q1('SELECT id FROM chats WHERE listing_id = ? AND peer_id = ?', l.id, req.user.id)?.id || null;
+    } else {
+      if (l.myResponse) out.chatId = q1('SELECT id FROM chats WHERE listing_id = ? AND peer_id = ?', l.id, req.user.id)?.id || null;
+      // сколько откликов ещё можно отправить (отозванные тоже считаются — это защита от спама)
+      out.responsesLeft = Math.max(0, 3 - q1('SELECT COUNT(*) AS n FROM responses WHERE listing_id = ? AND company_id = ?', l.id, req.user.company_id).n);
     }
     res.json(out);
   });

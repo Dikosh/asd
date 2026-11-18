@@ -19,6 +19,7 @@ export default function JobsPage() {
     const body = { ...form, experience: form!.experience === '' ? null : Number(form!.experience), dateFrom: form!.dateFrom || null };
     if (await act(() => api('/jobs', 'POST', body), form!.kind === 'vacancy' ? t('Вакансия размещена') : t('Резюме размещено'))) {
       setKind(form!.kind);
+      if (city && form!.cityId !== city) setCity(form!.cityId);
       setForm(null);
       reload();
     }
@@ -36,8 +37,9 @@ export default function JobsPage() {
       <div className="page-head">
         <h1 className="page-title">{t('Работа')}</h1>
         <div className="row wrap">
-          {!isDriver && <button className="btn primary" onClick={() => setForm({ ...blank, kind: 'vacancy' })}><Plus size={17} /> {t('Ищу водителя')}</button>}
-          <button className={`btn ${isDriver ? 'primary' : 'soft'}`} onClick={() => setForm({ ...blank, kind: 'resume' })}><Plus size={17} /> {t('Ищу работу')}</button>
+          {/* город из фильтра подставляем сразу: иначе объявление «пропадает» из отфильтрованного списка */}
+          {!isDriver && <button className="btn primary" onClick={() => setForm({ ...blank, cityId: city, kind: 'vacancy' })}><Plus size={17} /> {t('Ищу водителя')}</button>}
+          <button className={`btn ${isDriver ? 'primary' : 'soft'}`} onClick={() => setForm({ ...blank, cityId: city, kind: 'resume' })}><Plus size={17} /> {t('Ищу работу')}</button>
         </div>
       </div>
       <p className="muted">{t('Поиск водителей и работы внутри платформы — без перехода на другие сайты.')}</p>
@@ -62,7 +64,7 @@ export default function JobsPage() {
               <div className="chips">
                 {j.vehicle && <span className="chip strong">{j.vehicle}</span>}
                 {j.licenseCats && <span className="chip">{t('Категории')}: {j.licenseCats}</span>}
-                {j.experience != null && <span className="chip">{kind === 'vacancy' ? t('стаж от {n} лет', { n: j.experience }) : t('стаж {n} лет', { n: j.experience })}</span>}
+                {j.experience != null && <span className="chip">{kind === 'vacancy' ? t('стаж от {n} г.', { n: j.experience }) : t('стаж {n} г.', { n: j.experience })}</span>}
                 {j.dateFrom && <span className="chip light">{t('с {d}', { d: fmtDate(j.dateFrom) })}</span>}
               </div>
               {j.description && <p className="desc full">{j.description}</p>}
@@ -91,7 +93,7 @@ export default function JobsPage() {
             <input autoFocus value={form.title} onChange={(e) => set({ title: e.target.value })} maxLength={120} placeholder={isVac ? t('Водитель CE на рефрижератор') : t('Водитель CE, стаж 10 лет')} />
           </Field>
           <div className="grid2">
-            <Field label={t('Город')}><CitySelect value={form.cityId} onChange={(v) => set({ cityId: v })} /></Field>
+            <Field label={t('Город')} hint={form.cityId ? undefined : t('Обязательно — по городу ищут работу и водителей')}><CitySelect value={form.cityId} onChange={(v) => set({ cityId: v })} /></Field>
             <Field label={isVac ? t('Транспорт') : t('На чём работал')}><input value={form.vehicle} onChange={(e) => set({ vehicle: e.target.value })} placeholder="Volvo FH, тент 20 т" /></Field>
             <Field label={t('Категории прав')}><input value={form.licenseCats} onChange={(e) => set({ licenseCats: e.target.value })} placeholder="C, CE" /></Field>
             <Field label={isVac ? t('Стаж от, лет') : t('Стаж, лет')}><input inputMode="numeric" value={form.experience} onChange={(e) => set({ experience: e.target.value.replace(/\D/g, '') })} /></Field>
@@ -102,7 +104,7 @@ export default function JobsPage() {
           <p className="muted small">{t('В объявлении будет показан ваш номер {phone} — с вами свяжутся по телефону или в WhatsApp.', { phone: me!.user.phone })}</p>
           <div className="row end">
             <button className="btn ghost" onClick={() => setForm(null)}>{t('Отмена')}</button>
-            <button className="btn primary" disabled={form.title.trim().length < 3} onClick={save}>{t('Разместить')}</button>
+            <button className="btn primary" disabled={form.title.trim().length < 3 || !form.cityId} onClick={save}>{t('Разместить')}</button>
           </div>
         </Modal>
       )}

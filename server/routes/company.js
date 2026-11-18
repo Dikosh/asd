@@ -68,12 +68,12 @@ export default function companyRoutes(app) {
   app.get('/api/blacklist', auth, (req, res) => {
     res.json(
       q(
-        `SELECT b.id, b.reason, b.review, b.created_at AS createdAt, b.author_company = :c AS mine,
+        `SELECT b.id, b.reason, b.review, b.reply, b.created_at AS createdAt, b.author_company = :c AS mine, b.company_id = :c AS aboutUs,
            :admin AS canDelete, a.verified = 'verified' AS counted, t.id AS companyId, t.name, t.form, t.bin, a.name AS author, (SELECT COUNT(*) FROM blacklist x WHERE x.company_id = t.id) AS total
          FROM blacklist b JOIN companies t ON t.id = b.company_id JOIN companies a ON a.id = b.author_company
          WHERE t.name LIKE :t OR t.bin LIKE :t ORDER BY b.id DESC LIMIT 200`,
         { c: req.user.company_id, t: `%${String(req.query.q || '').trim()}%`, admin: req.user.is_admin ? 1 : 0 },
-      ).map((b) => ({ ...b, mine: !!b.mine, canDelete: !!b.canDelete, counted: !!b.counted })),
+      ).map((b) => ({ ...b, mine: !!b.mine, aboutUs: !!b.aboutUs, canDelete: !!b.canDelete, counted: !!b.counted })),
     );
   });
   app.post('/api/blacklist', auth, owner, (req, res) => {
@@ -120,12 +120,13 @@ export default function companyRoutes(app) {
   app.get('/api/documents', auth, owner, (req, res) => {
     res.json(q('SELECT id, kind, filename, status, note, created_at AS createdAt FROM documents WHERE company_id = ? ORDER BY id DESC', req.user.company_id));
   });
-  const docSchema = z.object({ kind: z.enum(L.DOC_KINDS), filename: z.string().trim().min(1).max(120), mime: z.string(), data: z.string().min(10) });
+  const docSchema = z.object({ kind: z.enum(L.DOC_KINDS), filename: z.string().trim().min(1).max(120), mime: z.string(), data: z.string() });
   app.post('/api/documents', auth, owner, (req, res) => {
     const b = parse(docSchema, req.body);
     const ext = Object.hasOwn(MIME, b.mime) ? MIME[b.mime] : null;
     if (!ext) throw bad('file_type', 'Допустимы PDF, JPG, PNG или WEBP');
     const buf = Buffer.from(b.data, 'base64');
+    if (buf.length < 10) throw bad('file_empty', 'Файл пустой или повреждён — выберите другой');
     if (buf.length > 5 * 1024 * 1024) throw bad('file_size', 'Файл больше 5 МБ');
     if (q1('SELECT COUNT(*) AS n FROM documents WHERE company_id = ?', req.user.company_id).n >= 20) throw bad('limit', 'Не более 20 документов');
     // новый файл того же вида заменяет прежний непринятый: в очереди нет дублей
@@ -172,12 +173,14 @@ export default function companyRoutes(app) {
   // ---------- модерация ----------
   app.get('/api/admin/queue', auth, L.admin, (_req, res) => {
     res.json({
-      // вместе с заявкой — все документы компании: модератор видит картину целиком
+      // вместе с заявкой — все документы компании: модератор видит картину целиком.
+      // Отдельной очередью — только новые документы уже проверенных компаний (например, лицензия);
+      // документы компании, которая ещё не отправила заявку, модератору не нужны.
       companies: q(`SELECT id, name, form, bin, kind, created_at AS createdAt FROM companies WHERE verified = 'pending' ORDER BY id`)
         .map((c) => ({ ...c, binValid: isValidBin(c.bin), docs: q(`SELECT id, kind, filename, status FROM documents WHERE company_id = ? ORDER BY id DESC`, c.id) })),
       documents: q(
         `SELECT d.id, d.kind, d.filename, d.status, d.created_at AS createdAt, c.id AS companyId, c.name AS companyName
-         FROM documents d JOIN companies c ON c.id = d.company_id WHERE d.status = 'pending' ORDER BY d.id LIMIT 200`,
+         FROM documents d JOIN companies c ON c.id = d.company_id WHERE d.status = 'pending' AND c.verified = 'verified' ORDER BY d.id LIMIT 200`,
       ),
     });
   });
@@ -189,6 +192,8 @@ export default function companyRoutes(app) {
     L.resetCompanyCache();
     // при отказе непроверенные документы компании тоже отклоняются с той же причиной — компания видит, что исправить
     if (!ok) run(`UPDATE documents SET status = 'rejected', note = ? WHERE company_id = ? AND status = 'pending'`, d.note, id(req));
+    // при одобрении документы, по которым принято решение, принимаются вместе с компанией и уходят из очереди
+    else run(`UPDATE documents SET status = 'approved', note = '' WHERE company_id = ? AND status = 'pending'`, id(req));
     L.modLog(req.user, ok ? 'verify_approve' : 'verify_reject', q1('SELECT name FROM companies WHERE id = ?', id(req))?.name, d.note);
     notify(q('SELECT id FROM users WHERE company_id = ?', id(req)).map((u) => u.id), {
       kind: 'system', title: ok ? 'Компания проверена' : 'Проверка компании не пройдена',
@@ -293,7 +298,7 @@ export default function companyRoutes(app) {
   const jobSchema = z.object({
     kind: z.enum(['vacancy', 'resume']),
     title: z.string().trim().min(3).max(120),
-    cityId: z.string().refine((c) => cityById.has(c), 'Неизвестный город').nullable().optional(),
+    cityId: z.string({ required_error: 'Укажите город' }).refine((c) => cityById.has(c), 'Неизвестный город'),
     vehicle: z.string().trim().max(120).default(''),
     licenseCats: z.string().trim().max(30).default(''),
     experience: optNum(70),

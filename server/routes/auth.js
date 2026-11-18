@@ -148,7 +148,7 @@ export default function authRoutes(app) {
     name: z.string().trim().min(2).max(100),
     email: z.union([z.literal(''), z.string().trim().email().max(120)]).default(''),
     companyName: z.string().trim().min(2).max(120).optional(),
-    companyForm: z.enum(['ИП', 'ТОО']).optional(),
+    companyForm: z.enum(['ИП', 'ТОО', '']).optional(),
     role: z.enum(L.ROLES).optional(),
     joinInvite: z.boolean().default(false),
     accept: z.literal(true, { errorMap: () => ({ message: 'нужно принять правила платформы' }) }),
@@ -159,7 +159,9 @@ export default function authRoutes(app) {
     if (!otp || otp.expires < Date.now()) throw bad('code_expired', 'Сессия регистрации истекла, подтвердите номер заново');
     const invite = b.joinInvite ? inviteFor(otp.phone) : null;
     if (b.joinInvite && !invite) throw bad('not_found', 'Приглашение не найдено или устарело', 404);
-    if (!invite && (!b.companyName || !b.companyForm || !b.role)) throw bad('validation', 'Укажите компанию и роль');
+    // водитель без компании: запись на его имя, без формы ИП/ТОО
+    if (!invite && b.role === 'driver') Object.assign(b, { companyName: b.companyName || b.name, companyForm: '' });
+    if (!invite && (!b.companyName || (!b.companyForm && b.role !== 'driver') || !b.role)) throw bad('validation', 'Укажите компанию и роль');
     const userId = tx(() => {
       run('DELETE FROM otps WHERE phone = ?', otp.phone);
       const isAdmin = ADMIN_PHONE === otp.phone ? 1 : 0;
@@ -232,6 +234,7 @@ export default function authRoutes(app) {
     if (b.about !== undefined) run('UPDATE companies SET about = ? WHERE id = ?', b.about, id);
     if (b.cityId !== undefined) run('UPDATE companies SET city_id = ? WHERE id = ?', b.cityId, id);
     if (b.bin !== undefined) {
+      if (b.bin && !/^\d{12}$/.test(b.bin)) throw bad('bin', 'БИН/ИИН — это 12 цифр');
       if (b.bin && !isValidBin(b.bin)) throw bad('bin', 'БИН/ИИН не прошёл проверку контрольного разряда');
       if (b.bin && q1('SELECT 1 FROM companies WHERE bin = ? AND id != ?', b.bin, id)) throw bad('bin_taken', 'Компания с таким БИН/ИИН уже зарегистрирована. Если это ваша компания, напишите в поддержку', 409);
       // смена БИН сбрасывает подтверждение компании

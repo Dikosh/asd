@@ -4,7 +4,7 @@ import { Link } from 'react-router-dom';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { BadgeCheck, ChevronDown, MapPin, Star, X } from 'lucide-react';
-import { City, Company, COUNTRY_L, Lang, placeName, t, useApp } from './core';
+import { City, Company, companyTitle, COUNTRY_L, Lang, placeName, t, useApp } from './core';
 
 export function Modal({ title, onClose, children, wide }: { title: string; onClose?: () => void; children: ReactNode; wide?: boolean }) {
   const box = useRef<HTMLDivElement>(null);
@@ -271,7 +271,7 @@ export function CitySelect({ value, onChange, placeholder, error }: { value: str
           {list.map((c, i) => (
             <li key={c.id} role="option" aria-selected={i === hi} className={i === hi ? 'hi' : ''} onMouseEnter={() => setHi(i)} onMouseDown={(e) => { e.preventDefault(); choose(c); }}>
               {placeName(c)}
-              <span className="muted small"> {c.country !== 'KZ' ? `· ${t(COUNTRY_L[c.country] || c.country)}` : c.region && c.region !== c.ru ? `· ${c.region}` : ''}</span>
+              <span className="muted small"> {c.country !== 'KZ' ? `· ${t(COUNTRY_L[c.country] || c.country)}` : c.region && c.region !== c.ru ? `· ${t(c.region)}` : ''}</span>
             </li>
           ))}
         </ul>
@@ -360,7 +360,7 @@ export function CompanyBadge({ c, link = true }: { c: Company; link?: boolean })
     <>
       <span className={`dot ${c.indicator}`} title={t(IND_TEXT[c.indicator])} />
       <span className="cb-name">
-        {c.form} «{c.name}»
+        {companyTitle(c)}
       </span>
       {c.verified === 'verified' && <BadgeCheck size={16} className="verified" aria-label={t('Компания проверена')} />}
       {c.pro && <span className="pro" title={t('Тариф Pro')}>PRO</span>}
@@ -451,9 +451,10 @@ export function Logo() {
 export function LangSwitch() {
   const { lang, setLang } = useApp();
   return (
-    <div className="lang" role="group" aria-label="Язык / Тіл">
+    <div className="lang" role="group" aria-label="Язык / Тіл / Language">
       {(['ru', 'kz', 'en'] as Lang[]).map((l) => (
-        <button key={l} className={lang === l ? 'on' : ''} onClick={() => setLang(l)}>
+        <button key={l} className={lang === l ? 'on' : ''} aria-pressed={lang === l} lang={l === 'kz' ? 'kk' : l}
+          aria-label={l === 'ru' ? 'Русский' : l === 'kz' ? 'Қазақша' : 'English'} onClick={() => setLang(l)}>
           {l === 'ru' ? 'РУС' : l === 'kz' ? 'ҚАЗ' : 'ENG'}
         </button>
       ))}

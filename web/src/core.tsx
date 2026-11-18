@@ -13,7 +13,7 @@ export interface Listing {
   id: number; kind: 'cargo' | 'truck'; status: 'active' | 'closed' | 'archived' | 'removed'; points: string[]; fromId: string; toId: string;
   brand: string; bodyType: string | null; cargoType: string | null; weight: number | null; volume: number | null; loading: string[];
   dateFrom: string; dateTo: string; payTerms: string[]; rate: number | null; currency: string; description: string; distanceKm: number;
-  international: boolean; boosted: boolean; createdAt: string; tripId: number | null; company: Company;
+  international: boolean; boosted: boolean; boostedUntil?: string | null; createdAt: string; tripId: number | null; company: Company;
   user: { id: number; name: string; phone: string | null }; mine: boolean; mark: { marked: boolean; note: string; hidden: boolean };
   adrClass: number | null; flags: string[]; views: number; partner: boolean; blocked: boolean; countries: string[];
   responsesCount: number; myResponse: { id: number; status: string } | null; match?: { score: number; detourKm: number }; detourKm?: number;
@@ -259,7 +259,8 @@ export const placeName = (c: City) => (lang === 'kz' ? c.kz : lang === 'en' ? c.
 // ---------- форматирование ----------
 // Казахские названия месяцев задаём сами: не во всех браузерах есть данные локали kk-KZ.
 const KZ_MONTHS = ['қаң.', 'ақп.', 'нау.', 'сәу.', 'мам.', 'мау.', 'шіл.', 'там.', 'қыр.', 'қаз.', 'қар.', 'жел.'];
-export const num = (n: number) => new Intl.NumberFormat('ru-RU').format(n);
+// в английском интерфейсе — «1,450,000» и «1.5», в русском и казахском — «1 450 000» и «1,5»
+export const num = (n: number) => new Intl.NumberFormat(lang === 'en' ? 'en-US' : 'ru-RU').format(n);
 export const money = (n: number | null, cur = 'KZT') => (n == null ? t('Договорная') : `${num(n)} ${CUR[cur] || cur}`);
 export function fmtDate(iso: string) {
   const d = new Date(iso);
@@ -273,6 +274,17 @@ export function fmtWhen(iso: string) {
   const sameDay = d.toDateString() === new Date().toDateString();
   return sameDay ? fmtTime(iso) : `${fmtDate(iso)}, ${fmtTime(iso)}`;
 }
+/** Название компании с формой: «ТОО «Ромашка»», а у водителя без компании — просто имя. */
+export const companyTitle = (c: { form?: string; name: string }) => (c.form ? `${c.form} «${c.name}»` : c.name);
+/** Какое устройство у человека — чтобы подсказать путь к настройкам именно для него. */
+export const deviceKind = (): 'ios' | 'android' | 'desktop' => {
+  const ua = navigator.userAgent;
+  if (/iPhone|iPad|iPod/i.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return 'ios';
+  if (/Android/i.test(ua)) return 'android';
+  return 'desktop';
+};
+/** Дата и время всегда вместе — для этапов рейса и истории операций, где «02:17» без даты непонятно. */
+export const fmtStamp = (iso: string) => `${fmtDate(iso)}, ${fmtTime(iso)}`;
 export const waLink = (phone: string, text = '') => `https://wa.me/${phone.replace(/\D/g, '')}${text ? `?text=${encodeURIComponent(text)}` : ''}`;
 export const todayStr = (plus = 0) => new Date(Date.now() + plus * 86400_000).toISOString().slice(0, 10);
 

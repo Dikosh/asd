@@ -1,7 +1,7 @@
 // Главная: информация о платформе, активный рейс и рекомендации по роли.
 import { Link } from 'react-router-dom';
 import { ArrowRight, BadgeCheck, Briefcase, Building2, Calculator, LifeBuoy, Package, Plus, ShieldAlert, TrendingUp, Truck } from 'lucide-react';
-import { api, Listing, num, ROLE_L, t, Trip, useApp, useEvent, useLoad } from '../core';
+import { api, companyTitle, Listing, num, ROLE_L, t, Trip, useApp, useEvent, useLoad } from '../core';
 import { Empty, Loading } from '../ui';
 import { ListingCard } from '../listing';
 import { TripSummary } from './TripPage';
@@ -21,7 +21,7 @@ export default function HomePage() {
     <div className="stack">
       <section className="hero">
         <div>
-          <div className="muted-on-blue">{t(ROLE_L[role])} · {c.form} «{c.name}»</div>
+          <div className="muted-on-blue">{t(ROLE_L[role])} · {companyTitle(c)}</div>
           <h1>{t('Здравствуйте, {name}!', { name: me!.user.name.split(' ')[0] })}</h1>
           <p>{t('Jolda — биржа грузов и транспорта: заказчики и перевозчики договариваются напрямую, а рейс виден на карте.')}</p>
           <div className="row wrap">

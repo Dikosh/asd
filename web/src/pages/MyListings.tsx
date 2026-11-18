@@ -2,7 +2,7 @@
 import { FormEvent, ReactNode, useEffect, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { Archive, ArrowLeft, ArrowRight, Check, ChevronDown, Copy, Package, Pencil, Plus, RotateCcw, Trash2, Truck, Undo2, Users, Zap } from 'lucide-react';
-import { api, BODY_L, CARGO_L, CUR, FLAG_L, fmtDates, Listing, LOADING_L, money, num, opts, PAY_L, t, todayStr, useApp, useLoad } from '../core';
+import { api, BODY_L, CARGO_L, CUR, FLAG_L, fmtDates, fmtWhen, Listing, LOADING_L, money, num, opts, PAY_L, t, todayStr, useApp, useLoad } from '../core';
 import { Chips, CitySelect, Empty, Field, Loading, Select, Tabs } from '../ui';
 import { ListingCard } from '../listing';
 
@@ -20,7 +20,7 @@ export default function MyListings() {
   const boost = async (l: Listing) => {
     const ask = pro
       ? t('Поднять объявление в топ на 24 часа? Это входит в тариф Pro.')
-      : t('Поднять объявление в топ на 24 часа за {n} ₸ с баланса компании?', { n: meta.boostPrice });
+      : t('Поднять объявление в топ на 24 часа за {n} ₸ с баланса компании? Деньги списываются сразу и не возвращаются, если закрыть объявление раньше.', { n: meta.boostPrice });
     if (!confirm(ask)) return;
     if (await act(() => api(`/listings/${l.id}/boost`, 'POST'), t('Объявление поднято в топ'))) {
       reload();
@@ -69,13 +69,14 @@ export default function MyListings() {
                       ) : (
                         <Link to={`/my/${kind}/${l.id}/edit`} className="btn soft"><Pencil size={16} /> {t('Изменить')}</Link>
                       )}
-                      <button type="button" className="btn soft" onClick={() => repeat(l)}><Copy size={16} /> {t('Повторить')}</button>
+                      <button type="button" className="btn soft" onClick={() => repeat(l)}><Copy size={16} /> {t('Разместить снова')}</button>
                       {!l.tripId && <button type="button" className="btn ghost" onClick={() => close(l)}><Check size={16} /> {t('Закрыть')}</button>}
                       {!l.tripId && !l.boosted && (
                         <button type="button" className="btn boost" onClick={() => boost(l)}>
                           <Zap size={16} /> {t('В топ')} <span className="boost-price">{pro ? 'Pro' : `${num(meta.boostPrice)} ₸`}</span>
                         </button>
                       )}
+                      {l.boostedUntil && <span className="muted small"><Zap size={13} /> {t('В топе до {d}', { d: fmtWhen(l.boostedUntil) })}</span>}
                     </>
                   )}
                   {l.status === 'closed' && (
@@ -141,7 +142,7 @@ const toNum = (s: string) => {
 };
 const dmy = (iso: string) => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.${iso.slice(0, 4)}`;
 
-type FieldKey = 'brand' | 'bodyType' | 'weight' | 'volume' | 'dateFrom' | 'dateTo' | 'rate' | 'trucks';
+type FieldKey = 'brand' | 'bodyType' | 'weight' | 'volume' | 'dateFrom' | 'dateTo' | 'rate' | 'trucks' | 'adrClass';
 const MAX_TRUCKS = 50;
 /** Ошибки по полям: показываются под полем на том шаге, где оно вводится. */
 function validate(f: Form, kind: Kind, isNew: boolean) {
@@ -160,6 +161,7 @@ function validate(f: Form, kind: Kind, isNew: boolean) {
     else if (v <= 0) e.volume = t('Объём должен быть больше нуля');
     else if (v > MAX_VOLUME) e.volume = t('Объём — не больше {n} м³', { n: MAX_VOLUME });
   }
+  if (kind === 'cargo' && f.cargoType === 'adr' && !f.adrClass) e.adrClass = t('Для опасного груза укажите класс ADR');
   if (kind === 'cargo') {
     const n = toNum(f.trucks);
     if (n === null || isNaN(n) || !Number.isInteger(n) || n < 1) e.trucks = t('Укажите число машин, например 1 или 3');
@@ -240,7 +242,7 @@ export function ListingForm() {
   const loc = useLocation();
   const query = new URLSearchParams(loc.search);
   const copyId = editId ? null : query.get('copy');
-  const { meta, toast, cityName, city } = useApp();
+  const { meta, toast, cityName, city, me } = useApp();
   const nav = useNavigate();
   const [base, setBase] = useState<Form | null>(null); // с чего форма началась; null — ещё загружается
   const [f, setF] = useState<Form>(empty);
@@ -305,7 +307,14 @@ export function ListingForm() {
     };
     const src = editId || copyId;
     if (!src) init(empty());
-    else api<Listing>(`/listings/${src}`).then((l) => init(fromListing(l, !!editId))).catch(() => !off && nav(listUrl, { replace: true }));
+    else api<Listing>(`/listings/${src}`).then((l) => {
+      // чужое объявление редактировать нельзя — не показываем форму, которую потом не сохранить
+      if (editId && l.company.id !== me?.company.id) {
+        toast(t('Это не ваше объявление'), 'error');
+        return !off && nav(listUrl, { replace: true });
+      }
+      init(fromListing(l, !!editId));
+    }).catch(() => !off && nav(listUrl, { replace: true }));
     return () => {
       off = true;
     };
@@ -320,7 +329,7 @@ export function ListingForm() {
   const errs = validate(f, kind, !editId);
   const stepBad = [
     errs.points.some(Boolean),
-    !!(errs.brand || errs.bodyType || errs.weight || errs.volume || errs.trucks),
+    !!(errs.brand || errs.bodyType || errs.weight || errs.volume || errs.trucks || errs.adrClass),
     !!(errs.dateFrom || errs.dateTo || errs.rate),
     false,
   ];
@@ -441,7 +450,7 @@ export function ListingForm() {
   const intl = pts.some((p) => city(p)?.country !== 'KZ');
   const docFlags = meta.flags.filter((x) => x !== 'customs');
   const extraCount = (f.adrClass ? 1 : 0) + f.flags.length;
-  const extraIsOpen = extraOpen ?? (extraCount > 0 || intl);
+  const extraIsOpen = extraOpen ?? (extraCount > 0 || intl || f.cargoType === 'adr');
 
   return (
     <div className="narrow stack">
@@ -449,7 +458,7 @@ export function ListingForm() {
       <ol className="stepper">
         {steps.map((s, i) => (
           <li key={s} className={i === step ? 'on' : i < step ? 'done' : ''}>
-            <button type="button" disabled={i > step} aria-current={i === step ? 'step' : undefined} aria-label={t('Шаг {n} из 4: {s}', { n: i + 1, s })} onClick={() => go(i)}>
+            <button type="button" disabled={i > step && !(editId && !stepBad.slice(0, i).some(Boolean))} aria-current={i === step ? 'step' : undefined} aria-label={t('Шаг {n} из 4: {s}', { n: i + 1, s })} onClick={() => go(i)}>
               <span className="step-n">{i < step ? <Check size={14} /> : i + 1}</span>
               <span className="step-l">{s}</span>
             </button>
@@ -573,6 +582,7 @@ export function ListingForm() {
                 <Field label={kind === 'cargo' ? t('Опасный груз (ADR)') : t('Допуск к опасным грузам (ADR)')}>
                   <Select value={f.adrClass} onChange={(v) => set({ adrClass: v })} placeholder={kind === 'cargo' ? t('Груз не опасный') : t('Нет допуска')}
                     options={[1, 2, 3, 4, 5, 6, 7, 8, 9].map((n) => ({ value: String(n), label: t('Класс {n}', { n }) }))} />
+                  {errs.adrClass && (tried[1] || f.cargoType === 'adr') && <span className="field-error">{errs.adrClass}</span>}
                 </Field>
                 <div className="field">
                   <span className="field-label">{kind === 'cargo' ? t('Документы, которые нужны для рейса') : t('Документы, которые есть у перевозчика')}</span>

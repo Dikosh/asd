@@ -1,7 +1,7 @@
 // Заявка на перевозку по рейсу — страница для печати или сохранения в PDF.
 import { Link, useParams } from 'react-router-dom';
 import { ArrowLeft, Printer } from 'lucide-react';
-import { api, BODY_L, CARGO_L, LOADING_L, money, num, PAY_L, t, Trip, useApp, useLoad } from '../core';
+import { api, companyTitle, BODY_L, CARGO_L, LOADING_L, money, num, PAY_L, t, Trip, useApp, useLoad } from '../core';
 import { Empty, Loading } from '../ui';
 
 const day = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString('ru-RU') : '—');
@@ -15,7 +15,7 @@ export default function TripDoc() {
   const party = (title: string, p: Trip['carrier'] | Trip['customer']) => (
     <td>
       <b>{title}</b>
-      <div>{p.form} «{p.name}»</div>
+      <div>{companyTitle(p)}</div>
       <div>{t('БИН / ИИН')}: {p.bin || '________________'}</div>
       <div>{t('Контактное лицо')}: {p.userName}</div>
       <div>{t('Телефон')}: {p.phone}</div>

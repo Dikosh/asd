@@ -17,6 +17,7 @@ type Detail = Listing & {
   trips: ListingTrip[];
   responses?: Resp[];
   chatId?: number | null;
+  responsesLeft?: number;
 };
 const RESP_L: Record<string, string> = { sent: 'Ожидает ответа', accepted: 'Принят', declined: 'Отклонён', withdrawn: 'Отозван' };
 
@@ -324,7 +325,10 @@ export default function ListingPage() {
                   </div>
                 </div>
               )}
-              {canRespond && (
+              {canRespond && l.responsesLeft === 0 && (
+                <p className="muted small">{t('Вы уже откликались на это объявление 3 раза — новый отклик отправить нельзя.')} {l.chatId ? '' : t('Свяжитесь с владельцем по телефону.')}</p>
+              )}
+              {canRespond && l.responsesLeft !== 0 && (
                 <form className="stack-s" id="respond" ref={form} onSubmit={(e) => { e.preventDefault(); respond(); }}>
                   <b>{broker ? t('Предложить услуги брокера') : t('Откликнуться')}</b>
                   <Field label={t('Сообщение (необязательно)')} hint={msg.trim() ? undefined : t('Если оставить пустым, отправим: «{text}»', { text: defaultMsg })}>
@@ -350,7 +354,7 @@ export default function ListingPage() {
                     <Field label={t('Валюта')}><Select value={currency} onChange={setCurrency} options={meta.currencies.map((c) => ({ value: c, label: c }))} /></Field>
                   </div>
                   <button className="btn primary block" disabled={busy}><Send size={16} /> {busy ? t('Отправляем…') : t('Отправить отклик')}</button>
-                  <p className="muted small">{t('После отправки откроется чат с владельцем объявления.')}</p>
+                  <p className="muted small">{t('После отправки откроется чат с владельцем объявления.')}{l.responsesLeft != null && l.responsesLeft < 3 ? ` ${t('Осталось откликов на это объявление: {n}', { n: l.responsesLeft })}` : ''}</p>
                 </form>
               )}
               {!canRespond && !l.myResponse && <p className="muted">{t('Объявление больше не принимает отклики.')}</p>}
@@ -360,7 +364,7 @@ export default function ListingPage() {
                 </button>
                 <button className="btn soft" onClick={() => setNote(true)}><StickyNote size={16} /> {t('Заметка')}</button>
                 <button className="btn soft" onClick={() => share(l)} aria-label={t('Поделиться')} title={t('Поделиться')}><Share2 size={16} /></button>
-                <button className="btn ghost" onClick={() => setComplain(true)} aria-label={t('Пожаловаться')} title={t('Пожаловаться')}><Flag size={16} /></button>
+                <button className="btn ghost" onClick={() => setComplain(true)}><Flag size={16} /> {t('Пожаловаться')}</button>
               </div>
             </div>
           )}

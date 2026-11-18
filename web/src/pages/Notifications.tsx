@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Bell, BellRing, Inbox, Route as RouteIcon, ShieldCheck, Sparkles, Star } from 'lucide-react';
-import { api, fmtWhen, t, useApp, useEvent, useLoad } from '../core';
+import { api, deviceKind, fmtWhen, t, useApp, useEvent, useLoad } from '../core';
 import { Empty, Loading } from '../ui';
 import { enablePush, pushState, PushState } from '../push';
 
@@ -16,7 +16,19 @@ export function PushToggle() {
   const [state, setState] = useState<PushState>('off');
   useEffect(() => { pushState().then(setState); }, []);
   if (state === 'unsupported') return <p className="muted small">{t('Этот браузер не поддерживает push-уведомления. На iPhone сначала добавьте Jolda на экран «Домой».')}</p>;
-  if (state === 'denied') return <p className="muted small">{t('Уведомления для этого сайта выключены в браузере. Чтобы включить: нажмите на значок замка слева от адреса сайта → «Разрешения» → «Уведомления» → «Разрешить», затем обновите страницу.')}</p>;
+  if (state === 'denied') {
+    const d = deviceKind();
+    return (
+      <p className="muted small">
+        {t('Уведомления для этого сайта выключены в браузере.')}{' '}
+        {d === 'ios'
+          ? t('На iPhone: «Настройки» → «Уведомления» → Jolda → «Допуск уведомлений», затем откройте Jolda снова.')
+          : d === 'android'
+            ? t('На Android: нажмите на значок слева от адреса сайта → «Разрешения» → «Уведомления» → «Разрешить», затем обновите страницу.')
+            : t('Нажмите на значок слева от адреса сайта, разрешите уведомления и обновите страницу.')}
+      </p>
+    );
+  }
   if (state === 'on')
     return (
       <div className="row wrap">

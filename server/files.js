@@ -14,7 +14,7 @@ export const fileSchema = z.object({
   kind: z.enum(FILE_KINDS).default('other'),
   filename: z.string().trim().min(1).max(120),
   mime: z.string(),
-  data: z.string().min(10),
+  data: z.string(),
   note: z.string().trim().max(200).default(''),
 });
 
@@ -23,6 +23,7 @@ export function saveFile(b, { scope, refId, userId, companyId, byDriverLink = fa
   const ext = Object.hasOwn(MIME, b.mime) ? MIME[b.mime] : null;
   if (!ext) throw L.bad('file_type', 'Допустимы PDF, JPG, PNG или WEBP');
   const buf = Buffer.from(b.data, 'base64');
+  if (buf.length < 10) throw L.bad('file_empty', 'Файл пустой или повреждён — выберите другой');
   if (buf.length > MAX_FILE) throw L.bad('file_size', 'Файл больше 5 МБ');
   // содержимое должно совпадать с заявленным типом: исполняемый файл под видом картинки не пройдёт
   const sig = buf.subarray(0, 12).toString('latin1');

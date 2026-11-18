@@ -2,7 +2,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { AlertTriangle, Ban, Crown, EyeOff, Flag, Handshake, History, LifeBuoy, Newspaper, Plus, Search, Trash2, UserPlus, UserRound } from 'lucide-react';
-import { api, Company, fmtDate, fmtWhen, Me, money, num, ROLE_L, t, useApp, useLoad } from '../core';
+import { api, companyTitle, Company, fmtDate, fmtWhen, Me, money, num, ROLE_L, t, useApp, useLoad } from '../core';
 import { CompanyBadge, Empty, Field, Loading, Modal, ReasonModal, Select, Tabs } from '../ui';
 
 // ---------- команда ----------
@@ -30,7 +30,7 @@ export function Team() {
       {data?.myInvite && (
         <div className="banner">
           <UserPlus size={20} />
-          <div><b>{t('Вас пригласили в компанию «{name}»', { name: `${data.myInvite.companyForm} ${data.myInvite.companyName}` })}</b><span>{t('Если согласитесь, вы будете работать от имени этой компании.')}</span></div>
+          <div><b>{t('Вас пригласили в компанию «{name}»', { name: `${data.myInvite.companyForm ? `${data.myInvite.companyForm} ` : ''}${data.myInvite.companyName}` })}</b><span>{t('Если согласитесь, вы будете работать от имени этой компании.')}</span></div>
           <button className="btn ghost" onClick={() => answer(false)}>{t('Отклонить')}</button>
           <button className="btn primary" onClick={() => answer(true)}>{t('Принять')}</button>
         </div>
@@ -40,7 +40,7 @@ export function Team() {
       {loading ? <Loading /> : (
         <div className="list">
           {data?.members.map((m) => (
-            <div className="card line" key={m.id}>
+            <div className="card line team-line" key={m.id}>
               <UserRound size={22} className="line-icon" />
               <div className="grow"><b>{m.name}</b>{m.me && <span className="muted"> · {t('это вы')}</span>}<div className="muted small">{m.phone} · {m.email}</div></div>
               <span className={`status ${m.companyRole === 'owner' ? 'sent' : ''}`}>{t(TEAM_ROLE[m.companyRole] || 'Сотрудник')}</span>
@@ -50,10 +50,10 @@ export function Team() {
             </div>
           ))}
           {data?.invites.map((i) => (
-            <div className="card line" key={`i${i.id}`}>
+            <div className="card line team-line" key={`i${i.id}`}>
               <UserPlus size={22} className="line-icon muted" />
               <div className="grow"><b>{i.name || i.phone}</b><div className="muted small">{i.name ? `${i.phone} · ` : ''}{t(TEAM_ROLE[i.role] || 'Сотрудник')} · {t('приглашён {d}', { d: fmtDate(i.createdAt) })}</div></div>
-              <span className="status">{t('Ждём первого входа')}</span>
+              <span className="status">{i.existing ? t('Ждём, пока примет приглашение') : t('Ждём первого входа')}</span>
               {owner && <button className="icon-btn" aria-label={t('Отменить приглашение')} onClick={async () => (await act(() => api(`/team/invites/${i.id}`, 'DELETE'))) && reload()}><Trash2 size={17} /></button>}
             </div>
           ))}
@@ -124,8 +124,9 @@ export function PlanCard({ onChange }: { onChange: () => void }) {
   const buy = async () => {
     if (!confirm(t('Подключить тариф Pro на {d} дней за {n} ₸ с баланса компании?', { d: meta.plan.days, n: num(meta.plan.price) }))) return;
     try {
-      setMe(await api<Me>('/plan/buy', 'POST'));
-      toast(t('Тариф Pro подключён'));
+      const m = await api<Me>('/plan/buy', 'POST');
+      setMe(m);
+      toast(pro && m.company.planUntil ? t('Тариф Pro продлён до {d}', { d: fmtDate(m.company.planUntil) }) : t('Тариф Pro подключён'));
       onChange();
     } catch (e: any) {
       // не хватает денег — говорим, сколько именно
@@ -187,13 +188,14 @@ export function AdminExtra() {
         <div className="search-input"><Search size={17} /><input value={term} onChange={(e) => setTerm(e.target.value)} placeholder={t('Название, БИН или телефон сотрудника')} /></div>
         {found.data?.map((c) => (
           <div className="line" key={c.id}>
-            <div className="grow"><Link to={`/company/${c.id}`}><b>{c.form} «{c.name}»</b></Link>{c.banned && <span className="status declined"> {t('Заблокирована')}</span>}
+            <div className="grow"><Link to={`/company/${c.id}`}><b>{companyTitle(c)}</b></Link>{c.banned && <span className="status declined"> {t('Заблокирована')}</span>}
               <div className="muted small">{c.bin ? `${t('БИН')} ${c.bin} · ` : ''}{c.people}</div></div>
             {c.banned
               ? <button className="btn soft" onClick={() => unban(c)}>{t('Снять блокировку')}</button>
               : <button className="btn ghost danger" onClick={() => setBan(c)}>{t('Заблокировать')}</button>}
           </div>
         ))}
+        {term.trim().length > 0 && term.trim().length < 3 && <p className="muted small">{t('Введите не меньше 3 символов')}</p>}
         {term.trim().length >= 3 && found.data?.length === 0 && <p className="muted">{t('Ничего не найдено.')}</p>}
       </div>
       <div className="card form">
@@ -228,7 +230,7 @@ export function AdminExtra() {
         <h3><Ban size={17} /> {t('Заблокированные компании')}</h3>
         {data.banned.map((c: any) => (
           <div className="line" key={c.id}>
-            <div className="grow"><Link to={`/company/${c.id}`}><b>{c.form} «{c.name}»</b></Link><div className="muted small">{c.bin ? `${t('БИН')} ${c.bin} · ` : ''}{t('Причина')}: {c.reason || '—'}</div></div>
+            <div className="grow"><Link to={`/company/${c.id}`}><b>{companyTitle(c)}</b></Link><div className="muted small">{c.bin ? `${t('БИН')} ${c.bin} · ` : ''}{t('Причина')}: {c.reason || '—'}</div></div>
             <button className="btn soft" onClick={() => unban(c)}>{t('Снять блокировку')}</button>
           </div>
         ))}

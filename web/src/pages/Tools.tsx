@@ -29,7 +29,9 @@ function Distance() {
   const [points, setPoints] = useState<(string | null)[]>([null, null]);
   const [body, setBody] = useState('');
   const [weight, setWeight] = useState('');
-  const ready = points.every(Boolean) && points.length >= 2;
+  // соседние одинаковые пункты: маршрута нет — не считаем «0 км и 0 ₸», а объясняем
+  const same = points.some((p, i) => i > 0 && p && p === points[i - 1]);
+  const ready = points.every(Boolean) && points.length >= 2 && !same;
   const query = ready ? `points=${points.join(',')}&body=${body}&weight=${Number(weight.replace(',', '.')) || ''}` : '';
   const res = useLoad<any>(() => (query ? api(`/tools/route?${query}`) : Promise.resolve(null)), [query]);
   const map = useMemo(() => {
@@ -60,6 +62,7 @@ function Distance() {
               <div className="mid"><span>{t('обычно')}</span><b>{money(d.cost.median)}</b></div>
               <div><span>{t('дороже обычного')}</span><b>{money(d.cost.high)}</b></div>
             </div>
+            <p className="muted small">{t('Половина рейсов стоит от {a} до {b}: четверть дешевле, четверть дороже. Края не симметричны — ставки разбросаны неравномерно.', { a: money(d.cost.low), b: money(d.cost.high) })}</p>
             <p className="muted small">
               {d.cost.basis === 'direction'
                 ? t('Обычная ставка {n} ₸/км по этому направлению, ставок в расчёте: {s}.', { n: num(d.cost.perKm), s: d.cost.sample })
@@ -90,7 +93,8 @@ function Distance() {
         <Field label={t('Вес груза, т (необязательно)')} hint={t('Лёгкие и тяжёлые грузы стоят по-разному')}>
           <input inputMode="decimal" value={weight} onChange={(e) => setWeight(e.target.value.replace(/[^\d.,]/g, ''))} maxLength={6} placeholder="20" />
         </Field>
-        {!ready && <p className="muted small">{t('Выберите города — расстояние, время и ориентир по цене посчитаются сами.')}</p>}
+        {same && <p className="form-error">{t('Соседние пункты маршрута совпадают — выберите другой город.')}</p>}
+        {!ready && !same && <p className="muted small">{t('Выберите города — расстояние, время и ориентир по цене посчитаются сами.')}</p>}
         {res.loading && ready && <Loading />}
       </aside>
     </div>
@@ -207,6 +211,11 @@ function Rates() {
   if (loading) return <Loading />;
   if (!data) return <div className="card"><Empty title={t('Курсы сейчас недоступны')} text={t('Не удалось получить данные Национального банка. Попробуйте позже.')} /></div>;
   const rate = data.find((x) => x.code === code)?.rate || 0;
+  // «1 000,5» и «1000.5» — одно и то же число; минус и буквы — ошибка, а не 0 ₸
+  const clean = amount.replace(/[\s ]/g, '').replace(',', '.');
+  const value = /^\d+(\.\d+)?$/.test(clean) ? Number(clean) : null;
+  const raw = data[0]?.date || '';
+  const rateDate = /^\d{4}-\d\d-\d\d$/.test(raw) ? raw.split('-').reverse().join('.') : raw;
   return (
     <div className="detail-layout">
       <div className="card">
@@ -217,15 +226,15 @@ function Rates() {
             <b>{x.rate < 1 ? x.rate.toFixed(4) : x.rate.toFixed(2)} ₸</b>
           </div>
         ))}
-        <span className="muted small">{t('Дата курса')}: {data[0]?.date}</span>
+        <span className="muted small">{t('Курс действует с {d}. Нацбанк публикует курс накануне, поэтому дата может быть завтрашней.', { d: rateDate })}</span>
       </div>
       <aside className="card form">
         <b>{t('Пересчёт в тенге')}</b>
         <div className="grid2">
-          <Field label={t('Сумма')}><input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} /></Field>
+          <Field label={t('Сумма')}><input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} aria-invalid={value === null && amount !== ''} /></Field>
           <Field label={t('Валюта')}><Select value={code} onChange={setCode} options={data.map((x) => ({ value: x.code, label: x.code }))} /></Field>
         </div>
-        <div className="info-line">{num(Math.round(N(amount) * rate))} ₸</div>
+        {value === null ? (amount !== '' && <div className="form-error">{t('Введите положительное число, например 1000 или 1000,50')}</div>) : <div className="info-line">{num(Math.round(value * rate))} ₸</div>}
       </aside>
     </div>
   );

@@ -1,11 +1,11 @@
 // Кабинет: профиль и документы, отклики, сообщения, рейсы, машины, сотрудники, баланс, каталог, чёрный список, настройки.
-import { ReactNode, useEffect, useRef, useState } from 'react';
-import { Link, Navigate, useNavigate, useParams } from 'react-router-dom';
+import { Fragment, ReactNode, useEffect, useRef, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, BadgeCheck, Ban, Bookmark, Briefcase, Building2, Calculator, ChevronRight, FileText, Handshake, Inbox, LifeBuoy, LogOut, MessageSquare, Paperclip, Pencil, Plus,
   Route as RouteIcon, Search, Send, Settings, ShieldCheck, Trash2, TrendingUp, Truck, Upload, UserRound, Users, UsersRound, Wallet,
 } from 'lucide-react';
-import { api, BODY_L, Company, DOC_L, fmtDate, fmtWhen, LOADING_L, Me, money, num, opts, prepareUpload, ROLE_L, t, Trip, useApp, useEvent, useLoad } from '../core';
+import { api, companyTitle, BODY_L, Company, DOC_L, fmtDate, fmtStamp, fmtTime, fmtWhen, LOADING_L, Me, money, num, opts, prepareUpload, ROLE_L, t, Trip, useApp, useEvent, useLoad } from '../core';
 import { Chips, CitySelect, CompanyBadge, Empty, Field, LangSwitch, Loading, Modal, Select, Tabs, ReasonModal } from '../ui';
 import { TripSummary } from './TripPage';
 import { ContactButtons } from '../listing';
@@ -37,13 +37,21 @@ export default function Cabinet() {
     // заказчику парк машин и список водителей не нужны; деньги и тариф — у владельца компании
     : items.filter((i) => !(me!.user.role === 'customer' && ['vehicles', 'employees'].includes(i.key)) && !(me!.user.companyRole !== 'owner' && i.key === 'balance'));
   const current = visible.find((i) => i.key === tab);
-  if (tab && !current) return <Navigate to="/cabinet" replace />;
+  // закрытый для роли раздел по прямой ссылке — объясняем, а не молча показываем профиль
+  if (tab && !current)
+    return (
+      <div className="card">
+        <Empty icon={<ShieldCheck size={26} />} title={t('Раздел недоступен')} text={items.some((i) => i.key === tab) ? t('Этот раздел недоступен для вашей роли в компании.') : t('Такого раздела нет.')}>
+          <Link to="/cabinet" className="btn soft">{t('В кабинет')}</Link>
+        </Empty>
+      </div>
+    );
   return (
     <div className={`cabinet ${current ? 'has-tab' : ''}`}>
       <aside className="card cab-menu">
         <div className="cab-user">
           <b>{me!.user.name}</b>
-          <span className="muted small">{t(ROLE_L[me!.user.role])} · {me!.company.form} «{me!.company.name}»</span>
+          <span className="muted small">{t(ROLE_L[me!.user.role])} · {companyTitle(me!.company)}</span>
         </div>
         {visible.map((i) => (
           <Link key={i.key} to={`/cabinet/${i.key}`} className={(current?.key ?? 'profile') === i.key ? 'on' : ''}>
@@ -110,7 +118,7 @@ function Profile() {
 
       <div className="card form">
         <div className="row between wrap">
-          <h3>{c.form} «{c.name}»</h3>
+          <h3>{companyTitle(c)}</h3>
           <span className={`status ${c.verified === 'verified' ? 'accepted' : c.verified === 'pending' ? 'sent' : 'declined'}`}>
             {c.verified === 'verified' && <BadgeCheck size={14} />} {t(VER[c.verified])}
           </span>
@@ -139,7 +147,7 @@ function Profile() {
         {c.verified !== 'verified' && c.verified !== 'pending' && (
           <ul className="checklist">
             <li className={binSaved ? 'done' : ''}>{binSaved ? <BadgeCheck size={16} /> : <span className="todo-dot" />} {t('Укажите БИН или ИИН и нажмите «Сохранить»')}</li>
-            <li className={hasDoc ? 'done' : ''}>{hasDoc ? <BadgeCheck size={16} /> : <span className="todo-dot" />} {t('Загрузите свидетельство о регистрации или удостоверение личности')}</li>
+            <li className={hasDoc ? 'done' : ''}>{hasDoc ? <BadgeCheck size={16} /> : <span className="todo-dot" />} {t('Загрузите свидетельство о регистрации или удостоверение личности')}{!hasDoc && !!docs.data?.length && <span className="muted small"> — {t('в «Виде документа» выберите один из этих двух')}</span>}</li>
             <li>{<span className="todo-dot" />} {t('Отправьте на проверку — модератор отвечает в течение рабочего дня')}</li>
           </ul>
         )}
@@ -157,7 +165,10 @@ function Profile() {
           <div className="line" key={d.id}>
             <FileText size={18} />
             <div className="grow"><a href={`/api/documents/${d.id}/file`} target="_blank" rel="noreferrer">{d.filename}</a><div className="muted small">{t(DOC_L[d.kind])} · {fmtDate(d.createdAt)}</div>{d.status === 'rejected' && d.note && <div className="form-error"><b>{t('Причина отказа')}:</b> {d.note}</div>}</div>
-            <span className={`status ${d.status === 'approved' ? 'accepted' : d.status === 'pending' ? 'sent' : 'declined'}`}>{t(DOC_ST[d.status])}</span>
+            <span className={`status ${d.status === 'approved' ? 'accepted' : d.status === 'pending' && c.verified !== 'none' && c.verified !== 'rejected' ? 'sent' : d.status === 'pending' ? '' : 'declined'}`}>
+              {/* пока компания не отправила заявку, документ просто загружен — модератор его ещё не видит */}
+              {d.status === 'pending' && (c.verified === 'none' || c.verified === 'rejected') ? t('Загружен, не отправлен') : t(DOC_ST[d.status])}
+            </span>
             <button className="icon-btn" aria-label={t('Удалить')} onClick={async () => confirm(t('Удалить документ?')) && (await act(() => api(`/documents/${d.id}`, 'DELETE'))) && docs.reload()}><Trash2 size={17} /></button>
           </div>
         ))}
@@ -237,18 +248,31 @@ function Messages({ chatId }: { chatId: number | null }) {
   const { cityName, act, reloadMe } = useApp();
   const chats = useLoad(() => api<any[]>('/chats'));
   const msgs = useLoad(() => (chatId ? api<any[]>(`/chats/${chatId}/messages`) : Promise.resolve([])), [chatId]);
+  // ранние сообщения длинной переписки подгружаются по кнопке
+  const [older, setOlder] = useState<any[]>([]);
+  const [moreOld, setMoreOld] = useState(true);
+  useEffect(() => { setOlder([]); setMoreOld(true); }, [chatId]);
+  const all = [...older, ...(msgs.data || [])];
+  const loadOlder = async () => {
+    const first = all[0];
+    if (!first) return;
+    const prev = await api<any[]>(`/chats/${chatId}/messages?before=${first.id}`).catch(() => []);
+    setOlder((x) => [...prev, ...x]);
+    if (prev.length < 300) setMoreOld(false);
+  };
   const [text, setText] = useState('');
   const end = useRef<HTMLDivElement>(null);
   useEvent('message read', (d) => {
     chats.reload();
     if (d.chatId === chatId) msgs.reload();
   });
-  useEffect(() => { end.current?.scrollIntoView({ block: 'end' }); }, [msgs.data?.length]);
+  useEffect(() => { end.current?.scrollIntoView({ block: 'end' }); }, [msgs.data?.length]); // при подгрузке ранних не прыгаем вниз
   useEffect(() => { if (chatId && msgs.data) { reloadMe(); chats.reload(); } }, [chatId, msgs.data?.length]); // eslint-disable-line react-hooks/exhaustive-deps
   const chat = chats.data?.find((c) => c.id === chatId);
+  const MAX_MSG = 2000;
   const send = async () => {
     const body = text.trim();
-    if (!body) return;
+    if (!body || body.length > MAX_MSG) return;
     setText('');
     if (!(await act(() => api(`/chats/${chatId}/messages`, 'POST', { text: body })))) setText(body);
   };
@@ -268,7 +292,7 @@ function Messages({ chatId }: { chatId: number | null }) {
           <Link key={c.id} to={`/cabinet/messages/${c.id}`} className={`chat-item ${c.id === chatId ? 'on' : ''}`}>
             <div className="row between"><b>{c.peerCompany}</b>{c.unread > 0 && <span className="badge inline">{c.unread}</span>}</div>
             <div className="muted small">{cityName(c.fromId)} → {cityName(c.toId)}{c.peerName ? ` · ${c.peerName}` : ''}</div>
-            <div className="chat-last">{c.lastText}</div>
+            <div className="chat-last">{c.blocked ? t('Переписка закрыта') : c.lastText}</div>
           </Link>
         ))}
         {chats.data?.length === 0 && <Empty icon={<MessageSquare size={26} />} title={t('Сообщений пока нет')} text={t('Чат открывается после отклика на объявление.')} />}
@@ -285,9 +309,14 @@ function Messages({ chatId }: { chatId: number | null }) {
             )}
             {chat?.peerPhone && <div className="row chat-contacts"><ContactButtons phone={chat.peerPhone} /></div>}
           </header>
+          {msgs.error && <Empty icon={<MessageSquare size={26} />} title={t('Чат не найден')} text={t('Возможно, он принадлежит другой компании или ссылка устарела.')}><Link to="/cabinet/messages" className="btn soft">{t('Все сообщения')}</Link></Empty>}
           <div className="chat-msgs">
-            {msgs.data?.map((m) => (
-              <div key={m.id} className={`msg ${m.mine ? 'mine' : ''}`}>
+            {moreOld && all.length >= 300 && <button className="btn ghost small-btn center-btn" onClick={loadOlder}>{t('Показать более ранние сообщения')}</button>}
+            {all.map((m, i) => (
+              <Fragment key={m.id}>
+              {/* разделитель дня: в длинной переписке видно, когда что было сказано */}
+              {(i === 0 || fmtDate(all[i - 1].createdAt) !== fmtDate(m.createdAt)) && <div className="msg-day">{fmtDate(m.createdAt)}</div>}
+              <div className={`msg ${m.mine ? 'mine' : ''}`}>
                 {/* чат общий для компании: подписываем, кто из коллег или партнёров написал */}
                 {!m.me && <b className="msg-author">{m.senderName}</b>}
                 {m.file ? (
@@ -295,19 +324,29 @@ function Messages({ chatId }: { chatId: number | null }) {
                     ? <a className="msg-file" href={`/api/files/${m.file.id}`} target="_blank" rel="noreferrer"><img src={`/api/files/${m.file.id}`} alt={m.file.filename} loading="lazy" /></a>
                     : <a className="msg-file doc" href={`/api/files/${m.file.id}`} target="_blank" rel="noreferrer"><FileText size={16} /> {m.file.filename}</a>
                 ) : <p>{m.text}</p>}
-                <span>{fmtWhen(m.createdAt)}{m.mine && (m.isRead ? ' ✓✓' : ' ✓')}</span>
+                <span>{fmtTime(m.createdAt)}{m.mine && (m.isRead ? ' ✓✓' : ' ✓')}</span>
               </div>
+              </Fragment>
             ))}
             <div ref={end} />
           </div>
+          {chat?.blocked ? (
+            <div className="info-line chat-blocked">{t('Переписка закрыта: одна из компаний скрыла другую. Новые сообщения отправить нельзя.')}</div>
+          ) : !msgs.error && (
           <form className="chat-input" onSubmit={(e) => { e.preventDefault(); send(); }}>
             <label className={`icon-btn attach ${sending ? 'disabled' : ''}`} aria-label={t('Прикрепить фото или документ')} title={t('Прикрепить фото или документ')}>
               <Paperclip size={19} />
               <input type="file" hidden accept="image/*,application/pdf" disabled={sending} onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) attach(f); }} />
             </label>
-            <input value={text} onChange={(e) => setText(e.target.value)} placeholder={t('Напишите сообщение…')} maxLength={2000} autoFocus />
-            <button className="btn primary" disabled={!text.trim()} aria-label={t('Отправить')}><Send size={17} /></button>
+            {/* Enter — отправить, Shift+Enter — новая строка */}
+            <div className="grow chat-text">
+              <textarea rows={1} value={text} onChange={(e) => setText(e.target.value)} placeholder={t('Напишите сообщение…')} autoFocus aria-label={t('Сообщение')}
+                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); send(); } }} />
+              {text.length > MAX_MSG - 200 && <span className={`small ${text.length > MAX_MSG ? 'field-error' : 'muted'}`}>{text.length} / {MAX_MSG}</span>}
+            </div>
+            <button className="btn primary" disabled={!text.trim() || text.length > MAX_MSG} aria-label={t('Отправить')}><Send size={17} /></button>
           </form>
+          )}
         </div>
       )}
     </div>
@@ -471,7 +510,7 @@ function Balance() {
           <h3>{t('История операций')}</h3>
           {data?.transactions.map((x) => (
             <div className="line" key={x.id}>
-              <div className="grow">{t(KIND[x.kind] || x.kind)}<div className="muted small">{x.note} · {fmtWhen(x.createdAt)}</div></div>
+              <div className="grow">{t(KIND[x.kind] || x.kind)}<div className="muted small">{txNote(x.note)} · {fmtStamp(x.createdAt)}</div></div>
               <b className={x.amount > 0 ? 'plus' : 'minus'}>{x.amount > 0 ? '+' : '−'}{num(Math.abs(x.amount))} ₸</b>
             </div>
           ))}
@@ -502,11 +541,11 @@ function Catalog() {
             <Link to={`/company/${c.id}`} className="card line" key={c.id}>
               <div className="grow">
                 <CompanyBadge c={c} link={false} />
-                <div className="muted small">{t(ROLE_L[c.kind])}{c.cityId ? ` · ${cityName(c.cityId)}` : ''}{c.bin ? ` · ${t('БИН')} ${c.bin}` : ''}</div>
+                <div className="muted small">{c.verified === 'verified' ? `${t('Проверена')} · ` : ''}{t(ROLE_L[c.kind])}{c.cityId ? ` · ${cityName(c.cityId)}` : ''}{c.bin ? ` · ${t('БИН')} ${c.bin}` : ''}</div>
               </div>
               <div className="cat-stats"><b>{c.trips}</b><span>{t('рейсов')}</span></div>
               <div className="cat-stats"><b>{c.reviews}</b><span>{t('отзывов')}</span></div>
-              {c.blacklisted > 0 && <span className="status declined"><Ban size={13} /> {t('ЧС')}: {c.blacklisted}</span>}
+              {c.blacklisted > 0 && <span className="status declined" title={t('Записи в чёрном списке от проверенных компаний')}><Ban size={13} /> {t('ЧС')}: {c.blacklisted}</span>}
               <ChevronRight size={18} className="muted" />
             </Link>
           ))}
@@ -517,10 +556,21 @@ function Catalog() {
   );
 }
 
+/** Подпись операции хранится по-русски — показываем её на языке интерфейса и с датой в обычном виде. */
+function txNote(note: string) {
+  const ad = /^Объявление №(\d+)$/.exec(note);
+  if (ad) return t('Объявление №{n}', { n: ad[1] });
+  const plan = /^Тариф Pro до (\d{4}-\d\d-\d\d)$/.exec(note);
+  if (plan) return t('Тариф Pro до {d}', { d: fmtDate(plan[1]) });
+  return t(note);
+}
+
 // ---------- чёрный список ----------
 function Blacklist() {
-  const { act } = useApp();
+  const { act, me } = useApp();
   const [q, setQ] = useState('');
+  const [replyTo, setReplyTo] = useState<number | null>(null);
+  const isOwner = me!.user.companyRole === 'owner';
   const { data, loading, reload } = useLoad(() => api<any[]>(`/blacklist?q=${encodeURIComponent(q)}`), [q]);
   return (
     <div className="stack">
@@ -532,11 +582,13 @@ function Blacklist() {
           {data?.map((b) => (
             <div className="card resp" key={b.id}>
               <div className="row between wrap">
-                <Link to={`/company/${b.companyId}`} className="company-link"><span className="dot red" /> {b.form} «{b.name}»</Link>
-                <span className="status declined">{t('Жалоб: {n}', { n: b.total })}</span>
+                <Link to={`/company/${b.companyId}`} className="company-link"><span className="dot red" /> {companyTitle(b)}</Link>
+                <span className="status declined">{t('Записей о компании: {n}', { n: b.total })}</span>
               </div>
               <div><b>{t('Причина')}:</b> {b.reason}</div>
               {b.review && <p>{b.review}</p>}
+              {b.reply && <p className="bl-reply"><b>{t('Ответ компании')}:</b> {b.reply}</p>}
+              {b.aboutUs && !b.reply && isOwner && <button className="link" onClick={() => setReplyTo(b.id)}>{t('Ответить')}</button>}
               <div className="row between wrap">
                 <span className="muted small">{b.author} · {fmtDate(b.createdAt)}{b.bin ? ` · ${t('БИН')} ${b.bin}` : ''}{b.counted ? '' : ` · ${t('автор не проверен — в индикаторе не учитывается')}`}</span>
                 {b.canDelete && !b.mine && <button className="btn ghost danger" onClick={async () => confirm(t('Удалить эту запись из чёрного списка? Действие попадёт в журнал модератора.')) && (await act(() => api(`/blacklist/${b.id}`, 'DELETE'), t('Запись удалена'))) && reload()}>{t('Удалить запись')}</button>}
@@ -548,6 +600,11 @@ function Blacklist() {
         </div>
       )}
       <Link to="/cabinet/catalog" className="btn soft">{t('Найти компанию в каталоге')}</Link>
+      {replyTo !== null && (
+        <ReasonModal title={t('Ответ на запись')} hint={t('Ответ увидят все, кто смотрит вашу компанию. Изменить его потом нельзя.')} label={t('Ваш ответ')} confirm={t('Опубликовать')}
+          onClose={() => setReplyTo(null)}
+          onSubmit={async (text) => (await act(() => api(`/blacklist/${replyTo}/reply`, 'POST', { reply: text }), t('Ответ опубликован'))) && (setReplyTo(null), reload())} />
+      )}
     </div>
   );
 }
@@ -601,8 +658,8 @@ function Admin() {
       <div className="card form">
         <h3>{t('Компании на проверке')}</h3>
         {data?.companies.map((c) => (
-          <div className="line" key={c.id}>
-            <div className="grow"><Link to={`/company/${c.id}`}><b>{c.form} «{c.name}»</b></Link><div className="muted small">{t('БИН')} {c.bin} · {t(ROLE_L[c.kind])}</div>
+          <div className="line actions-line" key={c.id}>
+            <div className="grow"><Link to={`/company/${c.id}`}><b>{companyTitle(c)}</b></Link><div className="muted small">{t('БИН')} {c.bin} · {t(ROLE_L[c.kind])}</div>
               <div className="doc-chips">{c.docs.map((d: any) => <a key={d.id} className={`chip doc-${d.status}`} href={`/api/documents/${d.id}/file`} target="_blank" rel="noreferrer"><FileText size={13} /> {t(DOC_L[d.kind])}</a>)}{c.docs.length === 0 && <span className="muted small">{t('Документы не загружены')}</span>}</div></div>
             <button className="btn ghost" onClick={() => decide(`/admin/companies/${c.id}`, false)}>{t('Отклонить')}</button>
             <button className="btn primary" onClick={() => decide(`/admin/companies/${c.id}`, true)}>{t('Одобрить')}</button>
@@ -611,9 +668,9 @@ function Admin() {
         {data?.companies.length === 0 && <p className="muted">{t('Очередь пуста.')}</p>}
       </div>
       <div className="card form">
-        <h3>{t('Документы на проверке')}</h3>
+        <h3>{t('Новые документы проверенных компаний')}</h3>
         {data?.documents.map((d) => (
-          <div className="line" key={d.id}>
+          <div className="line actions-line" key={d.id}>
             <FileText size={18} />
             <div className="grow"><a href={`/api/documents/${d.id}/file`} target="_blank" rel="noreferrer">{d.filename}</a><div className="muted small">{t(DOC_L[d.kind])} · {d.companyName}</div></div>
             <button className="btn ghost" onClick={() => decide(`/admin/documents/${d.id}`, false)}>{t('Отклонить')}</button>

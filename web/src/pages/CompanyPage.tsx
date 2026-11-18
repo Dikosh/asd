@@ -10,13 +10,13 @@ type Full = Company & {
   bin: string | null; binValid: boolean; about: string; cityId: string | null; since: string; mine: boolean; isPartner: boolean; isBlocked: boolean; hadDeal: boolean; vehicles: number; documents: string[];
   contacts: { name: string; phone: string; role: string }[];
   reviewList: { rating: number; text: string; createdAt: string; author: string; authorId: number }[];
-  blacklist: { id: number; reason: string; review: string; reply: string; createdAt: string; author: string; authorId: number }[];
+  blacklist: { id: number; reason: string; review: string; reply: string; createdAt: string; author: string; authorId: number; counted: number | boolean }[];
   listings: Listing[];
 };
 const IND: Record<string, [string, string]> = {
   green: ['Хорошая репутация', 'Отзывы положительные, жалоб нет.'],
   red: ['Много плохих отзывов', 'Низкие оценки или несколько записей в чёрном списке. Будьте осторожны с предоплатой.'],
-  gray: ['Пока мало отзывов', 'Компания новая на платформе или отзывы неоднозначны.'],
+  gray: ['Пока мало отзывов', 'Зелёный индикатор получает проверенная компания с оценкой от 4 минимум от трёх разных проверенных партнёров и без записей в чёрном списке. Пока этого нет — индикатор серый.'],
 };
 
 export default function CompanyPage() {
@@ -68,7 +68,8 @@ export default function CompanyPage() {
             </div>
           </section>
 
-          {c.listings.length > 0 && (
+          {c.isBlocked && c.listings.length > 0 && <div className="info-line">{t('Вы скрыли объявления этой компании — в поиске их не видно. Вернуть можно кнопкой «Показывать объявления компании».')}</div>}
+          {!c.isBlocked && c.listings.length > 0 && (
             <section>
               <h2>{t('Активные объявления')}</h2>
               <div className="list">{c.listings.map((l) => <ListingCard key={l.id} l={l} onChange={reload} />)}</div>
@@ -82,7 +83,8 @@ export default function CompanyPage() {
             <div className="check"><span className={c.verified === 'verified' ? 'ok' : 'no'}><BadgeCheck size={17} /></span>{c.verified === 'verified' ? t('Компания проверена модератором') : t('Компания ещё не прошла проверку документов.')}</div>
             <div className="check"><span className={c.binValid ? 'ok' : 'no'}><FileCheck2 size={17} /></span>{c.bin ? `${t('БИН')} ${c.bin} — ${c.binValid ? t('контрольный разряд верен') : t('некорректен')}` : t('БИН не указан')}</div>
             {c.documents.map((d) => <div className="check" key={d}><span className="ok"><FileCheck2 size={17} /></span>{t(DOC_L[d])}: {t('Принят').toLowerCase()}</div>)}
-            <div className="check"><span className={c.blacklist.length ? 'bad' : 'ok'}><Ban size={17} /></span>{c.blacklist.length ? t('Записей в чёрном списке: {n}', { n: c.blacklist.length }) : t('В чёрном списке не значится')}</div>
+            <div className="check"><span className={c.blacklist.length ? 'bad' : 'ok'}><Ban size={17} /></span>{c.blacklist.length ? t('Записей в чёрном списке: {n}', { n: c.blacklist.length }) : t('В чёрном списке не значится')}
+              {c.blacklist.length > c.blacklisted && <span className="muted small"> · {t('в индикаторе учитываются только записи от проверенных компаний: {n}', { n: c.blacklisted })}</span>}</div>
           </div>
 
           {c.blacklist.length > 0 && (
@@ -91,7 +93,7 @@ export default function CompanyPage() {
               {c.blacklist.map((b) => (
                 <div key={b.id} className="review">
                   <b>{b.reason}</b>{b.review && <p>{b.review}</p>}
-                  <span className="muted small">{b.author} · {fmtDate(b.createdAt)}</span>
+                  <span className="muted small">{b.author} · {fmtDate(b.createdAt)}{b.counted ? '' : ` · ${t('автор не проверен — в индикаторе не учитывается')}`}</span>
                   {b.reply && <p className="bl-reply"><b>{t('Ответ компании')}:</b> {b.reply}</p>}
                   {c.mine && !b.reply && me!.user.companyRole === 'owner' && <button className="link" onClick={() => reply(b.id)}>{t('Ответить')}</button>}
                 </div>

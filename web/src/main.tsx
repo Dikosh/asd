@@ -18,7 +18,7 @@ import CompanyPage from './pages/CompanyPage';
 import JobsPage from './pages/Jobs';
 import ToolsPage from './pages/Tools';
 import PricesPage from './pages/Prices';
-import HelpPage, { RulesPage } from './pages/Help';
+import HelpPage, { PublicHelp, RulesPage } from './pages/Help';
 import NotificationsPage from './pages/Notifications';
 import TripDoc from './pages/TripDoc';
 
@@ -256,7 +256,8 @@ function App() {
     const toast = (text: string, kind: 'ok' | 'error' = 'ok') => {
       const id = ++seq.current;
       // одинаковые подряд не копим, на экране не больше трёх
-      setToasts((x) => [...x.filter((y) => y.text !== text), { id, text, kind }].slice(-3));
+      // новое сообщение вытесняет прежние: старая ошибка не висит рядом со свежим «Сохранено»
+      setToasts((x) => [...x.filter((y) => y.text !== text && y.kind === kind && kind === 'error'), { id, text, kind }].slice(-2));
       setTimeout(() => setToasts((x) => x.filter((y) => y.id !== id)), 3800);
     };
     return {
@@ -294,6 +295,9 @@ function App() {
           <Route path="/t/:token" element={<PublicTrack />} />
           <Route path="/d/:token" element={<DrivePage />} />
           <Route path="/rules" element={<RulesPage />} />
+          {/* справка открывается и без входа: вопросы, безопасность и правила нужны до регистрации */}
+          {!ctx.me && <Route path="/help" element={<PublicHelp />} />}
+          {!ctx.me && <Route path="/help/:tab" element={<PublicHelp />} />}
           <Route path="*" element={ctx.me ? <Layout /> : <AuthPage />} />
         </Routes>
       </div>

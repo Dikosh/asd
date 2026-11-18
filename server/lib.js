@@ -355,6 +355,7 @@ export function listingOut(r, viewer) {
     countries: [...countries],
     international: countries.size > 1,
     boosted: !!r.boosted_until && r.boosted_until > now(),
+    boostedUntil: r.boosted_until && r.boosted_until > now() ? r.boosted_until : null,
     createdAt: r.created_at,
     tripId: r.trip_id || null,
     trucks: r.trucks,

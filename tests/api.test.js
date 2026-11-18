@@ -246,7 +246,8 @@ test('полный цикл сделки', async () => {
   assert.equal((await customer.call('GET', `/api/documents/${doc.id}/file`)).status, 404, 'чужие документы недоступны');
   const adminC = client();
   await adminC.post('/api/auth/demo', { role: 'admin' });
-  assert.ok((await adminC.get('/api/admin/queue')).documents.some((d) => d.id === doc.id));
+  // компания ещё не отправила заявку на проверку — её документ модератору в отдельной очереди не показывается
+  assert.ok(!(await adminC.get('/api/admin/queue')).documents.some((d) => d.id === doc.id));
   await adminC.post(`/api/admin/documents/${doc.id}`, { approve: true });
   assert.equal((await carrier.get('/api/documents'))[0].status, 'approved');
 

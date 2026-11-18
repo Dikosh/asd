@@ -2,7 +2,7 @@
 // калькуляторы, курсы валют, новости, обратная связь и сводка для модератора.
 import { z } from 'zod';
 import { q, q1, run, insert, tx } from '../db.js';
-import { cityById } from '../geo.js';
+import { cityById, roadKm } from '../geo.js';
 import { route } from '../routing.js';
 import { isPushEndpoint, notify, pushPublicKey } from '../notify.js';
 import { marketRate, priceSamples } from './listings.js';
@@ -60,7 +60,9 @@ export default function extraRoutes(app) {
       members: q(`SELECT id, name, phone, email, role, company_role AS companyRole, id = :u AS me FROM users WHERE company_id = :c AND is_admin = 0 OR id = :u ORDER BY id`, {
         c: req.user.company_id, u: req.user.id,
       }).map((m) => ({ ...m, me: !!m.me })),
-      invites: q('SELECT id, phone, name, role, created_at AS createdAt FROM invites WHERE company_id = ? ORDER BY id DESC', req.user.company_id),
+      // existing — у человека уже есть аккаунт: он должен принять приглашение, а не просто войти
+      invites: q('SELECT id, phone, name, role, created_at AS createdAt, user_id IS NOT NULL AS existing FROM invites WHERE company_id = ? ORDER BY id DESC', req.user.company_id)
+        .map((i) => ({ ...i, existing: !!i.existing })),
       // приглашение в другую компанию, адресованное мне
       myInvite: q1('SELECT i.id, i.role, c.name AS companyName, c.form AS companyForm FROM invites i JOIN companies c ON c.id = i.company_id WHERE i.phone = ?', req.user.phone) || null,
     });
@@ -77,8 +79,8 @@ export default function extraRoutes(app) {
     const mine = req.user.company_id;
     if (q1('SELECT COUNT(*) AS n FROM users WHERE company_id = ?', mine).n > 1 && req.user.company_role === 'owner')
       throw bad('state', 'Вы владелец компании с сотрудниками — сначала удалите их из команды', 409);
-    if (q1(`SELECT 1 FROM trips WHERE status = 'active' AND (customer_company = :c OR carrier_company = :c)`, { c: mine }))
-      throw bad('state', 'У вашей компании есть активные рейсы — сначала завершите их', 409);
+    const busy = q(`SELECT id FROM trips WHERE status = 'active' AND (customer_company = :c OR carrier_company = :c) ORDER BY id LIMIT 5`, { c: mine });
+    if (busy.length) throw L.tbad('state', 'У вашей компании есть активные рейсы ({n}) — сначала завершите их в разделе «Рейсы»', { n: busy.map((x) => `№${x.id}`).join(', ') }, 409);
     tx(() => {
       run(`UPDATE listings SET status = 'archived', closed_at = ? WHERE company_id = ? AND status = 'active'`, L.now(), mine);
       run('UPDATE users SET company_id = ?, company_role = ?, role = CASE WHEN ? = \'driver\' THEN \'driver\' ELSE role END WHERE id = ?',
@@ -92,20 +94,20 @@ export default function extraRoutes(app) {
     const phone = L.normPhone(b.phone);
     const existing = q1('SELECT id, company_id FROM users WHERE phone = ?', phone);
     if (existing?.company_id === req.user.company_id) throw bad('exists', 'Этот человек уже в вашей команде', 409);
+    if (q1('SELECT 1 FROM invites WHERE phone = ?', phone)) throw bad('exists', 'Этот номер уже приглашён', 409);
     const used = q1('SELECT (SELECT COUNT(*) FROM users WHERE company_id = :c) + (SELECT COUNT(*) FROM invites WHERE company_id = :c) AS n', { c: req.user.company_id }).n;
     const limit = seats(req.user.company_id);
     if (used >= limit) throw bad('seats', `На вашем тарифе доступно мест: ${limit}. Тариф Pro расширяет команду до ${L.PLAN.pro.seats}.`, 402);
-    if (q1('SELECT 1 FROM invites WHERE phone = ?', phone)) throw bad('exists', 'Этот номер уже приглашён', 409);
     const inviteId = insert('INSERT INTO invites(company_id, phone, name, role, user_id) VALUES(?, ?, ?, ?, ?)', req.user.company_id, phone, b.name, b.role, existing?.id ?? null);
     // у человека уже есть аккаунт — он сам решает, переходить ли в компанию
     if (existing) {
       const c = q1('SELECT name, form FROM companies WHERE id = ?', req.user.company_id);
-      notify(existing.id, { kind: 'system', title: 'Вас пригласили в компанию «{name}»', vars: { name: `${c.form} ${c.name}` }, body: 'Откройте «Команда», чтобы принять или отклонить приглашение', link: '/cabinet/team' });
+      notify(existing.id, { kind: 'system', title: 'Вас пригласили в компанию «{name}»', vars: { name: c.form ? `${c.form} ${c.name}` : c.name }, body: 'Откройте «Команда», чтобы принять или отклонить приглашение', link: '/cabinet/team' });
     }
     res.json({ id: inviteId, existing: !!existing });
   });
   app.delete('/api/team/invites/:id', auth, L.owner, (req, res) => {
-    run('DELETE FROM invites WHERE id = ? AND company_id = ?', id(req), req.user.company_id);
+    if (!run('DELETE FROM invites WHERE id = ? AND company_id = ?', id(req), req.user.company_id).changes) throw bad('not_found', 'Приглашение не найдено', 404);
     res.json({ ok: true });
   });
   // Сотрудника нельзя удалить вместе с его сделками, поэтому он «выходит» в собственную пустую компанию.
@@ -201,7 +203,8 @@ export default function extraRoutes(app) {
         const [fromId, toId] = key.split('>');
         return {
           fromId, toId, count: list.length, companies: new Set(list.map((r) => r.company_id)).size, deals: list.filter((r) => r.deal).length,
-          distanceKm: list[0].km, rate: Math.round(median(list.map((r) => r.rate)) / 1000) * 1000, perKm: Math.round(median(list.map((r) => r.rate / r.km))),
+          // расстояние — тем же расчётом, что в «Расстоянии и стоимости»: одинаково в обе стороны и на всех экранах
+          distanceKm: roadKm([cityById.get(fromId), cityById.get(toId)].filter(Boolean)) || list[0].km, rate: Math.round(median(list.map((r) => r.rate)) / 1000) * 1000, perKm: Math.round(median(list.map((r) => r.rate / r.km))),
         };
       })
       .sort((a, b) => b.count - a.count || b.rate - a.rate)
@@ -275,7 +278,8 @@ export default function extraRoutes(app) {
         users: count('SELECT COUNT(*) AS n FROM users'),
         companies: count('SELECT COUNT(*) AS n FROM companies'),
         verified: count(`SELECT COUNT(*) AS n FROM companies WHERE verified = 'verified'`),
-        listings: count(`SELECT COUNT(*) AS n FROM listings WHERE status = 'active'`),
+        // заблокированные компании в поиске не видны — и в счётчике их объявления не учитываем
+        listings: count(`SELECT COUNT(*) AS n FROM listings l JOIN companies c ON c.id = l.company_id WHERE l.status = 'active' AND c.banned = 0`),
         tripsActive: count(`SELECT COUNT(*) AS n FROM trips WHERE status = 'active'`),
         tripsDone: count(`SELECT COUNT(*) AS n FROM trips WHERE status = 'completed'`),
         tripsFailed: count(`SELECT COUNT(*) AS n FROM trips WHERE status = 'failed'`),
@@ -344,8 +348,9 @@ export default function extraRoutes(app) {
     if (banned && reason.length < 5) throw bad('reason', 'Укажите причину блокировки — компания её увидит');
     run('UPDATE companies SET banned = ?, ban_reason = ? WHERE id = ?', banned ? 1 : 0, banned ? reason : '', c.id);
     L.resetCompanyCache();
-    if (banned) run(`UPDATE complaints SET status = 'closed' WHERE company_id = ? AND status = 'open'`, c.id);
-    L.modLog(req.user, banned ? 'ban' : 'unban', c.name, reason);
+    // открытые жалобы на компанию закрываются блокировкой — пишем в журнал, сколько их было
+    const closed = banned ? run(`UPDATE complaints SET status = 'closed' WHERE company_id = ? AND status = 'open'`, c.id).changes : 0;
+    L.modLog(req.user, banned ? 'ban' : 'unban', c.name, closed ? `${reason} (закрыто жалоб: ${closed})` : reason);
     if (!!c.banned !== banned) {
       notify(q('SELECT id FROM users WHERE company_id = ?', c.id).map((u) => u.id), banned
         ? { kind: 'system', title: 'Компания заблокирована модератором', body: reason, link: '/help/support' }

@@ -188,7 +188,7 @@ export function seed() {
     const B = 'Жумабаев Транс';
     const live = addListing('cargo', A, ['astana', 'karaganda', 'almaty'], { cargo: 'food', body: 'ref', weight: 18, volume: 82, rate: 520000, dateFrom: day(-1), dateTo: day(3), from: 0, description: 'Молочная продукция, температурный режим +2…+6 °C. Выгрузка в Караганде 4 паллеты.', createdAt: ago(40) });
     const r1 = insert(`INSERT INTO responses(listing_id, user_id, company_id, message, price, status, created_at) VALUES(?, ?, ?, 'Реф свободен, могу встать на загрузку завтра утром.', 500000, 'accepted', ?)`, live, user[B], comp[B], ago(30));
-    chat(live, A, B, [[B, 'Реф свободен, могу встать на загрузку завтра утром.\n— 500000 KZT'], [A, 'Добрый день! Подходит. Режим +2…+6, термописец есть?'], [B, 'Да, есть, распечатку дам на выгрузке.'], [A, 'Отлично, принимаю отклик.'], [B, 'Загрузился, выехал из Астаны.']]);
+    chat(live, A, B, [[B, 'Реф свободен, могу встать на загрузку завтра утром.\n— 500 000 ₸'], [A, 'Добрый день! Подходит. Режим +2…+6, термописец есть?'], [B, 'Да, есть, распечатку дам на выгрузке.'], [A, 'Отлично, принимаю отклик.'], [B, 'Загрузился, выехал из Астаны.']]);
     run(`UPDATE listings SET load_address = 'Астана, ул. Жетиген 37, склад №4', unload_address = 'Алматы, ул. Рыскулова 103, ворота 2', load_time = '8:00–11:00' WHERE id = ?`, live);
     const trip = insert(
       `INSERT INTO trips(listing_id, response_id, customer_user, customer_company, carrier_user, carrier_company, price, stage, share_gps, track_token, driver_token, created_at,
@@ -211,9 +211,9 @@ export function seed() {
 
     const open1 = addListing('cargo', A, ['astana', 'kostanay'], { cargo: 'consumer', body: 'tent', weight: 12, volume: 60, rate: 290000, from: 1, description: 'Бытовая техника в коробках, 22 паллеты. Нужны ремни.', createdAt: ago(5) });
     run(`INSERT INTO responses(listing_id, user_id, company_id, message, price, created_at) VALUES(?, ?, ?, 'Тент 20 т в Астане, готов забрать послезавтра.', 280000, ?)`, open1, user['Сарыарка Карго'], comp['Сарыарка Карго'], ago(3));
-    chat(open1, A, 'Сарыарка Карго', [['Сарыарка Карго', 'Тент 20 т в Астане, готов забрать послезавтра.\n— 280000 KZT']]);
+    chat(open1, A, 'Сарыарка Карго', [['Сарыарка Карго', 'Тент 20 т в Астане, готов забрать послезавтра.\n— 280 000 ₸']]);
     run(`INSERT INTO responses(listing_id, user_id, company_id, message, price, created_at) VALUES(?, ?, ?, 'Заберём сегодня, предоплата 50%.', 250000, ?)`, open1, user['Быстрый Груз 24'], comp['Быстрый Груз 24'], ago(2));
-    chat(open1, A, 'Быстрый Груз 24', [['Быстрый Груз 24', 'Заберём сегодня, предоплата 50%.\n— 250000 KZT']]);
+    chat(open1, A, 'Быстрый Груз 24', [['Быстрый Груз 24', 'Заберём сегодня, предоплата 50%.\n— 250 000 ₸']]);
 
     const truck1 = addListing('truck', B, ['almaty', 'balkhash', 'karaganda', 'astana'], { brand: 'Volvo FH', body: 'ref', weight: 20, volume: 82, rate: 480000, from: 3, loading: ['rear', 'side'], description: 'Обратный рейс после выгрузки в Алматы, возьму догруз.', createdAt: ago(8) });
     run(`INSERT INTO responses(listing_id, user_id, company_id, message, price, created_at) VALUES(?, ?, ?, 'Есть 12 т фруктов из Алматы в Караганду, реф обязателен.', 300000, ?)`, truck1, user['Алатау Агро'], comp['Алатау Агро'], ago(1));

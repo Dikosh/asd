@@ -24,7 +24,7 @@ export default function AuthPage() {
   const [invite, setInvite] = useState<Invite | null>(null);
   const [join, setJoin] = useState(true);
   const [accept, setAccept] = useState(false);
-  const [reg, setReg] = useState({ name: '', email: '', companyName: '', companyForm: 'ТОО', role: 'customer' });
+  const [reg, setReg] = useState({ name: '', email: '', companyName: '', companyForm: '', role: 'customer' });
   const [busy, setBusy] = useState(false);
   // повторная отправка кода — не чаще раза в минуту
   const [wait, setWait] = useState(0);
@@ -48,8 +48,15 @@ export default function AuthPage() {
     setBusy(false);
   };
   const joining = !!invite && join;
-  // водителю своя компания не нужна: записываем его как ИП на его же имя
+  // водителю своя компания не нужна: сервер заведёт запись на его имя без формы ИП/ТОО
   const isDriver = reg.role === 'driver';
+  // чего не хватает для регистрации — показываем словами, а не только серой кнопкой
+  const regMissing = [
+    reg.name.trim().length < 2 && t('ФИО'),
+    !joining && !isDriver && !reg.companyForm && t('форма компании (ТОО или ИП)'),
+    !joining && !isDriver && reg.companyName.trim().length < 2 && t('наименование компании'),
+    !accept && t('согласие с правилами'),
+  ].filter(Boolean) as string[];
   const emailOptional = joining ? invite!.role === 'driver' : isDriver;
 
   const requestCode = () =>
@@ -73,7 +80,7 @@ export default function AuthPage() {
       }
     });
   const register = () =>
-    run(async () => setMe(await api<Me>('/auth/register', 'POST', joining ? { regToken, name: reg.name, email: reg.email, joinInvite: true, accept } : { regToken, ...reg, ...(isDriver ? { companyName: reg.name.trim(), companyForm: 'ИП' } : {}), accept })));
+    run(async () => setMe(await api<Me>('/auth/register', 'POST', joining ? { regToken, name: reg.name, email: reg.email, joinInvite: true, accept } : { regToken, ...reg, ...(isDriver ? { companyName: reg.name.trim(), companyForm: '' } : {}), accept })));
   const demo = (role: string) => run(async () => setMe(await api<Me>('/auth/demo', 'POST', { role })));
 
   const features = [
@@ -158,7 +165,7 @@ export default function AuthPage() {
               <h2>{t('Регистрация')}</h2>
               {invite ? (
                 <div className="invite-box">
-                  <b>{t('Вас пригласили в компанию «{name}»', { name: `${invite.companyForm} ${invite.companyName}` })}</b>
+                  <b>{t('Вас пригласили в компанию «{name}»', { name: `${invite.companyForm ? `${invite.companyForm} ` : ''}${invite.companyName}` })}</b>
                   <div className="chips-select">
                     <button type="button" className={`chip-btn ${join ? 'on' : ''}`} aria-pressed={join} onClick={() => setJoin(true)}>{t('Присоединиться')}</button>
                     <button type="button" className={`chip-btn ${!join ? 'on' : ''}`} aria-pressed={!join} onClick={() => setJoin(false)}>{t('Создать свою компанию')}</button>
@@ -179,7 +186,7 @@ export default function AuthPage() {
                     <span className="field-label">{t('Кто вы')}</span>
                     <div className="role-grid">
                       {meta.roles.map((r) => (
-                        <button type="button" key={r} className={`role ${reg.role === r ? 'on' : ''}`} aria-pressed={reg.role === r} onClick={() => setReg({ ...reg, role: r, companyForm: reg.companyName ? reg.companyForm : r === 'carrier' ? 'ИП' : 'ТОО' })}>
+                        <button type="button" key={r} className={`role ${reg.role === r ? 'on' : ''}`} aria-pressed={reg.role === r} onClick={() => setReg({ ...reg, role: r })}>
                           <b>{t(ROLE_L[r])}</b>
                           <span>{t(ROLE_HINT[r])}</span>
                         </button>
@@ -191,7 +198,7 @@ export default function AuthPage() {
                   ) : (
                     <Field label={t('Наименование компании')} hint={t('Работаете один? Выберите ИП и впишите свою фамилию.')}>
                       <div className="phone-row">
-                        <Select value={reg.companyForm} onChange={(v) => setReg({ ...reg, companyForm: v })} options={[{ value: 'ТОО', label: t('ТОО') }, { value: 'ИП', label: t('ИП') }]} />
+                        <Select value={reg.companyForm} onChange={(v) => setReg({ ...reg, companyForm: v })} placeholder={t('Форма')} options={[{ value: 'ТОО', label: t('ТОО') }, { value: 'ИП', label: t('ИП') }]} />
                         <input required minLength={2} maxLength={120} value={reg.companyName} onChange={(e) => setReg({ ...reg, companyName: e.target.value })} placeholder={t('Без кавычек и формы')} autoComplete="organization" />
                       </div>
                     </Field>
@@ -202,7 +209,8 @@ export default function AuthPage() {
                 <input type="checkbox" checked={accept} onChange={(e) => setAccept(e.target.checked)} />
                 <span>{t('Принимаю правила платформы и согласен на обработку персональных данных')}. <Link to="/rules" target="_blank">{t('Читать правила')}</Link></span>
               </label>
-              <button className="btn primary block" disabled={busy || !accept}>{joining ? t('Присоединиться') : t('Зарегистрироваться')}</button>
+              <button className="btn primary block" disabled={busy || regMissing.length > 0}>{joining ? t('Присоединиться') : t('Зарегистрироваться')}</button>
+              {regMissing.length > 0 && <p className="muted small">{t('Осталось заполнить')}: {regMissing.join(', ')}</p>}
             </>
           )}
         </form>

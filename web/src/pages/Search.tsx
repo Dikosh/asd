@@ -177,7 +177,7 @@ export default function SearchPage() {
       kind: (g.from.length ? 'a' : 'b') as 'a' | 'b',
       label: [cityName(g.id), g.from.length ? `${t('погрузка')}: ${g.from.length}` : '', g.to.length ? `${t('разгрузка')}: ${g.to.length}` : ''].filter(Boolean).join(' · '),
     }));
-    const routes = items.map((l) => ({ pts: l.points.map(pos), color: l.kind === 'cargo' ? '#1554d1' : '#e5383b', weight: 2 }));
+    const routes = items.map((l) => ({ pts: l.points.map(pos), color: l.kind === 'cargo' ? '#1554d1' : '#7c3aed', weight: 2 }));
     // карту наводим на места погрузки, отбросив далёкие одиночные точки, — иначе видна вся Евразия
     let focus = groups.filter((g) => g.from.length);
     if (focus.length > 4) {
@@ -224,6 +224,15 @@ export default function SearchPage() {
     </div>
   );
 
+  // перевёрнутые диапазоны дают пустую выдачу — говорим об этом прямо в фильтре
+  const gt = (a?: string, b?: string) => !!a && !!b && Number(a.replace(',', '.')) > Number(b.replace(',', '.'));
+  const rangeErrors = [
+    gt(f.wMin, f.wMax) && t('Вес «от» больше, чем «до»'),
+    gt(f.vMin, f.vMax) && t('Объём «от» больше, чем «до»'),
+    gt(f.rateMin, f.rateMax) && t('Ставка «от» больше, чем «до»'),
+    !!f.dateFrom && !!f.dateTo && f.dateFrom > f.dateTo && t('Дата «с» позже, чем «по»'),
+  ].filter(Boolean) as string[];
+  const hasCity = !!(f.from || f.to);
   const defaultName = [f.from && city(f.from)?.ru, f.to && city(f.to)?.ru].filter(Boolean).join(' → ') || (kind === 'cargo' ? t('Все грузы') : t('Весь транспорт'));
   const numField = (k: string, label: string, int = false) => (
     <Field label={label}>
@@ -242,13 +251,17 @@ export default function SearchPage() {
         <Field label={t('Место погрузки')}><CitySelect value={f.from || null} onChange={(v) => set('from', v)} placeholder={t('Любой город')} /></Field>
         <button className="swap" onClick={() => setF(clean({ ...f, from: f.to || '', to: f.from || '' }))} aria-label={t('Поменять местами')}><ArrowLeftRight size={15} /></button>
         <Field label={t('Место разгрузки')}><CitySelect value={f.to || null} onChange={(v) => set('to', v)} placeholder={t('Любой город')} /></Field>
-        <Field label={t('Радиус от города')}>
-          <Select value={f.radius || '50'} onChange={(v) => set('radius', v === '50' ? '' : v)}
-            options={[{ value: '0', label: t('Только этот город') }, ...[50, 100, 200, 300].map((r) => ({ value: String(r), label: r === 50 ? t('Город и окрестности, 50 км') : `+ ${r} ${t('км')}` }))]} />
+        <Field label={t('Радиус от города')} hint={hasCity ? undefined : t('Сначала выберите город погрузки или разгрузки')}>
+          {hasCity ? (
+            <Select value={f.radius || '50'} onChange={(v) => set('radius', v === '50' ? '' : v)}
+              options={[{ value: '0', label: t('Только этот город') }, ...[50, 100, 200, 300].map((r) => ({ value: String(r), label: r === 50 ? t('Город и окрестности, 50 км') : `+ ${r} ${t('км')}` }))]} />
+          ) : (
+            <Select value="" onChange={() => {}} placeholder={t('Город не выбран')} options={[]} />
+          )}
         </Field>
         <div className="grid2">
-          <Field label={t('Дата с')}><input type="date" value={f.dateFrom || ''} onChange={(e) => set('dateFrom', e.target.value)} /></Field>
-          <Field label={t('Дата по')}><input type="date" value={f.dateTo || ''} onChange={(e) => set('dateTo', e.target.value)} /></Field>
+          <Field label={t('Дата с')}><input type="date" value={f.dateFrom || ''} max={f.dateTo || undefined} onChange={(e) => set('dateFrom', e.target.value)} /></Field>
+          <Field label={t('Дата по')}><input type="date" value={f.dateTo || ''} min={f.dateFrom || undefined} onChange={(e) => set('dateTo', e.target.value)} /></Field>
         </div>
         <Field label={t('Тип кузова')}><Select value={f.body || ''} onChange={(v) => set('body', v)} placeholder={t('Любой')} options={opts(meta.body, BODY_L)} /></Field>
         {kind === 'cargo' && <Field label={t('Тип груза')}><Select value={f.cargoType || ''} onChange={(v) => set('cargoType', v)} placeholder={t('Любой')} options={opts(meta.cargo, CARGO_L)} /></Field>}
@@ -314,6 +327,7 @@ export default function SearchPage() {
         )}
         <button className="btn soft block only-s" onClick={() => setSaveName(defaultName)}><Save size={16} /> {t('Сохранить поиск')}</button>
       </div>
+      {rangeErrors.length > 0 && <div className="form-error fpanel-err" role="alert">{rangeErrors.join('. ')}</div>}
       <div className="fpanel-foot">
         <button className="btn ghost" onClick={() => setF({})} disabled={!active && !f.sort}><X size={16} /> {t('Сбросить')}</button>
         <button className="btn soft hide-s" onClick={() => setSaveName(defaultName)}><Save size={16} /> {t('Сохранить поиск')}</button>
@@ -325,7 +339,13 @@ export default function SearchPage() {
   return (
     <div className="stack">
       <div className="page-head">
-        <Tabs items={[{ value: 'cargo', label: t('Найти груз') }, { value: 'truck', label: t('Найти транспорт') }]} value={kind} onChange={(v) => nav(`/search/${v}`)} />
+        <Tabs items={[{ value: 'cargo', label: t('Найти груз') }, { value: 'truck', label: t('Найти транспорт') }]} value={kind} onChange={(v) => {
+          // общие условия (маршрут, даты, вес, кузов, надёжность) переносим на другую вкладку
+          const keep = new URLSearchParams();
+          for (const k of ['from', 'to', 'radius', 'dateFrom', 'dateTo', 'body', 'wMin', 'wMax', 'verified', 'noRed', 'intl']) if (f[k]) keep.set(k, f[k]);
+          const s = keep.toString();
+          nav(`/search/${v}${s ? `?${s}` : ''}`);
+        }} />
         <div className="row">
           <button className="btn soft only-s" onClick={() => setPanel(true)}>
             <SlidersHorizontal size={16} /> {t('Фильтр')}{active > 0 && <span className="badge inline">{active}</span>}
@@ -383,12 +403,12 @@ export default function SearchPage() {
               <div className="map-click" onClick={onMapPick} onKeyDown={onMapPick}>
                 <MapView routes={mapFull ? map.routes : []} markers={mapFull ? map.markers : map.fit} height={narrow ? 320 : 420} fitKey={map.fitKey} />
               </div>
-              <div className="map-legend">
+              {data?.total !== 0 && <div className="map-legend">
                 <span><i className="lg-dot a" /> {t('Погрузка')}</span>
                 <span><i className="lg-dot b" /> {t('Только разгрузка')}</span>
                 <span><i className={`lg-line ${kind}`} /> {kind === 'cargo' ? t('Маршрут груза') : t('Маршрут транспорта')}</span>
                 {data && data.total > map.shown && <span className="muted">{t('на карте первые {n}', { n: map.shown })}</span>}
-              </div>
+              </div>}
               {selGroup ? (
                 <div className="map-sel" aria-live="polite">
                   <div className="row between">
@@ -398,7 +418,7 @@ export default function SearchPage() {
                   {cityRows(t('Погрузка здесь'), selGroup.from, 'from')}
                   {cityRows(t('Разгрузка здесь'), selGroup.to, 'to')}
                 </div>
-              ) : (
+              ) : data?.total === 0 ? null : (
                 <p className="map-tip muted small">{t('Нажмите на точку на карте — покажем объявления этого города.')}</p>
               )}
             </div>
@@ -408,7 +428,7 @@ export default function SearchPage() {
               {data?.items.map((l) => <ListingCard key={l.id} l={l} onChange={res.reload} />)}
               {data?.total === 0 && (
                 <div className="card">
-                  <Empty title={t('Ничего не найдено')} text={t('Попробуйте увеличить радиус, убрать часть условий или сохранить поиск — и вернуться позже.')}>
+                  <Empty title={t('Ничего не найдено')} text={rangeErrors.length ? `${rangeErrors.join('. ')}.` : hasCity ? t('Попробуйте увеличить радиус, убрать часть условий или сохранить поиск — и вернуться позже.') : t('Попробуйте убрать часть условий или сохранить поиск — и вернуться позже.')}>
                     <button className="btn soft" onClick={() => setF({})}>{t('Сбросить фильтр')}</button>
                   </Empty>
                 </div>
