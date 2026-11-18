@@ -312,3 +312,38 @@ test('статистика цен и калькулятор маршрута', a
   // карточка не учитывает само объявление, поэтому допускаем разницу в одну ставку выборки
   if (card.market && calc.cost) assert.ok(Math.abs(calc.cost.perKm - card.market.median) / card.market.median < 0.15, JSON.stringify([calc.cost, card.market]));
 });
+
+test('заказчики: карточки ведёт администратор, переходы считаются; показатели без демо-данных', async () => {
+  const carrier = await signIn('+77063330021', { name: 'Перевозчик', companyName: 'Жол Транс', companyForm: 'ТОО', role: 'carrier' });
+  const admin = await demo('admin');
+  assert.deepEqual(await carrier.get('/api/shippers'), []);
+  const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
+  const body = { name: 'Сеть магазинов', url: 'https://example.kz/tenders', about: 'Бытовая техника по Казахстану', cities: ['almaty'], cargo: ['consumer'], logo: { mime: 'image/png', data: png } };
+  assert.equal((await carrier.call('POST', '/api/admin/shippers', body)).status, 403, 'добавляет только администратор');
+  assert.equal((await admin.call('POST', '/api/admin/shippers', { ...body, url: 'javascript:alert(1)' })).status, 400);
+  assert.equal((await admin.call('POST', '/api/admin/shippers', { ...body, logo: { mime: 'image/png', data: Buffer.from('MZ not a picture').toString('base64') } })).status, 400);
+  const { id } = await admin.post('/api/admin/shippers', body);
+  const seen = await carrier.get('/api/shippers');
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].clicks, undefined, 'число переходов видит только администратор');
+  const logo = await fetch(base + seen[0].logo);
+  assert.equal(logo.status, 200);
+  assert.equal(logo.headers.get('content-type'), 'image/png');
+  await carrier.post(`/api/shippers/${id}/open`);
+  await admin.post(`/api/shippers/${id}/open`);
+  assert.equal((await admin.get('/api/shippers'))[0].clicks, 1, 'переход администратора не считается');
+  assert.equal((await carrier.get('/api/meta')).stats.shippers, 1);
+  assert.ok((await admin.call('PUT', `/api/admin/shippers/${id}`, { ...body, logo: undefined, visible: false })).status < 300);
+  assert.deepEqual(await carrier.get('/api/shippers'), [], 'скрытую карточку не видно');
+  assert.ok((await admin.get('/api/shippers'))[0].logo, 'логотип сохранился');
+
+  assert.equal((await carrier.call('GET', '/api/admin/metrics')).status, 403);
+  const m = await admin.get('/api/admin/metrics');
+  const withDemo = await admin.get('/api/admin/metrics?demo=1');
+  assert.ok(m.roles.carrier >= 1 && m.active30 >= 1 && m.carriers >= 1);
+  assert.ok(withDemo.users > m.users, 'демо-пользователи учитываются только по запросу');
+  assert.equal(m.weeks.length, 12);
+  assert.ok(m.goal > m.users);
+  await admin.call('DELETE', `/api/admin/shippers/${id}`);
+  assert.deepEqual(await admin.get('/api/shippers'), []);
+});

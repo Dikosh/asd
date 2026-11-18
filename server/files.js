@@ -19,16 +19,22 @@ export const fileSchema = z.object({
 });
 
 /** Проверить и сохранить файл на диск. Возвращает id записи в таблице files. */
-export function saveFile(b, { scope, refId, userId, companyId, byDriverLink = false }) {
-  const ext = Object.hasOwn(MIME, b.mime) ? MIME[b.mime] : null;
-  if (!ext) throw L.bad('file_type', 'Допустимы PDF, JPG, PNG или WEBP');
+/** Раскодировать загруженный файл и проверить, что содержимое совпадает с заявленным типом. */
+export function decodeUpload(b, { images = false, max = MAX_FILE } = {}) {
+  const ext = Object.hasOwn(MIME, b.mime) && !(images && b.mime === 'application/pdf') ? MIME[b.mime] : null;
+  if (!ext) throw L.bad('file_type', images ? 'Допустимы JPG, PNG или WEBP' : 'Допустимы PDF, JPG, PNG или WEBP');
   const buf = Buffer.from(b.data, 'base64');
   if (buf.length < 10) throw L.bad('file_empty', 'Файл пустой или повреждён — выберите другой');
-  if (buf.length > MAX_FILE) throw L.bad('file_size', 'Файл больше 5 МБ');
+  if (buf.length > max) throw L.bad('file_size', max === MAX_FILE ? 'Файл больше 5 МБ' : 'Картинка больше 1 МБ');
   // содержимое должно совпадать с заявленным типом: исполняемый файл под видом картинки не пройдёт
   const sig = buf.subarray(0, 12).toString('latin1');
   const okSig = { pdf: sig.startsWith('%PDF'), jpg: buf[0] === 0xff && buf[1] === 0xd8, png: sig.startsWith('\x89PNG'), webp: sig.startsWith('RIFF') && sig.slice(8, 12) === 'WEBP' }[ext];
   if (!okSig) throw L.bad('file_type', 'Файл повреждён или не совпадает с указанным типом');
+  return { buf, ext };
+}
+
+export function saveFile(b, { scope, refId, userId, companyId, byDriverLink = false }) {
+  const { buf, ext } = decodeUpload(b);
   if (q1('SELECT COUNT(*) AS n FROM files WHERE scope = ? AND ref_id = ?', scope, refId).n >= 100) throw L.bad('limit', 'Слишком много файлов в одном рейсе или чате');
   const name = `${scope}-${L.token(16)}.${ext}`;
   fs.writeFileSync(path.join(UPLOAD_DIR, name), buf);

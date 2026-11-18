@@ -829,3 +829,32 @@ input[aria-invalid='true']:focus, select[aria-invalid='true']:focus, textarea[ar
 .team-line > .grow { flex: 1 1 60%; min-width: 0; overflow-wrap: anywhere; }
 .msg-day { align-self: center; font-size: 12px; color: var(--muted); background: var(--bg); padding: 2px 10px; border-radius: 10px; margin: 6px 0; }
 .center-btn { align-self: center; }
+
+/* ---------- заказчики и показатели площадки ---------- */
+.shipper-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 12px; }
+.shipper { display: flex; flex-direction: column; gap: 10px; }
+.shipper.dim { opacity: 0.6; }
+.shipper-head { display: flex; gap: 12px; align-items: center; }
+.shipper-logo { width: 56px; height: 56px; flex: none; border-radius: 12px; border: 1px solid var(--line); background: #fff; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.shipper-logo img { width: 100%; height: 100%; object-fit: contain; }
+.shipper-logo span { font-size: 22px; font-weight: 800; color: var(--blue); }
+.shipper .desc { -webkit-line-clamp: 4; }
+.goal { height: 14px; border-radius: 7px; background: var(--bg); overflow: hidden; }
+.goal i { display: block; height: 100%; background: var(--blue); border-radius: 7px; min-width: 4px; }
+.metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+.mbars { display: flex; flex-direction: column; gap: 8px; }
+.mbar { display: grid; grid-template-columns: minmax(90px, 40%) 1fr auto; gap: 10px; align-items: center; font-size: 14px; }
+.mbar span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mbar div { height: 10px; background: var(--bg); border-radius: 5px; overflow: hidden; }
+.mbar i { display: block; height: 100%; background: var(--blue); border-radius: 5px; }
+.mbar b { min-width: 2ch; text-align: right; }
+.weeks { display: grid; grid-template-columns: repeat(12, 1fr); gap: 4px; height: 150px; align-items: end; }
+.weeks > div { display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; gap: 3px; min-width: 0; }
+.weeks i { display: block; width: 100%; max-width: 28px; background: var(--blue); border-radius: 4px 4px 0 0; min-height: 2px; }
+.weeks b { font-size: 11px; }
+.weeks span { font-size: 10px; color: var(--muted); white-space: nowrap; overflow: visible; width: 0; display: flex; justify-content: center; }
+@media print {
+  .cab-menu { display: none !important; }
+  .metrics .card, .metrics .stat { box-shadow: none; break-inside: avoid; }
+  .metrics .goal i, .metrics .mbar i, .metrics .weeks i { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+}

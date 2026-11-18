@@ -1,7 +1,7 @@
 import { StrictMode, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Link, BrowserRouter, NavLink, Navigate, Route, Routes, useLocation } from 'react-router-dom';
-import { Bell, Bookmark, Briefcase, Building2, Calculator, CarFront, Megaphone, ChevronDown, Home as HomeIcon, LifeBuoy, Menu, MessageSquare, Package, Route as RouteIcon, Search as SearchIcon, TrendingUp, Truck, UserRound, Ban } from 'lucide-react';
+import { Bell, Bookmark, Briefcase, Building, Building2, Calculator, CarFront, Megaphone, ChevronDown, Home as HomeIcon, LifeBuoy, Menu, MessageSquare, Package, Route as RouteIcon, Search as SearchIcon, TrendingUp, Truck, UserRound, Ban } from 'lucide-react';
 import './styles.css';
 import { api, AppCtx, City, connectEvents, Ctx, getLang, Lang, Me, Meta, placeName, storeLang, t, Trip, useApp, useEvent } from './core';
 import { registerWorker } from './push';
@@ -18,6 +18,7 @@ import CompanyPage from './pages/CompanyPage';
 import JobsPage from './pages/Jobs';
 import RelocationPage, { RelocationForm } from './pages/Relocation';
 import ServicesPage from './pages/Services';
+import ShippersPage from './pages/Shippers';
 import ToolsPage from './pages/Tools';
 import PricesPage from './pages/Prices';
 import HelpPage, { PublicHelp, RulesPage } from './pages/Help';
@@ -80,7 +81,7 @@ function GpsBeacon() {
 }
 
 function Layout() {
-  const { me, reloadMe } = useApp();
+  const { me, reloadMe, meta } = useApp();
   const { toast } = useApp();
   useEvent('message read response trip', () => { reloadMe(); });
   const { routeName } = useApp();
@@ -112,6 +113,8 @@ function Layout() {
   const more = [
     { to: '/relocation', icon: <CarFront size={17} />, label: t('Перегон') },
     { to: '/services', icon: <Megaphone size={17} />, label: t('Услуги: перегон, сопровождение, брокеры') },
+    // раздел «Заказчики» появляется, когда администратор добавит первую компанию
+    ...(meta.stats.shippers > 0 || me!.user.isAdmin ? [{ to: '/shippers', icon: <Building size={17} />, label: t('Заказчики') }] : []),
     { to: '/prices', icon: <TrendingUp size={17} />, label: t('Цены') },
     { to: '/tools', icon: <Calculator size={17} />, label: t('Инструменты') },
     { to: '/cabinet/catalog', icon: <Building2 size={17} />, label: t('Каталог компаний') },
@@ -197,6 +200,7 @@ function Layout() {
           <Route path="/jobs" element={<JobsPage />} />
           <Route path="/relocation" element={<RelocationPage />} />
           <Route path="/services" element={<ServicesPage />} />
+          <Route path="/shippers" element={<ShippersPage />} />
           <Route path="/relocation/new" element={<RelocationForm />} />
           <Route path="/relocation/:id/edit" element={<RelocationForm />} />
           <Route path="/cabinet" element={<Cabinet />} />

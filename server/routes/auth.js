@@ -69,6 +69,7 @@ export default function authRoutes(app) {
         relocation: active('relocation'),
         companies: q1('SELECT COUNT(*) AS n FROM companies WHERE banned = 0').n,
         trips: q1(`SELECT COUNT(*) AS n FROM trips WHERE status = 'completed'`).n,
+        shippers: q1('SELECT COUNT(*) AS n FROM shippers WHERE visible = 1').n,
       },
     });
   });

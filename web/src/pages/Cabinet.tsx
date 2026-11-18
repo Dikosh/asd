@@ -2,7 +2,7 @@
 import { Fragment, ReactNode, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
-  ArrowLeft, BadgeCheck, Ban, Bookmark, Briefcase, Building2, Calculator, ChevronRight, FileText, Handshake, Inbox, LifeBuoy, LogOut, MessageSquare, Paperclip, Pencil, Plus,
+  ArrowLeft, BadgeCheck, BarChart3, Ban, Bookmark, Briefcase, Building2, Calculator, ChevronRight, FileText, Handshake, Inbox, LifeBuoy, LogOut, MessageSquare, Paperclip, Pencil, Plus,
   Route as RouteIcon, Search, Send, Settings, ShieldCheck, Trash2, TrendingUp, Truck, Upload, UserRound, Users, UsersRound, Wallet,
 } from 'lucide-react';
 import { api, companyTitle, BODY_L, Company, DOC_L, fmtDate, fmtStamp, fmtTime, fmtWhen, KIND_L, LOADING_L, Me, money, num, opts, prepareUpload, ROLE_L, t, Trip, useApp, useEvent, useLoad } from '../core';
@@ -11,6 +11,7 @@ import { TripSummary } from './TripPage';
 import { ContactButtons } from '../listing';
 import { AdminExtra, Partners, PlanCard, Team } from './CabinetExtra';
 import { PushToggle } from './Notifications';
+import MetricsTab from './Metrics';
 
 export default function Cabinet() {
   const { tab, id } = useParams();
@@ -28,7 +29,10 @@ export default function Cabinet() {
     { key: 'partners', label: t('Партнёры'), icon: <Handshake size={19} />, el: <Partners /> },
     { key: 'blacklist', label: t('Чёрный список'), icon: <Ban size={19} />, el: <Blacklist /> },
     { key: 'settings', label: t('Настройки'), icon: <Settings size={19} />, el: <SettingsTab /> },
-    ...(me!.user.isAdmin ? [{ key: 'admin', label: t('Модерация'), icon: <ShieldCheck size={19} />, el: <Admin /> }] : []),
+    ...(me!.user.isAdmin ? [
+      { key: 'admin', label: t('Модерация'), icon: <ShieldCheck size={19} />, el: <Admin /> },
+      { key: 'metrics', label: t('Показатели площадки'), icon: <BarChart3 size={19} />, el: <MetricsTab /> },
+    ] : []),
   ];
   // водитель из команды ведёт рейсы; сделки, деньги и документы — у владельца и сотрудников
   // водителю-одиночке не показываем то, что нужно только компаниям

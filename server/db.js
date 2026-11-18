@@ -169,6 +169,12 @@ db.exec(`CREATE TABLE IF NOT EXISTS services(
   category TEXT NOT NULL, title TEXT NOT NULL, cities TEXT NOT NULL DEFAULT '[]', all_country INTEGER NOT NULL DEFAULT 0,
   description TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', paid_until TEXT, removed INTEGER NOT NULL DEFAULT 0, views INTEGER NOT NULL DEFAULT 0, created_at ${TS});
 CREATE INDEX IF NOT EXISTS services_cat ON services(category, paid_until);`);
+// крупные заказчики (сети, производители) со своими сайтами заявок — добавляет администратор после договорённости
+db.exec(`CREATE TABLE IF NOT EXISTS shippers(
+  id INTEGER PRIMARY KEY, name TEXT NOT NULL, url TEXT NOT NULL, about TEXT NOT NULL DEFAULT '', cities TEXT NOT NULL DEFAULT '[]', cargo TEXT NOT NULL DEFAULT '[]',
+  logo TEXT, visible INTEGER NOT NULL DEFAULT 1, clicks INTEGER NOT NULL DEFAULT 0, sort INTEGER NOT NULL DEFAULT 0, created_at ${TS})`);
+// когда человек последний раз заходил — для показателей активности
+addColumn('users', 'last_seen', 'TEXT');
 // рейсы, созданные до появления подтверждения, считаются подтверждёнными — их не останавливаем
 if (addColumn('trips', 'confirmed_at', 'TEXT')) db.exec('UPDATE trips SET confirmed_at = created_at');
 db.exec(`

@@ -37,7 +37,7 @@ export interface Meta {
   demo: boolean; cities: City[]; roles: string[]; body: string[]; cargo: string[]; loading: string[]; pay: string[]; currencies: string[];
   stages: string[]; docKinds: string[]; boostPrice: number; flags: string[]; places: number; relocVehicles: string[]; licenses: string[];
   support: { phone: string; telegram: string; hours: string }; tiles: { url: string; attribution: string }; limits: { activeFree: number; activePro: number; perHour: number; boostsPro: number };
-  plan: { price: number; days: number; free: { seats: number; alerts: number }; pro: { seats: number; alerts: number } }; stats: { cargo: number; truck: number; relocation: number; companies: number; trips: number };
+  plan: { price: number; days: number; free: { seats: number; alerts: number }; pro: { seats: number; alerts: number } }; stats: { cargo: number; truck: number; relocation: number; companies: number; trips: number; shippers: number };
 }
 export interface Trip {
   id: number; status: 'active' | 'completed' | 'cancelled' | 'failed'; kind?: Kind; stage: string; signalLost?: boolean; failReason?: string; driverToken?: string; autoCompleteAt?: string | null; shareGps: boolean; points: string[]; listingId: number;

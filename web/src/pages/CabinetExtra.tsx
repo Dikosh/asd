@@ -158,6 +158,7 @@ const REASONS: Record<string, string> = {
 const LOG_L: Record<string, string> = {
   ban: 'Блокировка компании', unban: 'Снятие блокировки', verify_approve: 'Компания проверена', verify_reject: 'Отказ в проверке', doc_approve: 'Документ принят',
   doc_reject: 'Документ отклонён', listing_remove: 'Объявление снято', complaint_dismiss: 'Жалоба закрыта без мер', blacklist_delete: 'Удалена запись чёрного списка',
+  shipper_add: 'Добавлен заказчик', shipper_remove: 'Удалён заказчик', service_remove: 'Снята карточка услуги',
 };
 export function AdminExtra() {
   const { act } = useApp();
