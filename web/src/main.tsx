@@ -234,7 +234,7 @@ function App() {
     storeLang(lang);
     Promise.all([api<Meta>('/meta'), api<Me | null>('/me'), api<any[][]>('/places')])
       .then(([m, u, rows]) => {
-        setCities(rows.map(([id, ru, kz, en, country, lat, lon, region]) => ({ id, ru, kz, en, country, lat, lon, region })));
+        setCities(rows.map(([id, ru, kz, en, country, lat, lon, region, zh]) => ({ id, ru, kz, en, zh: zh || en, country, lat, lon, region })));
         setMeta(m);
         setMeState(u);
       })

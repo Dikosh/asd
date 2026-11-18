@@ -7,7 +7,7 @@ import { CITIES, cityById, isValidBin } from '../geo.js';
 import * as L from '../lib.js';
 import { sendSms } from '../sms.js';
 
-const PLACES_JSON = Buffer.from(JSON.stringify(CITIES.map((c) => [c.id, c.ru, c.kz, c.en, c.country, c.lat, c.lon, c.region])));
+const PLACES_JSON = Buffer.from(JSON.stringify(CITIES.map((c) => [c.id, c.ru, c.kz, c.en, c.country, c.lat, c.lon, c.region, c.zh === c.en ? '' : c.zh])));
 const PLACES_GZ = zlib.gzipSync(PLACES_JSON);
 
 const { bad, parse } = L;
@@ -208,7 +208,7 @@ export default function authRoutes(app) {
   const meSchema = z.object({
     name: z.string().trim().min(2).max(100).optional(),
     email: z.string().trim().email().max(120).optional(),
-    settings: z.object({ showPhone: z.boolean(), news: z.boolean(), lang: z.enum(['ru', 'kz', 'en']) }).partial().strict().optional(),
+    settings: z.object({ showPhone: z.boolean(), news: z.boolean(), lang: z.enum(['ru', 'kz', 'en', 'zh']) }).partial().strict().optional(),
   });
   app.patch('/api/me', L.auth, (req, res) => {
     const b = parse(meSchema, req.body);

@@ -1,4 +1,4 @@
-// Проверяет, что у каждой строки интерфейса есть казахский и английский перевод: npm run i18n
+// Проверяет, что у каждой строки интерфейса есть казахский, английский и китайский перевод: npm run i18n
 const fs = require('fs');
 const keys = require('./i18n-keys.cjs');
 
@@ -19,5 +19,6 @@ function check(file, name, title) {
 
 // казахский проверяется последним, чтобы итоговая строка относилась к нему
 const en = check('web/src/en.ts', 'EN', 'Английский');
+const zh = check('web/src/zh.ts', 'ZH', 'Китайский');
 const kz = check('web/src/kz.ts', 'KZ', 'Казахский');
-process.exit(en || kz ? 1 : 0);
+process.exit(en || zh || kz ? 1 : 0);

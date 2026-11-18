@@ -94,9 +94,13 @@ const RAW = [
 // Полный справочник (города и посёлки Казахстана, крупные города соседних стран) собирается из GeoNames
 // скриптом scripts/build-places.py в server/data/places.json. Список RAW выше — запасной вариант, если файла нет.
 const placesFile = path.join(path.dirname(fileURLToPath(import.meta.url)), 'data/places.json');
-export const CITIES = fs.existsSync(placesFile)
+// китайские названия (scripts/build-places-zh.py) — только там, где они есть; иначе показывается английское
+const zhFile = path.join(path.dirname(fileURLToPath(import.meta.url)), 'data/places-zh.json');
+const ZH = fs.existsSync(zhFile) ? JSON.parse(fs.readFileSync(zhFile, 'utf8')) : {};
+export const CITIES = (fs.existsSync(placesFile)
   ? JSON.parse(fs.readFileSync(placesFile, 'utf8')).map(([id, ru, kz, en, country, lat, lon, region, pop]) => ({ id, ru, kz, en, country, lat, lon, region, pop }))
-  : RAW.map(([id, ru, kz, country, lat, lon]) => ({ id, ru, kz, en: ru, country, lat, lon, region: '', pop: 0 }));
+  : RAW.map(([id, ru, kz, country, lat, lon]) => ({ id, ru, kz, en: ru, country, lat, lon, region: '', pop: 0 }))
+).map((c) => ({ ...c, zh: ZH[c.id] || c.en }));
 export const cityById = new Map(CITIES.map((c) => [c.id, c]));
 
 const rad = (d) => (d * Math.PI) / 180;

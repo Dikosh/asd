@@ -1,7 +1,7 @@
 // Собирает все русские строки интерфейса: вызовы t('…') и значения словарей-справочников.
 const fs = require('fs'), path = require('path');
 const files = [];
-(function walk(d) { for (const f of fs.readdirSync(d)) { const p = path.join(d, f); fs.statSync(p).isDirectory() ? walk(p) : /\.tsx?$/.test(f) && !/kz\.ts$/.test(f) && files.push(p); } })('web/src');
+(function walk(d) { for (const f of fs.readdirSync(d)) { const p = path.join(d, f); fs.statSync(p).isDirectory() ? walk(p) : /\.tsx?$/.test(f) && !/(kz|zh)\.ts$/.test(f) && files.push(p); } })('web/src');
 const keys = new Set();
 for (const f of files) {
   const s = fs.readFileSync(f, 'utf8');

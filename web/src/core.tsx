@@ -2,9 +2,10 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { KZ } from './kz';
 import { EN } from './en';
+import { ZH } from './zh';
 
 // ---------- типы ----------
-export interface City { id: string; ru: string; kz: string; en: string; country: string; lat: number; lon: number; region: string }
+export interface City { id: string; ru: string; kz: string; en: string; zh: string; country: string; lat: number; lon: number; region: string }
 export interface Company {
   id: number; name: string; form: string; kind: string; verified: string; rating: number | null;
   reviews: number; trips: number; blacklisted: number; pro?: boolean; banned?: boolean; indicator: 'green' | 'red' | 'gray';
@@ -158,7 +159,7 @@ export function useEvent(types: string, handler: Handler) {
 }
 
 // ---------- язык ----------
-export type Lang = 'ru' | 'kz' | 'en';
+export type Lang = 'ru' | 'kz' | 'en' | 'zh';
 const read = (k: string) => {
   try {
     return localStorage.getItem(k);
@@ -167,7 +168,7 @@ const read = (k: string) => {
   }
 };
 const stored = read('lang');
-let lang: Lang = stored === 'kz' || stored === 'en' ? stored : 'ru';
+let lang: Lang = stored === 'kz' || stored === 'en' || stored === 'zh' ? stored : 'ru';
 export const getLang = () => lang;
 export function storeLang(l: Lang) {
   lang = l;
@@ -176,11 +177,11 @@ export function storeLang(l: Lang) {
   } catch {
     /* хранилище недоступно — язык действует до перезагрузки */
   }
-  document.documentElement.lang = l === 'kz' ? 'kk' : l;
+  document.documentElement.lang = l === 'kz' ? 'kk' : l === 'zh' ? 'zh-CN' : l;
 }
 /** Перевод: ключ — русская строка; для казахского берётся словарь, иначе остаётся русский текст. */
 export function t(s: string, vars?: Record<string, string | number>): string {
-  let out = lang === 'kz' ? KZ[s] ?? s : lang === 'en' ? EN[s] ?? s : s;
+  let out = lang === 'kz' ? KZ[s] ?? s : lang === 'en' ? EN[s] ?? s : lang === 'zh' ? ZH[s] ?? s : s;
   if (vars) for (const [k, v] of Object.entries(vars)) out = out.replaceAll(`{${k}}`, String(v));
   return out;
 }
@@ -254,17 +255,18 @@ export async function prepareUpload(f: File): Promise<{ filename: string; mime: 
 export const opts = (keys: string[], labels: Record<string, string>) => keys.map((k) => ({ value: k, label: t(labels[k] || k) }));
 
 /** Название места на текущем языке интерфейса. */
-export const placeName = (c: City) => (lang === 'kz' ? c.kz : lang === 'en' ? c.en : c.ru);
+export const placeName = (c: City) => (lang === 'kz' ? c.kz : lang === 'en' ? c.en : lang === 'zh' ? c.zh : c.ru);
 
 // ---------- форматирование ----------
 // Казахские названия месяцев задаём сами: не во всех браузерах есть данные локали kk-KZ.
 const KZ_MONTHS = ['қаң.', 'ақп.', 'нау.', 'сәу.', 'мам.', 'мау.', 'шіл.', 'там.', 'қыр.', 'қаз.', 'қар.', 'жел.'];
-// в английском интерфейсе — «1,450,000» и «1.5», в русском и казахском — «1 450 000» и «1,5»
-export const num = (n: number) => new Intl.NumberFormat(lang === 'en' ? 'en-US' : 'ru-RU').format(n);
+// в английском и китайском интерфейсе — «1,450,000» и «1.5», в русском и казахском — «1 450 000» и «1,5»
+export const num = (n: number) => new Intl.NumberFormat(lang === 'en' || lang === 'zh' ? 'en-US' : 'ru-RU').format(n);
 export const money = (n: number | null, cur = 'KZT') => (n == null ? t('Договорная') : `${num(n)} ${CUR[cur] || cur}`);
 export function fmtDate(iso: string) {
   const d = new Date(iso);
   if (lang === 'kz') return `${d.getDate()} ${KZ_MONTHS[d.getMonth()]}`;
+  if (lang === 'zh') return `${d.getMonth() + 1}月${d.getDate()}日`;
   return d.toLocaleDateString(lang === 'en' ? 'en-GB' : 'ru-RU', { day: 'numeric', month: 'short' });
 }
 export const fmtDates = (a: string, b: string) => (a === b ? fmtDate(a) : `${fmtDate(a)} — ${fmtDate(b)}`);

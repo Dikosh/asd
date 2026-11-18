@@ -109,7 +109,8 @@ export default function HelpPage({ guest = false }: { guest?: boolean }) {
   const [text, setText] = useState('');
   const mine = useLoad(() => (tab === 'support' ? api<any[]>('/feedback/mine') : Promise.resolve([])), [tab]);
   const lang = getLang();
-  const pick = (n: any, f: string) => (lang === 'kz' && n[f + 'Kz']) || (lang === 'en' && n[f + 'En']) || n[f];
+  // у новостей нет китайского текста — для китайского показываем английский
+  const pick = (n: any, f: string) => (lang === 'kz' && n[f + 'Kz']) || ((lang === 'en' || lang === 'zh') && n[f + 'En']) || n[f];
   return (
     <div className="stack">
       <h1 className="page-title">{t('Помощь')}</h1>

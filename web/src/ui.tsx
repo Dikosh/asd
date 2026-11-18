@@ -103,7 +103,7 @@ const cityIndex = new WeakMap<City[], string[][]>();
 function cityNames(cities: City[]) {
   let idx = cityIndex.get(cities);
   if (!idx) {
-    idx = cities.map((c) => [...new Set([fold(c.ru), fold(c.kz), fold(c.en)])]);
+    idx = cities.map((c) => [...new Set([fold(c.ru), fold(c.kz), fold(c.en), fold(c.zh)])]);
     cityIndex.set(cities, idx);
   }
   return idx;
@@ -448,14 +448,16 @@ export function Logo() {
   );
 }
 
+const LANGS: [Lang, string, string][] = [['ru', 'РУС', 'Русский'], ['kz', 'ҚАЗ', 'Қазақша'], ['en', 'ENG', 'English'], ['zh', '中文', '中文']];
+
 export function LangSwitch() {
   const { lang, setLang } = useApp();
   return (
-    <div className="lang" role="group" aria-label="Язык / Тіл / Language">
-      {(['ru', 'kz', 'en'] as Lang[]).map((l) => (
-        <button key={l} className={lang === l ? 'on' : ''} aria-pressed={lang === l} lang={l === 'kz' ? 'kk' : l}
-          aria-label={l === 'ru' ? 'Русский' : l === 'kz' ? 'Қазақша' : 'English'} onClick={() => setLang(l)}>
-          {l === 'ru' ? 'РУС' : l === 'kz' ? 'ҚАЗ' : 'ENG'}
+    <div className="lang" role="group" aria-label="Язык / Тіл / Language / 语言">
+      {LANGS.map(([l, short, full]) => (
+        <button key={l} className={lang === l ? 'on' : ''} aria-pressed={lang === l} lang={l === 'kz' ? 'kk' : l === 'zh' ? 'zh-CN' : l}
+          aria-label={full} onClick={() => setLang(l)}>
+          {short}
         </button>
       ))}
     </div>
