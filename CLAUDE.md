@@ -15,6 +15,7 @@
 - `server/db.js` — схема и миграции (`addColumn`), представления `visible_reviews`, `rated_reviews`, `company_stats`. `run`/`insert` повышают `dataVersion()` при записи в listings, trips, companies, reviews, blacklist.
 - Поиск, подбор и рекомендации берут активные объявления из памяти (`activePool`/`lightListings` в lib.js, перечитываются при смене `dataVersion`), репутацию — из кэша `companyMap`; полные карточки грузятся только для показываемой страницы (`hydrate`). Писать в эти таблицы — только через `run`/`insert`, иначе поиск не узнает об изменении.
 - `server/i18n.js` — тексты уведомлений на трёх языках (для push).
+- Push в мобильное приложение — Firebase Cloud Messaging (`server/fcm.js`, без библиотек): токены устройств в `push_devices` (`POST /api/push/device`, `/api/push/device/remove`, не больше 5 на человека), `notify()` шлёт туда тот же текст, что и Web Push, а недействительные токены удаляет. Ключ — файл сервисного аккаунта `FCM_SERVICE_ACCOUNT` (по умолчанию `<DATA_DIR>/fcm.json`, на сервере `/var/lib/jolda/fcm.json`, владелец jolda, права 600); нет файла — push в приложение выключен.
 - `web/src/` — React + TypeScript + Vite + Leaflet. Строки интерфейса: `t('русская строка')`, переводы в `kz.ts`, `en.ts` и `zh.ts` (китайский упрощённый; ключ — русская строка).
 - `server/data/places.json` — справочник ~6 650 мест (GeoNames), собирается `scripts/build-places.py`; китайские названия — `server/data/places-zh.json` (`scripts/build-places-zh.py`, где нет — показывается английское).
 

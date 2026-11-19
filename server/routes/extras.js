@@ -5,6 +5,7 @@ import { q, q1, run, insert, tx } from '../db.js';
 import { cityById, roadKm } from '../geo.js';
 import { route } from '../routing.js';
 import { isPushEndpoint, notify, pushPublicKey } from '../notify.js';
+import { fcmAccount } from '../fcm.js';
 import { marketRate, priceSamples } from './listings.js';
 import { loadRates } from '../rates.js';
 import * as L from '../lib.js';
@@ -44,12 +45,42 @@ export default function extraRoutes(app) {
     run('DELETE FROM push_subs WHERE endpoint = ? AND user_id = ?', String(req.body?.endpoint || ''), req.user.id);
     res.json({ ok: true });
   });
+  // мобильное приложение (Firebase): токен устройства. Токен, перешедший к другому человеку (вход под другим
+  // аккаунтом на том же телефоне), переписывается на него; у человека не больше пяти последних устройств.
+  const deviceToken = z.string().trim().min(1).max(4096);
+  const deviceSchema = z.object({ token: deviceToken, platform: z.enum(['android', 'ios']) });
+  app.post('/api/push/device', auth, (req, res) => {
+    const b = parse(deviceSchema, req.body);
+    run(
+      `INSERT INTO push_devices(user_id, token, platform) VALUES(?, ?, ?)
+       ON CONFLICT(token) DO UPDATE SET user_id = excluded.user_id, platform = excluded.platform, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
+      req.user.id, b.token, b.platform,
+    );
+    run(
+      `DELETE FROM push_devices WHERE user_id = :u AND token != :t
+       AND id NOT IN (SELECT id FROM push_devices WHERE user_id = :u AND token != :t ORDER BY updated_at DESC, id DESC LIMIT 4)`,
+      { u: req.user.id, t: b.token },
+    );
+    res.json({ ok: true });
+  });
+  // приложение вызывает перед выходом из аккаунта
+  app.post('/api/push/device/remove', auth, (req, res) => {
+    const b = parse(z.object({ token: deviceToken }), req.body);
+    run('DELETE FROM push_devices WHERE token = ? AND user_id = ?', b.token, req.user.id);
+    res.json({ ok: true });
+  });
   const lastTest = new Map();
   app.post('/api/push/test', auth, (req, res) => {
     if (Date.now() - (lastTest.get(req.user.id) || 0) < 30_000) throw bad('rate_limit', 'Проверочное уведомление можно отправлять раз в полминуты', 429);
     lastTest.set(req.user.id, Date.now());
+    // уходит во все подписки браузеров и на все устройства приложения
     notify(req.user.id, { kind: 'system', title: 'Уведомления включены', body: 'Так будут приходить новые отклики и подходящие грузы.', link: '/notifications' });
-    res.json({ ok: true });
+    res.json({
+      ok: true,
+      subscriptions: q1('SELECT COUNT(*) AS n FROM push_subs WHERE user_id = ?', req.user.id).n,
+      devices: q1('SELECT COUNT(*) AS n FROM push_devices WHERE user_id = ?', req.user.id).n,
+      fcm: !!fcmAccount(),
+    });
   });
 
   // ---------- команда: несколько сотрудников в одной компании ----------

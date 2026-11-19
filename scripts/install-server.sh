@@ -51,6 +51,10 @@ mkdir -p "$DATA" && chown -R jolda:jolda "$DATA"
 
 say "Служба jolda"
 INSECURE=0; [ -z "$DOMAIN" ] && INSECURE=1
+# Push в мобильное приложение (Firebase): положите файл сервисного аккаунта Firebase в /var/lib/jolda/fcm.json
+# (владелец jolda, права 600: chown jolda:jolda /var/lib/jolda/fcm.json && chmod 600 /var/lib/jolda/fcm.json)
+# и перезапустите службу (systemctl restart jolda). Без файла push в приложение выключен, остальное работает.
+[ -f "$DATA/fcm.json" ] && chown jolda:jolda "$DATA/fcm.json" && chmod 600 "$DATA/fcm.json"
 cat > /etc/systemd/system/jolda.service <<EOF
 [Unit]
 Description=Jolda freight exchange
@@ -65,6 +69,8 @@ Environment=DATA_DIR=$DATA
 Environment=TRUST_PROXY=1
 Environment=INSECURE_COOKIES=$INSECURE
 Environment=DEMO_MODE=$DEMO
+# ключ Firebase для push в мобильное приложение (файл необязателен)
+Environment=FCM_SERVICE_ACCOUNT=$DATA/fcm.json
 EnvironmentFile=-/etc/jolda.env
 ExecStart=/usr/bin/node server/index.js
 Restart=always

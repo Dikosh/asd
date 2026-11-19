@@ -175,6 +175,10 @@ db.exec(`CREATE TABLE IF NOT EXISTS shippers(
   logo TEXT, visible INTEGER NOT NULL DEFAULT 1, clicks INTEGER NOT NULL DEFAULT 0, sort INTEGER NOT NULL DEFAULT 0, created_at ${TS})`);
 // когда человек последний раз заходил — для показателей активности
 addColumn('users', 'last_seen', 'TEXT');
+// устройства мобильного приложения для push через Firebase (FCM): токен устройства, платформа 'android' | 'ios'
+db.exec(`CREATE TABLE IF NOT EXISTS push_devices(
+  id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, token TEXT NOT NULL UNIQUE, platform TEXT NOT NULL, created_at ${TS}, updated_at ${TS});
+CREATE INDEX IF NOT EXISTS push_devices_user ON push_devices(user_id, updated_at);`);
 // рейсы, созданные до появления подтверждения, считаются подтверждёнными — их не останавливаем
 if (addColumn('trips', 'confirmed_at', 'TEXT')) db.exec('UPDATE trips SET confirmed_at = created_at');
 db.exec(`

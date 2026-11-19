@@ -9,9 +9,12 @@ import path from 'node:path';
 process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'jolda-test2-'));
 process.env.DEMO_MODE = '1';
 delete process.env.OSRM_URL; // расстояния в тестах считаются оценкой, без обращения в сеть
+delete process.env.FCM_SERVICE_ACCOUNT; // без ключа Firebase push в приложение выключен — в Google тесты не ходят
 const { createApp } = await import('../server/index.js');
 const { seed } = await import('../server/seed.js');
 const { render } = await import('../server/i18n.js');
+const { q } = await import('../server/db.js');
+const { notify } = await import('../server/notify.js');
 
 let server;
 let base;
@@ -346,4 +349,53 @@ test('заказчики: карточки ведёт администратор
   assert.ok(m.goal > m.users);
   await admin.call('DELETE', `/api/admin/shippers/${id}`);
   assert.deepEqual(await admin.get('/api/shippers'), []);
+});
+
+test('устройства мобильного приложения (Firebase): регистрация, перенос, лимит, удаление', async () => {
+  const carrier = await demo('carrier');
+  const customer = await demo('customer');
+  const devices = (userId) => q('SELECT token, platform FROM push_devices WHERE user_id = ? ORDER BY id', userId).map((d) => ({ ...d }));
+  const tok = (n) => `fcm-token-${n}:${'x'.repeat(140)}`;
+
+  await carrier.post('/api/push/device', { token: tok(1), platform: 'android' });
+  await carrier.post('/api/push/device', { token: tok(1), platform: 'android' });
+  assert.deepEqual(devices(carrier.me.user.id), [{ token: tok(1), platform: 'android' }], 'повторная регистрация не создаёт дубль');
+
+  // на том же телефоне вошли под другим аккаунтом — токен переходит к нему
+  await customer.post('/api/push/device', { token: tok(1), platform: 'ios' });
+  assert.deepEqual(devices(carrier.me.user.id), []);
+  assert.deepEqual(devices(customer.me.user.id), [{ token: tok(1), platform: 'ios' }]);
+
+  // не больше пяти последних устройств
+  for (let n = 2; n <= 8; n++) await carrier.post('/api/push/device', { token: tok(n), platform: 'android' });
+  assert.deepEqual(devices(carrier.me.user.id).map((d) => d.token), [4, 5, 6, 7, 8].map(tok));
+  // старое устройство зарегистрировалось снова — оно становится самым свежим и вытесняет самое старое
+  await new Promise((r) => setTimeout(r, 5)); // время обновления — с точностью до миллисекунды
+  await carrier.post('/api/push/device', { token: tok(4), platform: 'android' });
+  await carrier.post('/api/push/device', { token: tok(9), platform: 'android' });
+  assert.deepEqual(devices(carrier.me.user.id).map((d) => d.token).sort(), [4, 6, 7, 8, 9].map(tok).sort());
+
+  // удаление перед выходом: только своё устройство
+  await carrier.post('/api/push/device/remove', { token: tok(1) });
+  assert.equal(devices(customer.me.user.id).length, 1, 'чужой токен так не удалить');
+  await carrier.post('/api/push/device/remove', { token: tok(9) });
+  assert.ok(!devices(carrier.me.user.id).some((d) => d.token === tok(9)));
+
+  // проверка данных
+  const err = async (url, body) => (await carrier.call('POST', url, body)).data;
+  for (const body of [{}, { token: '', platform: 'android' }, { token: '   ', platform: 'ios' }, { token: 'x'.repeat(4097), platform: 'android' }, { token: 123, platform: 'ios' }])
+    assert.deepEqual([(await err('/api/push/device', body)).error, (await err('/api/push/device', body)).field], ['validation', 'token'], JSON.stringify(body).slice(0, 60));
+  for (const platform of [undefined, 'web', 'ANDROID'])
+    assert.deepEqual([(await err('/api/push/device', { token: tok(10), platform })).error, (await err('/api/push/device', { token: tok(10), platform })).field], ['validation', 'platform']);
+  assert.equal((await err('/api/push/device/remove', {})).error, 'validation');
+  assert.equal((await client().call('POST', '/api/push/device', { token: tok(11), platform: 'android' })).status, 401, 'только после входа');
+
+  // без ключа Firebase уведомления работают как раньше: запись в базе есть, устройства не удаляются, ошибок нет
+  const before = devices(carrier.me.user.id).length;
+  assert.doesNotThrow(() => notify(carrier.me.user.id, { kind: 'system', title: 'Уведомления включены', body: 'Так будут приходить новые отклики и подходящие грузы.', link: '/notifications' }));
+  assert.equal((await carrier.get('/api/notifications'))[0].title, 'Уведомления включены');
+  const t = await carrier.post('/api/push/test');
+  assert.deepEqual([t.ok, t.devices, t.fcm], [true, before, false]);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(devices(carrier.me.user.id).length, before);
 });
