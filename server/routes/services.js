@@ -30,6 +30,7 @@ const SQL = `SELECT s.*, ${L.COMPANY_COLS('cs', 'c_')} FROM services s JOIN comp
 
 export default function serviceRoutes(app) {
   app.get('/api/services', auth, (req, res) => {
+    L.browseLimit(req);
     const cat = L.SERVICE_CATEGORIES.includes(req.query.category) ? req.query.category : null;
     const city = cityById.has(String(req.query.city || '')) ? String(req.query.city) : null;
     const blocked = new Set(q('SELECT blocked_id FROM blocks WHERE company_id = ?', req.user.company_id).map((r) => r.blocked_id));
@@ -50,7 +51,9 @@ export default function serviceRoutes(app) {
 
   // просмотр карточки (нажатие «Позвонить» / «WhatsApp») считаем для исполнителя — видно, что реклама работает
   app.post('/api/services/:id/view', auth, (req, res) => {
-    run('UPDATE services SET views = views + 1 WHERE id = ? AND company_id != ?', Number(req.params.id), req.user.company_id);
+    // один человек — один просмотр в сутки: повторными нажатиями счётчик не накрутить
+    const sid = Number(req.params.id);
+    if (L.firstTime(`sv:${req.user.id}:${sid}`)) run('UPDATE services SET views = views + 1 WHERE id = ? AND company_id != ?', sid, req.user.company_id);
     res.json({ ok: true });
   });
 

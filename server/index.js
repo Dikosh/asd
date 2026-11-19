@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { q1, run } from './db.js';
-import { DEMO, HttpError, PROD, TILE_ORIGIN, loadUser } from './lib.js';
+import { DEMO, HttpError, PROD, TILE_ORIGIN, ip, loadUser } from './lib.js';
 import authRoutes, { rateLimit, syncAdmins } from './routes/auth.js';
 import listingRoutes, { expireListings } from './routes/listings.js';
 import dealRoutes, { autoCompleteTrips } from './routes/deals.js';
@@ -45,13 +45,23 @@ export function createApp() {
     if (PROD) res.setHeader('Strict-Transport-Security', 'max-age=31536000');
     next();
   });
-  // большое тело запроса нужно только для загрузки документа
-  app.use(/^\/api\/(documents|chats\/\d+\/files|trips\/\d+\/files|drive\/[^/]+\/files|admin\/shippers(\/\d+)?)$/, express.json({ limit: '8mb' }));
-  app.use(express.json({ limit: '100kb' }));
+  // Кто пришёл и не слишком ли часто — выясняется до разбора тела запроса: иначе большими запросами можно нагружать
+  // сервер без входа и поверх предела частоты.
   app.use('/api', loadUser, (req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
     // общий предел частоты запросов: защищает от перебора и случайных циклов в клиенте
-    rateLimit(req.user ? `u:${req.user.id}` : `a:${req.ip}`, 600, 60_000, 'Слишком много запросов, подождите минуту');
+    rateLimit(req.user ? `u:${req.user.id}` : `a:${ip(req)}`, 600, 60_000, 'Слишком много запросов, подождите минуту');
+    next();
+  });
+  // большое тело запроса нужно только для загрузки файла: вошедшему — до 8 МБ, по ссылке водителя — тоже (право даёт ссылка),
+  // и таких загрузок с одного адреса или аккаунта — не больше 20 в минуту
+  app.use(/^\/api\/(documents|chats\/\d+\/files|trips\/\d+\/files|drive\/[^/]+\/files|admin\/shippers(\/\d+)?)$/, (req, _res, next) => {
+    if (!req.user && !req.originalUrl.startsWith('/api/drive/')) return next(new HttpError(401, 'unauthorized', 'Требуется вход'));
+    rateLimit(req.user ? `up:${req.user.id}` : `up:${ip(req)}`, 20, 60_000, 'Слишком много запросов, подождите минуту');
+    next();
+  }, express.json({ limit: '8mb' }));
+  app.use(express.json({ limit: '100kb' }));
+  app.use('/api', (req, res, next) => {
     const u = req.user;
     if (u?.company_role === 'driver') {
       const blocked = !(req.method === 'GET' ? DRIVER_READ : DRIVER_WRITE).some((r) => r.test(req.path));
@@ -74,6 +84,9 @@ export function createApp() {
   const dist = process.env.WEB_DIST || path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../web/dist');
   if (fs.existsSync(dist)) {
     // сервис-воркер должен обновляться сразу, остальное можно кэшировать
+    // поисковикам: внутренние разделы и личные ссылки рейсов не индексировать
+    app.get('/robots.txt', (_req, res) => res.type('text/plain').send('User-agent: *\nDisallow: /api/\nDisallow: /cabinet\nDisallow: /t/\nDisallow: /d/\n'));
+    app.get(/^\/(t|d)\//, (_req, res, next) => { res.setHeader('X-Robots-Tag', 'noindex, nofollow'); next(); });
     app.get('/sw.js', (_req, res) => res.sendFile(path.join(dist, 'sw.js'), { headers: { 'Cache-Control': 'no-cache' } }));
     app.use(express.static(dist, { index: false, maxAge: '1h' }));
     app.get(/.*/, (_req, res) => res.sendFile(path.join(dist, 'index.html'), { headers: { 'Cache-Control': 'no-cache' } }));
@@ -85,6 +98,8 @@ export function createApp() {
     if (err instanceof HttpError) return res.status(err.status).json({ error: err.code, message: err.message, ...err.extra });
     if (err.type === 'entity.too.large') return res.status(413).json({ error: 'too_large', message: 'Слишком большой запрос' });
     if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'bad_json', message: 'Запрос повреждён — попробуйте ещё раз' });
+    // прочие ошибки разбора запроса (кодировка, обрыв, неверный адрес) — это ошибка клиента, а не сервера
+    if (err.status >= 400 && err.status < 500 && !err.code?.startsWith?.('SQLITE')) return res.status(400).json({ error: 'bad_request', message: 'Запрос повреждён — попробуйте ещё раз' });
     console.error(err);
     res.status(500).json({ error: 'internal', message: 'Внутренняя ошибка сервера' });
   });
@@ -101,6 +116,8 @@ export function housekeeping() {
     // вход истёк сам — уведомления на его устройство тоже прекращаются
     for (const table of ['push_subs', 'push_devices']) run(`DELETE FROM ${table} WHERE sid IS NOT NULL AND sid NOT IN (SELECT token FROM sessions)`);
     run(`DELETE FROM invites WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-14 days')`);
+    // связка номера с чатом Telegram, которой полгода не входили: номер мог сменить владельца — пусть подтвердит заново
+    run(`DELETE FROM tg_links WHERE COALESCE(used_at, created_at) < strftime('%Y-%m-%dT%H:%M:%fZ','now','-180 days')`);
     run(`DELETE FROM route_cache WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-90 days')`);
     // на боевом сервере — присмотр за резервными копиями и местом на диске
     if (PROD) checkHealth();
@@ -115,10 +132,13 @@ export function housekeeping() {
  * При первом запуске без демо закрываем все входы, открытые за время демо, и отвязываем устройства от уведомлений:
  * каждый входит заново, уже по коду из SMS.
  */
-export function leaveDemoMode() {
+export function demoBase() {
   const prev = q1(`SELECT value FROM app_state WHERE key = 'demo'`)?.value;
   // база старше этой отметки: если в ней есть демо-пользователи, значит демо включали
-  const wasDemo = prev === undefined ? !!q1('SELECT 1 FROM users WHERE is_demo = 1 LIMIT 1') : prev === '1';
+  return prev === undefined ? !!q1('SELECT 1 FROM users WHERE is_demo = 1 LIMIT 1') : prev === '1';
+}
+export function leaveDemoMode() {
+  const wasDemo = demoBase();
   if (!DEMO && wasDemo) {
     for (const table of ['sessions', 'login_codes', 'known_devices', 'push_subs', 'push_devices']) run(`DELETE FROM ${table}`);
     console.warn('Демо-режим выключен: все входы, открытые во время демо, закрыты. Демо-аккаунты больше не действуют.');
@@ -134,13 +154,22 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     process.exit(1);
   }
   if (DEMO && PROD) console.warn('ВНИМАНИЕ: демо-режим на сервере в боевой конфигурации — вход под любой ролью открыт всем. Только для показа.');
+  // В демо любой посетитель мог стать администратором и выдать кому угодно «проверено», баланс и тариф. Такую базу
+  // боевой не делаем: настоящие пользователи начинают с чистой. Установщик при выключении демо сам убирает её в архив.
+  if (!DEMO && PROD && demoBase() && process.env.DEMO_DATA_KEEP !== '1') {
+    console.error('Сервер не запущен: база создана в демо-режиме, а демо выключено. В ней остались компании, проверки, балансы и объявления, '
+      + 'сделанные когда угодно и кем угодно. Уберите базу демо-стенда (папка данных) и запустите с чистой. '
+      + 'Оставить её осознанно: DEMO_DATA_KEEP=1.');
+    process.exit(1);
+  }
   leaveDemoMode();
   syncAdmins();
   if (DEMO && !q1('SELECT 1 FROM users LIMIT 1')) seed();
   const port = Number(process.env.PORT || 3000);
   housekeeping();
   setInterval(housekeeping, 15 * 60_000).unref();
-  const server = createApp().listen(port);
+  // HOST=127.0.0.1 (так ставит установщик): программа принимает соединения только от веб-сервера на той же машине
+  const server = createApp().listen(port, process.env.HOST || undefined);
   server.on('listening', () => console.log(`Timma: http://localhost:${port}${DEMO ? ' (демо-режим)' : ''}`));
   startTelegram(); // бот с кодами входа; без TELEGRAM_BOT_TOKEN ничего не делает
   server.on('error', (e) => {

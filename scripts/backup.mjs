@@ -1,7 +1,7 @@
 // Резервная копия Timma. Запуск: node scripts/backup.mjs [папка для копий] [--update]
 //
 // Что лежит в папке копий (по умолчанию /var/backups/jolda):
-//   jolda-ГГГГ-ММ-ДД-ЧЧ-ММ.tar.gz         ночная копия: снимок базы (без остановки сервиса) и ключи уведомлений.
+//   jolda-ГГГГ-ММ-ДД-ЧЧ-ММ.tar.gz         ночная копия: снимок базы (без остановки сервиса) и ключи уведомлений сайта.
 //                                         Хранятся последние KEEP_DAYS (14).
 //   jolda-update-ГГГГ-ММ-ДД-ЧЧ-ММ.tar.gz  копия перед обновлением сервера (--update). Хранятся последние KEEP_UPDATES (5)
 //                                         отдельно от ночных: серия обновлений ночные копии не вытесняет.
@@ -14,8 +14,12 @@
 // Итог каждого запуска записывается в <DATA_DIR>/backup-status.json: сервер читает его и предупреждает администратора,
 // если копии перестали создаваться.
 //
+// Чего в копии нет нарочно: действующих входов пользователей, кодов входа и запомненных устройств — тот, кто прочитал
+// копию, не должен входить под чужим именем; после восстановления все входят заново. Нет и ключа Firebase (fcm.json):
+// он даёт рассылать уведомления от имени приложения, а скачать его заново в консоли Firebase — минута.
+//
 // На сервере ночной запуск делает таймер jolda-backup (ставит scripts/install-server.sh).
-// Восстановление: остановить jolda; tar -xzf <копия> -C /var/lib/jolda; cp -an <папка копий>/uploads/. /var/lib/jolda/uploads/;
+// Восстановление (после него все пользователи входят заново): остановить jolda; tar -xzf <копия> -C /var/lib/jolda; cp -an <папка копий>/uploads/. /var/lib/jolda/uploads/;
 // chown -R jolda:jolda /var/lib/jolda; запустить jolda.
 import { DatabaseSync } from 'node:sqlite';
 import { execFileSync } from 'node:child_process';
@@ -70,6 +74,13 @@ try {
   const db = new DatabaseSync(dbFile, { readOnly: true });
   db.exec(`VACUUM INTO '${path.join(tmp, 'jolda.db').replace(/'/g, "''")}'`);
   db.close();
+  // входы, коды и запомненные устройства в копию не идут; VACUUM стирает их следы из файла окончательно
+  const snap = new DatabaseSync(path.join(tmp, 'jolda.db'));
+  snap.exec('PRAGMA secure_delete = ON');
+  const have = new Set(snap.prepare(`SELECT name FROM sqlite_master WHERE type = 'table'`).all().map((r) => r.name));
+  for (const table of ['sessions', 'login_codes', 'known_devices', 'push_subs', 'push_devices']) if (have.has(table)) snap.exec(`DELETE FROM ${table}`);
+  snap.exec('VACUUM');
+  snap.close();
   const check = new DatabaseSync(path.join(tmp, 'jolda.db'), { readOnly: true });
   const verdict = check.prepare('PRAGMA quick_check').get();
   check.close();
@@ -77,7 +88,7 @@ try {
 
   const stamp = status.at.slice(0, 16).replace(/[:T]/g, '-');
   const file = path.join(OUT, `jolda-${UPDATE ? 'update-' : ''}${stamp}.tar.gz`);
-  const keys = ['vapid.json', 'fcm.json'].filter((f) => fs.existsSync(path.join(DATA, f)));
+  const keys = ['vapid.json'].filter((f) => fs.lstatSync(path.join(DATA, f), { throwIfNoEntry: false })?.isFile());
   execFileSync('tar', ['-czf', `${file}.part`, '-C', tmp, 'jolda.db', ...keys.flatMap((f) => ['-C', DATA, f])]);
   fs.chmodSync(`${file}.part`, 0o600);
   fs.renameSync(`${file}.part`, file); // недописанный архив копией не считается
@@ -128,12 +139,17 @@ try {
   // итог — для сервера. Неудачная копия перед обновлением ночную отметку не портит: её и так видно в выводе установщика
   try {
     const statusFile = path.join(DATA, 'backup-status.json');
-    const prev = fs.existsSync(statusFile) ? JSON.parse(fs.readFileSync(statusFile, 'utf8')) : {};
+    // копию делает администратор сервера, а папка данных принадлежит программе сайта: по ссылке, подложенной вместо
+    // файла, ничего не читаем и не пишем
+    const regular = fs.lstatSync(statusFile, { throwIfNoEntry: false })?.isFile();
+    const prev = regular ? JSON.parse(fs.readFileSync(statusFile, 'utf8')) : {};
     const lastOk = status.ok ? status.at : prev.lastOk || null;
     // состояние отправки на вторую площадку меняет только ночная копия
     const remote = UPDATE ? { remote: prev.remote ?? status.remote, remoteError: prev.remoteError } : {};
-    fs.writeFileSync(statusFile, JSON.stringify({ ...status, ...remote, lastOk }, null, 1));
-    fs.chmodSync(statusFile, 0o644);
+    fs.rmSync(statusFile, { force: true });
+    fs.writeFileSync(statusFile, JSON.stringify({ ...status, ...remote, lastOk }, null, 1), { flag: 'wx', mode: 0o640 }); // wx по ссылке не пишет
+    const owner = fs.statSync(DATA);
+    if (process.getuid?.() === 0) fs.chownSync(statusFile, owner.uid, owner.gid);
   } catch (e) {
     console.error(`Не удалось записать итог копии: ${e.message}`);
   }

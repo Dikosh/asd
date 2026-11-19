@@ -91,9 +91,8 @@ export default function extraRoutes(app) {
       members: q(`SELECT id, name, phone, email, role, company_role AS companyRole, id = :u AS me FROM users WHERE company_id = :c AND is_admin = 0 OR id = :u ORDER BY id`, {
         c: req.user.company_id, u: req.user.id,
       }).map((m) => ({ ...m, me: !!m.me })),
-      // existing — у человека уже есть аккаунт: он должен принять приглашение, а не просто войти
-      invites: q('SELECT id, phone, name, role, created_at AS createdAt, user_id IS NOT NULL AS existing FROM invites WHERE company_id = ? ORDER BY id DESC', req.user.company_id)
-        .map((i) => ({ ...i, existing: !!i.existing })),
+      // есть ли у приглашённого аккаунт, список не сообщает: иначе приглашениями можно проверять чужую клиентскую базу
+      invites: q('SELECT id, phone, name, role, created_at AS createdAt FROM invites WHERE company_id = ? ORDER BY id DESC', req.user.company_id),
       // приглашение в другую компанию, адресованное мне
       myInvite: q1('SELECT i.id, i.role, c.name AS companyName, c.form AS companyForm FROM invites i JOIN companies c ON c.id = i.company_id WHERE i.phone = ?', req.user.phone) || null,
     });
@@ -134,7 +133,7 @@ export default function extraRoutes(app) {
     res.json({ ok: true });
   });
   app.post('/api/team/invite', auth, L.owner, (req, res) => {
-    const b = parse(z.object({ phone: z.string(), name: z.string().trim().max(100).default(''), role: z.enum(['manager', 'driver']).default('manager') }), req.body);
+    const b = parse(z.object({ phone: z.string(), name: z.string().trim().max(100).refine((v) => !v || L.nameOk(v), 'Допустимы только буквы, цифры, пробелы и знаки . , - « » ( ) & № /').default(''), role: z.enum(['manager', 'driver']).default('manager') }), req.body);
     const phone = L.normPhone(b.phone);
     const existing = q1('SELECT id, company_id FROM users WHERE phone = ?', phone);
     if (existing?.company_id === req.user.company_id) throw bad('exists', 'Этот человек уже в вашей команде', 409);
@@ -146,13 +145,21 @@ export default function extraRoutes(app) {
       throw limit < L.PLAN.pro.seats
         ? L.tbad('seats', 'На вашем тарифе доступно мест: {n}. Тариф Pro расширяет команду до {max}.', { n: limit, max: L.PLAN.pro.seats }, 402)
         : L.tbad('seats', 'В команде может быть не больше {n} человек', { n: limit }, 402);
+    // приглашение — это уведомление чужому человеку с названием компании: без предела им можно засыпать кого угодно.
+    // Считаются только состоявшиеся приглашения: отменил и пригласил заново — не больше двух раз в сутки на номер
+    L.rateLimit('invite:' + req.user.company_id, 15, 3600_000, 'Слишком много приглашений за час — попробуйте позже');
+    L.rateLimit(`invite:${req.user.company_id}:${phone}`, 2, 86400_000, 'Этот номер вы уже приглашали сегодня');
     const inviteId = insert('INSERT INTO invites(company_id, phone, name, role, user_id) VALUES(?, ?, ?, ?, ?)', req.user.company_id, phone, b.name, b.role, existing?.id ?? null);
     // у человека уже есть аккаунт — он сам решает, переходить ли в компанию
     if (existing) {
       const c = q1('SELECT name, form FROM companies WHERE id = ?', req.user.company_id);
       notify(existing.id, { kind: 'system', title: 'Вас пригласили в компанию «{name}»', vars: { name: c.form ? `${c.form} ${c.name}` : c.name }, body: 'Откройте «Команда», чтобы принять или отклонить приглашение', link: '/cabinet/team' });
     }
-    res.json({ id: inviteId, existing: !!existing });
+    // владельцы узнают о приглашении на всех своих устройствах: чужой вход в аккаунт нельзя тихо закрепить «своим» номером
+    const owners = q(`SELECT id FROM users WHERE company_id = ? AND company_role = 'owner'`, req.user.company_id).map((u) => u.id);
+    notify(owners, { kind: 'system', title: 'В команду приглашён новый человек', body: 'Номер {phone}. Если это сделали не вы, отмените приглашение в разделе «Команда» и выйдите на всех устройствах.', vars: { phone }, link: '/cabinet/team' });
+    // зарегистрирован ли номер, ответ не сообщает: иначе по нему можно проверять чужую клиентскую базу
+    res.json({ id: inviteId });
   });
   app.delete('/api/team/invites/:id', auth, L.owner, (req, res) => {
     if (!run('DELETE FROM invites WHERE id = ? AND company_id = ?', id(req), req.user.company_id).changes) throw bad('not_found', 'Приглашение не найдено', 404);
@@ -237,6 +244,7 @@ export default function extraRoutes(app) {
 
   // ---------- статистика цен по направлениям ----------
   app.get('/api/stats/prices', auth, (req, res) => {
+    L.browseLimit(req);
     const body = L.BODY.includes(req.query.body) ? req.query.body : null;
     const kind = req.query.kind === 'truck' ? 'truck' : 'cargo';
     const rows = priceSamples(kind, { bodyType: body });
@@ -268,6 +276,11 @@ export default function extraRoutes(app) {
 
   // ---------- калькуляторы ----------
   app.get('/api/tools/route', auth, async (req, res) => {
+    // расчёт отдаёт рыночную ставку по направлению: без предела по нему собирается вся таблица цен
+    if (!req.user.is_admin) {
+      L.rateLimit('route:' + req.user.id, 20, 60_000, 'Слишком много запросов, подождите минуту');
+      L.rateLimit('route-h:' + req.user.id, 200, 3600_000);
+    }
     const points = String(req.query.points || '').split(',').map((p) => cityById.get(p)).filter(Boolean);
     if (points.length < 2 || points.length > 8) throw bad('validation', 'Укажите от двух до восьми пунктов');
     const r = await route(points);

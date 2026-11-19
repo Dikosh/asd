@@ -15,7 +15,7 @@ export interface Listing {
   brand: string; bodyType: string | null; cargoType: string | null; weight: number | null; volume: number | null; loading: string[];
   dateFrom: string; dateTo: string; payTerms: string[]; rate: number | null; currency: string; description: string; distanceKm: number;
   international: boolean; boosted: boolean; boostedUntil?: string | null; createdAt: string; tripId: number | null; company: Company;
-  user: { id: number; name: string; phone: string | null }; mine: boolean; mark: { marked: boolean; note: string; hidden: boolean };
+  user: { id: number; name: string; phone: string | null; hasPhone?: boolean }; contactLimit?: boolean; mine: boolean; mark: { marked: boolean; note: string; hidden: boolean };
   adrClass: number | null; flags: string[]; views: number; partner: boolean; blocked: boolean; countries: string[];
   responsesCount: number; myResponse: { id: number; status: string } | null; match?: { score: number; detourKm: number }; detourKm?: number;
   trucks: number; booked: number; full: boolean; loadAddress: string; unloadAddress: string; loadTime: string; vehicleKind: string | null; licenses: string[];

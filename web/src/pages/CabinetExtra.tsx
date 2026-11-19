@@ -53,7 +53,7 @@ export function Team() {
             <div className="card line team-line" key={`i${i.id}`}>
               <UserPlus size={22} className="line-icon muted" />
               <div className="grow"><b>{i.name || i.phone}</b><div className="muted small">{i.name ? `${i.phone} · ` : ''}{t(TEAM_ROLE[i.role] || 'Сотрудник')} · {t('приглашён {d}', { d: fmtDate(i.createdAt) })}</div></div>
-              <span className="status">{i.existing ? t('Ждём, пока примет приглашение') : t('Ждём первого входа')}</span>
+              <span className="status">{t('Ждём, пока примет приглашение')}</span>
               {owner && <button className="icon-btn" aria-label={t('Отменить приглашение')} onClick={async () => (await act(() => api(`/team/invites/${i.id}`, 'DELETE'))) && reload()}><Trash2 size={17} /></button>}
             </div>
           ))}

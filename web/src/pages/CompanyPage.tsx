@@ -8,7 +8,7 @@ import { ComplaintModal, ContactButtons, ListingCard } from '../listing';
 
 type Full = Company & {
   bin: string | null; binValid: boolean; about: string; cityId: string | null; since: string; mine: boolean; isPartner: boolean; isBlocked: boolean; hadDeal: boolean; vehicles: number; documents: string[];
-  contacts: { name: string; phone: string; role: string }[];
+  contacts: { name: string; phone: string; role: string }[]; contactLimit?: boolean;
   reviewList: { rating: number; text: string; createdAt: string; author: string; authorId: number }[];
   blacklist: { id: number; reason: string; review: string; reply: string; createdAt: string; author: string; authorId: number; counted: number | boolean }[];
   listings: Listing[];
@@ -81,7 +81,7 @@ export default function CompanyPage() {
           <div className="card stack-s">
             <b>{t('Проверка')}</b>
             <div className="check"><span className={c.verified === 'verified' ? 'ok' : 'no'}><BadgeCheck size={17} /></span>{c.verified === 'verified' ? t('Компания проверена модератором') : t('Компания ещё не прошла проверку документов.')}</div>
-            <div className="check"><span className={c.binValid ? 'ok' : 'no'}><FileCheck2 size={17} /></span>{c.bin ? `${t('БИН')} ${c.bin} — ${c.binValid ? t('контрольный разряд верен') : t('некорректен')}` : t('БИН не указан')}</div>
+            <div className="check"><span className={c.binValid ? (c.verified === 'verified' ? 'ok' : '') : 'no'}><FileCheck2 size={17} /></span>{c.bin ? `${t('БИН')} ${c.bin} — ${c.binValid ? (c.verified === 'verified' ? t('подтверждён документами') : t('указан компанией, документами не подтверждён')) : t('некорректен')}` : t('БИН не указан')}</div>
             {c.documents.map((d) => <div className="check" key={d}><span className="ok"><FileCheck2 size={17} /></span>{t(DOC_L[d])}: {t('Принят').toLowerCase()}</div>)}
             <div className="check"><span className={c.blacklist.length ? 'bad' : 'ok'}><Ban size={17} /></span>{c.blacklist.length ? t('Записей в чёрном списке: {n}', { n: c.blacklist.length }) : t('В чёрном списке не значится')}
               {c.blacklist.length > c.blacklisted && <span className="muted small"> · {t('в индикаторе учитываются только записи от проверенных компаний: {n}', { n: c.blacklisted })}</span>}</div>
@@ -103,12 +103,13 @@ export default function CompanyPage() {
 
           <div className="card stack-s">
             <b>{t('Контакты')}</b>
-            {c.contacts.map((u) => (
-              <div key={u.phone} className="stack-s">
+            {c.contacts.map((u, i) => (
+              <div key={i} className="stack-s">
                 <div>{u.name} <span className="muted small">· {t(ROLE_L[u.role])}</span></div>
-                {!c.mine && <div className="row wrap"><ContactButtons phone={u.phone} /></div>}
+                {!c.mine && u.phone && <div className="row wrap"><ContactButtons phone={u.phone} /></div>}
               </div>
             ))}
+            {c.contactLimit && <p className="form-error">{t('Сегодня вы открыли слишком много контактов. Телефоны появятся завтра.')}</p>}
           </div>
           {!c.mine && (
             <div className="card stack-s">

@@ -286,7 +286,10 @@ export default function ListingPage() {
             {l.company.indicator === 'red' && <div className="form-error">{t('Осторожно: у компании много плохих отзывов или записи в чёрном списке.')}</div>}
             {l.company.verified !== 'verified' && <p className="muted small">{t('Компания ещё не прошла проверку документов.')}</p>}
             <div className="muted small">{t('Контакт')}: {l.user.name}</div>
-            {!l.mine && (l.user.phone ? <div className="row wrap"><ContactButtons full phone={l.user.phone} /></div> : <p className="muted small">{t('Телефон скрыт владельцем — свяжитесь через отклик и чат.')}</p>)}
+            {!l.mine && (l.user.phone ? <div className="row wrap"><ContactButtons full phone={l.user.phone} /></div>
+              : l.contactLimit ? <p className="form-error">{t('Сегодня вы открыли слишком много контактов. Телефон появится завтра, а откликнуться и написать в чат можно уже сейчас.')}</p>
+              : l.status !== 'active' ? <p className="muted small">{t('Объявление закрыто — контакты скрыты.')}</p>
+              : <p className="muted small">{t('Телефон скрыт владельцем — свяжитесь через отклик и чат.')}</p>)}
           </div>
 
           {myTrips.length > 0 && (

@@ -79,6 +79,11 @@ test('первый вход: ссылка на бота → «Поделитьс
   assert.equal(r.data.sent, false);
   const start = /^https:\/\/t\.me\/TimmaTestBot\?start=([A-Za-z0-9_-]+)$/.exec(r.data.telegramUrl)[1];
 
+  // пока бот не отправил код в чат, его никто не видел: даже верный код не принимается — угадывать вслепую нельзя
+  const unseen = q1(`SELECT code FROM login_codes WHERE phone = '+77011112233' ORDER BY rowid DESC LIMIT 1`).code;
+  const early = await me('POST', '/api/auth/verify', { phone: '+77011112233', code: unseen });
+  assert.deepEqual([early.status, early.data.error], [400, 'code_expired']);
+
   sent.length = 0;
   await telegram.handleUpdate(msg(5001, { text: `/start ${start}` }));
   assert.equal(sent.length, 1);

@@ -14,28 +14,15 @@ const PLACES_GZ = zlib.gzipSync(PLACES_JSON);
 
 const { bad, parse } = L;
 
-// Ограничение частоты: сколько раз за окно времени. Устаревшие записи вычищаются, чтобы таблица не росла.
-const attempts = new Map();
-export function rateLimit(key, max, windowMs, message = '') {
-  const t = Date.now();
-  const list = (attempts.get(key) || []).filter((x) => t - x < windowMs);
-  if (list.length >= max) {
-    if (message) throw bad('rate_limit', message, 429);
-    throw L.tbad('rate_limit', 'Слишком много попыток. Попробуйте через {n} мин', { n: Math.max(1, Math.ceil((windowMs - (t - list[0])) / 60_000)) }, 429);
-  }
-  list.push(t);
-  attempts.set(key, list);
-}
-setInterval(() => {
-  const t = Date.now();
-  for (const [k, list] of attempts) if (!list.some((x) => t - x < 3600_000)) attempts.delete(k);
-}, 10 * 60_000).unref();
+// Ограничение частоты запросов — общее для всех разделов, живёт в lib.js.
+export const rateLimit = L.rateLimit;
 
 const CODE_TTL = 5 * 60_000; // сколько живёт код из SMS
 const TG_WAIT = 15 * 60_000; // сколько ждём, пока человек откроет бота в Telegram и поделится номером
 const CODE_TRIES = 5; // неверных вводов на один код — потом нужен новый
 const PHONE_DAY = 10; // кодов на номер в сутки: столько с чужих устройств и столько же со «своих»
-const IP_DAY = 300; // кодов с одного адреса в сутки
+const IP_DAY = 60; // кодов с одного адреса в сутки с устройств, с которых под этим номером ещё не входили
+const SMS_STRANGERS = 0.8; // доля суточного запаса SMS для таких устройств: остаток — тем, кто уже входил
 const SMS_DAY = Number(process.env.SMS_DAILY_MAX ?? 300); // SMS с кодами в сутки на всю площадку (0 — без предела): защита от рассылки за наш счёт
 // На номера каких стран отправляются SMS: коды стран через запятую, `*` — на любые. По умолчанию — страны из списка
 // на экране входа. SMS за границу дороже, и рассылка кодов по чужим странам — прямой способ накрутить расходы.
@@ -144,7 +131,7 @@ export default function authRoutes(app) {
 
   // Витрина для гостей: свежие объявления без контактов и названий компаний. Контакты — после входа.
   app.get('/api/public/listings', (req, res) => {
-    rateLimit('pub:' + req.ip, 60, 60_000);
+    rateLimit('pub:' + L.ip(req), 60, 60_000);
     const rows = q(
       `SELECT l.id, l.kind, l.points, l.body_type, l.cargo_type, l.weight, l.volume, l.date_from, l.date_to, l.rate, l.currency, l.distance_km
        FROM listings l JOIN companies c ON c.id = l.company_id
@@ -168,15 +155,17 @@ export default function authRoutes(app) {
     const viaTelegram = req.body?.via === 'telegram';
     if (viaTelegram && !tgBot()) throw bad('telegram_off', 'Вход через Telegram не подключён', 503);
     rateLimit(`code:${known}:${phone}`, 5, 10 * 60_000);
-    rateLimit('ip:' + req.ip, 100, 10 * 60_000); // за одним адресом мобильного оператора — много людей
+    rateLimit('ip:' + L.ip(req), 100, 10 * 60_000); // за одним адресом мобильного оператора — много людей
     // учётные записи из демо-данных вне демо-режима не действуют
     if (!L.DEMO && q1('SELECT 1 FROM users WHERE phone = ? AND is_demo = 1', phone)) throw bad('forbidden', 'Этот номер недоступен', 403);
     // суточные пределы — про настоящие SMS: в демо-режиме код показывается на экране и ничего не стоит
     if (!L.DEMO) {
       const sent = (where, ...args) => q1(`SELECT COUNT(*) AS n FROM login_codes WHERE ${where} AND created_at > strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 day')`, ...args).n;
-      if (sent('phone = ? AND known = ?', phone, known) >= PHONE_DAY || sent('ip = ?', req.ip) >= IP_DAY) throw bad('rate_limit', 'Слишком много запросов кода за сутки. Попробуйте завтра', 429);
+      // предел на адрес — только для «чужих» устройств: за одним адресом оператора много людей, а свои уже подтверждены
+      if (sent('phone = ? AND known = ?', phone, known) >= PHONE_DAY || (!known && sent('ip = ? AND known = 0', L.ip(req)) >= IP_DAY)) throw bad('rate_limit', 'Слишком много запросов кода за сутки. Попробуйте завтра', 429);
       // общий предел площадки — про деньги: коды через Telegram бесплатны и в него не входят
-      if (!viaTelegram && SMS_DAY && sent(`channel = 'sms'`) >= SMS_DAY) {
+      // один адрес не должен израсходовать запас всей площадки: с незнакомых устройств — не больше его части
+      if (!viaTelegram && SMS_DAY && sent(`channel = 'sms'`) >= (known ? SMS_DAY : Math.ceil(SMS_DAY * SMS_STRANGERS))) {
         console.error(`[sms] за сутки отправлено ${SMS_DAY} кодов входа — отправка приостановлена (предел SMS_DAILY_MAX)`);
         smsLimitAlert();
         if (tgBot()) throw bad('sms_limit', 'Отправка SMS временно приостановлена. Получите код в Telegram', 503);
@@ -194,7 +183,7 @@ export default function authRoutes(app) {
       const link = tgLink(phone);
       // номер уже привязан к чату — код уходит сразу; человек удалил бота — привязываем заново по ссылке
       if (link) {
-        run(`INSERT INTO login_codes(ticket, phone, code, expires, ip, known, channel) VALUES(?, ?, ?, ?, ?, ?, 'tg')`, ticket, phone, code, Date.now() + CODE_TTL, req.ip, known);
+        run(`INSERT INTO login_codes(ticket, phone, code, expires, ip, known, channel) VALUES(?, ?, ?, ?, ?, ?, 'tg')`, ticket, phone, code, Date.now() + CODE_TTL, L.ip(req), known);
         const sent = await tgSendCode(link, code);
         if (sent === 'error') {
           run('DELETE FROM login_codes WHERE ticket = ?', ticket);
@@ -210,13 +199,13 @@ export default function authRoutes(app) {
       // номер ещё не привязан: человек открывает бота по ссылке и делится номером — тогда бот пришлёт этот код
       const start = L.token(24);
       run(`INSERT INTO login_codes(ticket, phone, code, expires, ip, known, channel, tg_start) VALUES(?, ?, ?, ?, ?, ?, 'tg', ?)`,
-        ticket, phone, code, Date.now() + TG_WAIT, req.ip, known, start);
+        ticket, phone, code, Date.now() + TG_WAIT, L.ip(req), known, start);
       L.setCookie(req, res, 'otp', ticket, 1800, '/api/auth');
       return res.json({ ok: true, via: 'telegram', sent: false, telegramUrl: `https://t.me/${tgBot()}?start=${start}` });
     }
-    run('INSERT INTO login_codes(ticket, phone, code, expires, ip, known) VALUES(?, ?, ?, ?, ?, ?)', ticket, phone, code, Date.now() + CODE_TTL, req.ip, known);
+    run('INSERT INTO login_codes(ticket, phone, code, expires, ip, known) VALUES(?, ?, ?, ?, ?, ?)', ticket, phone, code, Date.now() + CODE_TTL, L.ip(req), known);
     try {
-      await sendSms(phone, `Timma: код входа ${code}`);
+      await sendSms(phone, `Timma: код ${code}. Никому его не сообщайте`);
     } catch (e) {
       run('DELETE FROM login_codes WHERE ticket = ?', ticket); // SMS не ушло — в пределы не засчитываем
       throw e;
@@ -227,26 +216,32 @@ export default function authRoutes(app) {
 
   app.post('/api/auth/verify', (req, res) => {
     const phone = L.normPhone(req.body?.phone);
-    rateLimit('verify:' + req.ip, 40, 10 * 60_000);
+    rateLimit('verify:' + L.ip(req), 40, 10 * 60_000);
     // код принимается только от того, кто его запросил: cookie `otp` выдана вместе с кодом
     const ticket = L.cookie(req, 'otp');
     const otp = ticket ? q1('SELECT * FROM login_codes WHERE ticket = ? AND phone = ? AND reg_token IS NULL', ticket, phone) : null;
-    if (!otp || otp.expires < Date.now()) throw bad('code_expired', 'Код устарел, запросите новый');
+    // код из Telegram действует только после того, как бот отправил его в чат: пока человек не поделился номером,
+    // кода никто не видел, и принять его — значит дать постороннему угадывать вслепую
+    if (!otp || otp.expires < Date.now() || otp.tg_start) throw bad('code_expired', 'Код устарел, запросите новый');
     // неверные вводы считаются на сам код: перебор упирается в число кодов на номер, а чужой вход не страдает
     if (otp.attempts >= CODE_TRIES) throw bad('rate_limit', 'Слишком много неверных кодов. Запросите новый код', 429);
     const given = String(req.body?.code || '').trim();
-    const same = given.length === otp.code.length && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(otp.code));
+    const same = /^\d{6}$/.test(given) && given.length === otp.code.length && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(otp.code));
     if (!same) {
       run('UPDATE login_codes SET attempts = attempts + 1 WHERE ticket = ?', ticket);
       throw bad('code_wrong', 'Неверный код');
     }
+    if (otp.channel === 'tg') run(`UPDATE tg_links SET used_at = ? WHERE phone = ?`, L.now(), phone);
     const user = q1('SELECT * FROM users WHERE phone = ?', phone);
     if (user) {
       if (user.is_demo && !L.DEMO) throw bad('forbidden', 'Этот номер недоступен', 403);
       // код использован; строка остаётся — отправленное SMS учтено в суточных пределах
       run('UPDATE login_codes SET code = ?, expires = 0 WHERE ticket = ?', L.token(8), ticket);
       if (ADMIN_PHONES.has(phone) && !user.is_admin) run('UPDATE users SET is_admin = 1 WHERE id = ?', user.id);
+      // вход с устройства, с которого под этим номером ещё не входили, — владелец узнаёт об этом на остальных устройствах
+      const fresh = !knownDevice(req, phone) && !!q1('SELECT 1 FROM sessions WHERE user_id = ? LIMIT 1', user.id);
       L.startSession(req, res, user.id);
+      if (fresh) notify(user.id, { kind: 'system', title: 'Новый вход в аккаунт', body: 'В ваш аккаунт вошли с нового устройства. Если это были не вы, откройте настройки и нажмите «Выйти на всех устройствах».', link: '/cabinet/settings' });
       rememberDevice(req, res, phone);
       L.setCookie(req, res, 'otp', '', 0, '/api/auth');
       return res.json({ ...L.meOut(q1('SELECT * FROM users WHERE id = ?', user.id)), registered: true });
@@ -260,9 +255,9 @@ export default function authRoutes(app) {
 
   const regSchema = z.object({
     regToken: z.string().min(10),
-    name: z.string().trim().min(2).max(100),
+    name: L.safeName(z.string().trim().min(2).max(100)),
     email: z.union([z.literal(''), z.string().trim().email().max(120)]).default(''),
-    companyName: z.string().trim().min(2).max(120).optional(),
+    companyName: L.safeName(z.string().trim().min(2).max(120)).optional(),
     companyForm: z.enum(['ИП', 'ТОО', '']).optional(),
     role: z.enum(L.ROLES).optional(),
     joinInvite: z.boolean().default(false),
@@ -328,7 +323,7 @@ export default function authRoutes(app) {
 
   // Настройки — строго известные ключи: произвольные данные в профиль записать нельзя.
   const meSchema = z.object({
-    name: z.string().trim().min(2).max(100).optional(),
+    name: L.safeName(z.string().trim().min(2).max(100)).optional(),
     email: z.string().trim().email().max(120).optional(),
     settings: z.object({ showPhone: z.boolean(), news: z.boolean(), lang: z.enum(['ru', 'kz', 'en', 'zh']) }).partial().strict().optional(),
   });

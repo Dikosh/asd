@@ -9,6 +9,7 @@ import * as L from './lib.js';
 export const FILE_KINDS = ['photo', 'ttn', 'cmr', 'act', 'invoice', 'waybill', 'other'];
 const MIME = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
 export const MAX_FILE = 5 * 1024 * 1024;
+const DAY_QUOTA = 150 * 1024 * 1024; // сколько компания загружает за сутки: файлы не удаляются, и без предела ими можно занять весь диск
 
 export const fileSchema = z.object({
   kind: z.enum(FILE_KINDS).default('other'),
@@ -36,20 +37,25 @@ export function decodeUpload(b, { images = false, max = MAX_FILE } = {}) {
 export function saveFile(b, { scope, refId, userId, companyId, byDriverLink = false }) {
   const { buf, ext } = decodeUpload(b);
   if (q1('SELECT COUNT(*) AS n FROM files WHERE scope = ? AND ref_id = ?', scope, refId).n >= 100) throw L.bad('limit', 'Слишком много файлов в одном рейсе или чате');
+  if (companyId && q1(`SELECT COALESCE(SUM(size), 0) AS n FROM files WHERE company_id = ? AND created_at > strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 day')`, companyId).n + buf.length > DAY_QUOTA)
+    throw L.bad('limit', 'За сутки загружено слишком много файлов — попробуйте завтра', 429);
+  // имя показывается получателю и по нему телефон выбирает, чем открыть файл: расширение всегда соответствует содержимому
+  b.filename = `${b.filename.replace(/[\u0000-\u001f<>:"/\\|?*]/g, ' ').replace(/\.[A-Za-z0-9]{1,6}$/, '').trim() || 'file'}.${ext}`;
   const name = `${scope}-${L.token(16)}.${ext}`;
-  fs.writeFileSync(path.join(UPLOAD_DIR, name), buf);
+  fs.writeFileSync(path.join(UPLOAD_DIR, name), buf, { mode: 0o600 });
   return insert(
     'INSERT INTO files(scope, ref_id, user_id, company_id, kind, filename, mime, path, size, note, by_driver_link) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     scope, refId, userId, companyId, b.kind, b.filename, b.mime, name, buf.length, b.note, byDriverLink ? 1 : 0,
   );
 }
 
-/** Отдать файл: картинки и PDF открываются в браузере, остальное не допускается при загрузке. */
+/** Отдать файл: картинки открываются в браузере, PDF скачивается, остальное не допускается при загрузке. */
 export function sendFile(res, f) {
   const file = path.join(UPLOAD_DIR, path.basename(f.path));
   if (!fs.existsSync(file)) throw L.bad('not_found', 'Файл не найден', 404);
   res.setHeader('Content-Type', f.mime);
-  res.setHeader('Content-Disposition', `inline; filename*=UTF-8''${encodeURIComponent(f.filename)}`);
+  // PDF скачивается, а не открывается на адресе площадки: «счёт на предоплату» от мошенника не должен выглядеть её страницей
+  res.setHeader('Content-Disposition', `${f.mime === 'application/pdf' ? 'attachment' : 'inline'}; filename*=UTF-8''${encodeURIComponent(f.filename)}`);
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Cache-Control', 'private, max-age=86400');
   fs.createReadStream(file).on('error', () => res.destroy()).pipe(res);

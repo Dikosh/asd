@@ -4,6 +4,7 @@ import path from 'node:path';
 import { z } from 'zod';
 import { q, q1, run, insert, tx, UPLOAD_DIR } from '../db.js';
 import { cityById, isValidBin } from '../geo.js';
+import { contactAllowed } from '../contacts.js';
 import * as L from '../lib.js';
 import { notify } from '../notify.js';
 
@@ -16,9 +17,13 @@ const optNum = (max) => z.number().min(0).max(max).nullable().optional();
 const dealBetween = (a, b) =>
   q1(`SELECT id FROM trips WHERE ${L.DEAL_DONE_SQL} AND ((customer_company = :a AND carrier_company = :b) OR (customer_company = :b AND carrier_company = :a)) LIMIT 1`, { a, b });
 
+const JOBS_ACTIVE = 5; // объявлений о работе у компании одновременно
+const JOBS_DAY = 3; // и новых в сутки
+
 export default function companyRoutes(app) {
   // ---------- каталог компаний ----------
   app.get('/api/companies', auth, (req, res) => {
+    L.browseLimit(req);
     const term = `%${String(req.query.q || '').trim()}%`;
     const kind = L.ROLES.includes(req.query.kind) ? req.query.kind : null;
     res.json(
@@ -33,8 +38,14 @@ export default function companyRoutes(app) {
   app.get('/api/companies/:id', auth, (req, res) => {
     const c = q1('SELECT * FROM company_stats WHERE id = ?', id(req));
     if (!c) throw bad('not_found', 'Компания не найдена', 404);
+    // контакты сотрудников — в пределах суточного счёта (server/contacts.js); своя компания и партнёры по сделкам — всегда
+    const mine = c.id === req.user.company_id;
+    if (!mine && !req.user.is_admin) L.rateLimit('card:' + req.user.id, 90, 60_000, 'Слишком много запросов, подождите минуту');
+    const contact = mine || !!q1('SELECT 1 FROM trips WHERE (customer_company = :a AND carrier_company = :b) OR (customer_company = :b AND carrier_company = :a) LIMIT 1', { a: req.user.company_id, b: c.id })
+      || contactAllowed(req.user, `c:${c.id}`);
     res.json({
       ...L.companyOut(c),
+      contactLimit: !contact,
       bin: c.bin,
       binValid: isValidBin(c.bin),
       about: c.about,
@@ -46,7 +57,7 @@ export default function companyRoutes(app) {
       isPartner: !!q1('SELECT 1 FROM partners WHERE company_id = ? AND partner_id = ?', req.user.company_id, c.id),
       isBlocked: !!q1('SELECT 1 FROM blocks WHERE company_id = ? AND blocked_id = ?', req.user.company_id, c.id),
       contacts: q(`SELECT name, phone, role, settings, company_id FROM users WHERE company_id = ? AND is_admin = 0 AND company_role != 'driver' LIMIT 5`, c.id)
-        .map((u) => ({ name: u.name, role: u.role, phone: L.phoneFor(req.user, u) })),
+        .map((u) => ({ name: u.name, role: u.role, phone: contact ? L.phoneFor(req.user, u) : null })),
       vehicles: q1('SELECT COUNT(*) AS n FROM vehicles WHERE company_id = ?', c.id).n,
       documents: q(`SELECT kind FROM documents WHERE company_id = ? AND status = 'approved' GROUP BY kind`, c.id).map((d) => d.kind),
       reviewList: q(
@@ -83,13 +94,15 @@ export default function companyRoutes(app) {
     if (!q1('SELECT 1 FROM companies WHERE id = ?', b.companyId)) throw bad('not_found', 'Компания не найдена', 404);
     if (!dealBetween(req.user.company_id, b.companyId))
       throw bad('no_deal', 'В чёрный список можно внести только компанию, с которой у вас был рейс. Если это мошенники — нажмите «Пожаловаться модератору»', 403);
+    // правка своей записи компанию повторно не уведомляет
+    const again = !!q1('SELECT 1 FROM blacklist WHERE company_id = ? AND author_company = ?', b.companyId, req.user.company_id);
     run(
       `INSERT INTO blacklist(company_id, author_user, author_company, reason, review) VALUES(?, ?, ?, ?, ?)
        ON CONFLICT(company_id, author_company) DO UPDATE SET reason = excluded.reason, review = excluded.review`,
       b.companyId, req.user.id, req.user.company_id, b.reason, b.review,
     );
     L.resetCompanyCache();
-    notify(q('SELECT id FROM users WHERE company_id = ?', b.companyId).map((u) => u.id), {
+    if (!again) notify(q('SELECT id FROM users WHERE company_id = ?', b.companyId).map((u) => u.id), {
       kind: 'system', title: 'О вашей компании появилась запись в чёрном списке', body: 'Вы можете ответить на неё на странице своей компании', link: `/company/${b.companyId}`,
     });
     res.json({ ok: true });
@@ -166,6 +179,8 @@ export default function companyRoutes(app) {
     if (!q1(`SELECT 1 FROM documents WHERE company_id = ? AND kind IN ('registration', 'id_card')`, c.id))
       throw bad('documents', 'Загрузите свидетельство о регистрации или удостоверение личности');
     if (c.verified === 'verified') throw bad('state', 'Компания уже проверена', 409);
+    // каждая новая заявка — уведомление всем модераторам
+    if (c.verified !== 'pending') L.rateLimit('verify:' + c.id, 3, 86400_000, 'Заявку на проверку можно отправить не чаще трёх раз в сутки');
     run(`UPDATE companies SET verified = 'pending', verify_note = '' WHERE id = ?`, c.id);
     L.resetCompanyCache();
     // модераторы узнают о заявке сразу: клиенту обещан ответ в течение рабочего дня. Повторная отправка той же заявки молчит
@@ -230,6 +245,7 @@ export default function companyRoutes(app) {
   app.get('/api/vehicles', auth, (req, res) => res.json(q('SELECT * FROM vehicles WHERE company_id = ? ORDER BY id DESC', req.user.company_id).map(vehicleOut)));
   app.post('/api/vehicles', auth, (req, res) => {
     const b = parse(vehicleSchema, req.body);
+    if (q1('SELECT COUNT(*) AS n FROM vehicles WHERE company_id = ?', req.user.company_id).n >= 300) throw L.tbad('limit', 'В списке может быть не больше {n} машин', { n: 300 }, 429);
     res.json({ id: insert('INSERT INTO vehicles(company_id, brand, plate, body_type, weight, volume, loading) VALUES(?, ?, ?, ?, ?, ?, ?)',
       req.user.company_id, b.brand, b.plate, b.bodyType ?? null, b.weight ?? null, b.volume ?? null, JSON.stringify(b.loading)) });
   });
@@ -265,6 +281,7 @@ export default function companyRoutes(app) {
   });
   app.post('/api/employees', auth, (req, res) => {
     const b = parse(employeeSchema, req.body);
+    if (q1('SELECT COUNT(*) AS n FROM employees WHERE company_id = ?', req.user.company_id).n >= 300) throw L.tbad('limit', 'В списке может быть не больше {n} сотрудников', { n: 300 }, 429);
     if (b.phone && q1('SELECT 1 FROM employees WHERE company_id = ? AND phone = ?', req.user.company_id, b.phone)) throw bad('exists', 'Этот человек уже есть в «Сотрудниках»', 409);
     res.json({ id: insert('INSERT INTO employees(company_id, name, phone, position, license_cats, experience, esutd, esutd_number) VALUES(?, ?, ?, ?, ?, ?, ?, ?)',
       req.user.company_id, b.name, b.phone, b.position, b.licenseCats, b.experience ?? null, b.esutd, b.esutdNumber) });
@@ -312,25 +329,38 @@ export default function companyRoutes(app) {
   });
   app.get('/api/jobs', auth, (req, res) => {
     const kind = req.query.kind === 'resume' ? 'resume' : 'vacancy';
+    // список с телефонами: человеку столько запросов не нужно, а сбор базы замедляется
+    L.browseLimit(req);
     res.json(
       q(
         `SELECT j.id, j.kind, j.title, j.city_id AS cityId, j.vehicle, j.license_cats AS licenseCats, j.experience, j.salary, j.date_from AS dateFrom,
            j.description, CASE WHEN j.user_id = :u OR COALESCE(json_extract(u.settings, '$.showPhone'), 1) THEN j.phone END AS phone, j.created_at AS createdAt, j.user_id = :u AS mine, u.name AS userName, c.name AS companyName, c.id AS companyId
          FROM jobs j JOIN users u ON u.id = j.user_id JOIN companies c ON c.id = j.company_id
-         WHERE j.kind = :k AND j.status = 'active' AND (:city IS NULL OR j.city_id = :city) ORDER BY j.id DESC LIMIT 200`,
+         WHERE j.kind = :k AND j.status = 'active' AND c.banned = 0 AND (:city IS NULL OR j.city_id = :city) ORDER BY j.id DESC LIMIT 200`,
         { u: req.user.id, k: kind, city: cityById.has(req.query.city) ? req.query.city : null },
       ).map((r) => ({ ...r, mine: !!r.mine })),
     );
   });
   app.post('/api/jobs', auth, (req, res) => {
     const b = parse(jobSchema, req.body);
+    // те же правила, что у объявлений: заблокированная компания не размещает, раздел нельзя занять одному
+    L.requireActiveCompany(req.user);
+    if (q1(`SELECT COUNT(*) AS n FROM jobs WHERE company_id = ? AND status = 'active'`, req.user.company_id).n >= JOBS_ACTIVE)
+      throw L.tbad('limit', 'Одновременно можно держать не больше {n} объявлений о работе — закройте старые', { n: JOBS_ACTIVE }, 429);
+    if (q1(`SELECT COUNT(*) AS n FROM jobs WHERE company_id = ? AND created_at > strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 day')`, req.user.company_id).n >= JOBS_DAY)
+      throw L.tbad('limit', 'В сутки можно разместить не больше {n} объявлений о работе', { n: JOBS_DAY }, 429);
     res.json({ id: insert(
       `INSERT INTO jobs(kind, user_id, company_id, title, city_id, vehicle, license_cats, experience, salary, date_from, description, phone)
        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       b.kind, req.user.id, req.user.company_id, b.title, b.cityId ?? null, b.vehicle, b.licenseCats, b.experience ?? null, b.salary, b.dateFrom ?? null, b.description, req.user.phone) });
   });
   app.delete('/api/jobs/:id', auth, (req, res) => {
-    run(`UPDATE jobs SET status = 'closed' WHERE id = ? AND user_id = ?`, id(req), req.user.id);
+    // автор закрывает своё, модератор — любое (с записью в журнал)
+    if (req.user.is_admin) {
+      const job = q1(`SELECT title, user_id FROM jobs WHERE id = ? AND status = 'active'`, id(req));
+      if (job && job.user_id !== req.user.id) L.modLog(req.user, 'job_remove', `job:${id(req)}`, job.title);
+      run(`UPDATE jobs SET status = 'closed' WHERE id = ?`, id(req));
+    } else run(`UPDATE jobs SET status = 'closed' WHERE id = ? AND user_id = ?`, id(req), req.user.id);
     res.json({ ok: true });
   });
 }

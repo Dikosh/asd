@@ -40,7 +40,8 @@ function pushMessage(chat, sender, text) {
   if (!due.length) return;
   for (const u of due) lastMsgPush.set(`${chat.id}:${u}`, now);
   const from = q1('SELECT name FROM companies WHERE id = ?', sender.company_id)?.name || sender.name;
-  pushOnly(due, { kind: 'message', title: 'Новое сообщение: {name}', vars: { name: from }, body: text.slice(0, 140), link: `/cabinet/messages/${chat.id}` });
+  // заголовок — всегда от площадки, название отправителя — в тексте: уведомление нельзя выдать за сообщение самой Timma
+  pushOnly(due, { kind: 'message', title: 'Новое сообщение', body: `${from}: ${text}`.slice(0, 160), link: `/cabinet/messages/${chat.id}` });
 }
 /** silent — сообщение, о котором уже есть своё уведомление (текст отклика). */
 function postMessage(chatId, sender, text, fileId = null, { silent = false } = {}) {
@@ -147,6 +148,8 @@ function tripOut(t, viewer, full = false, mode = 'party') {
     const ph = (phone, settings, company) => (t.status === 'active' ? phone : L.phoneFor(viewer, { phone, settings, company_id: company }));
     Object.assign(out.carrier, { phone: ph(t.carrier_phone, t.carrier_settings, t.carrier_company), form: t.carrier_form, bin: t.carrier_bin });
     Object.assign(out.customer, { userName: t.customer_user_name, phone: ph(t.customer_phone, t.customer_settings, t.customer_company), form: t.customer_form, bin: t.customer_bin });
+    // телефон водителя второй стороне нужен только на время рейса
+    if (out.driver && t.status !== 'active' && t.carrier_company !== viewer.company_id) out.driver.phone = '';
     out.chatId = q1('SELECT id FROM chats WHERE listing_id = :l AND ((owner_company = :a AND peer_company = :b) OR (owner_company = :b AND peer_company = :a))',
       { l: t.listing_id, a: t.customer_company, b: t.carrier_company })?.id || null;
   }
@@ -193,10 +196,12 @@ function tripOf(req) {
   if (req.user.company_role === 'driver' && t.driver_user !== req.user.id) throw bad('not_found', 'Рейс не найден', 404);
   return t;
 }
+const DRIVER_LINK_HOURS = 12; // сколько ссылка водителя живёт после окончания рейса (дослать подписанную ТТН)
+const TRACK_LINK_HOURS = 48; // сколько ссылка отслеживания открывается после окончания рейса
 function tripByDriverToken(req) {
   const t = withTerms(q1(`${TRIP_SQL} WHERE t.driver_token = ?`, String(req.params.token)));
-  // ссылка водителя нужна только на время рейса: через сутки после окончания она перестаёт работать
-  if (!t || (t.finished_at && Date.now() - Date.parse(t.finished_at) > 86400_000)) throw bad('not_found', 'Ссылка недействительна', 404);
+  // ссылка водителя нужна только на время рейса: через 12 часов после окончания она перестаёт работать
+  if (!t || (t.finished_at && Date.now() - Date.parse(t.finished_at) > DRIVER_LINK_HOURS * 3600_000)) throw bad('not_found', 'Ссылка недействительна', 404);
   return t;
 }
 
@@ -348,6 +353,10 @@ export default function dealRoutes(app) {
     // компания, которую владелец объявления скрыл, откликнуться не может (ответ тот же, что для закрытого объявления)
     if (q1('SELECT 1 FROM blocks WHERE company_id = ? AND blocked_id = ?', l.company_id, req.user.company_id)) throw bad('not_found', 'Объявление недоступно', 404);
     rateLimit('resp:' + req.user.company_id, 60, 3600_000, 'Слишком много откликов за час — попробуйте позже');
+    // новая или непроверенная компания рассылает отклики в меру: каждый отклик — уведомление чужой компании с её текстом
+    const me = q1('SELECT verified, created_at FROM companies WHERE id = ?', req.user.company_id);
+    if (me.verified !== 'verified' || Date.now() - Date.parse(me.created_at) < 7 * 86400_000)
+      rateLimit('resp-day:' + req.user.company_id, 30, 86400_000, 'Новые и непроверенные компании отправляют не больше 30 откликов в сутки. Пройдите проверку компании, чтобы снять предел');
     if (q1('SELECT COUNT(*) AS n FROM responses WHERE listing_id = ? AND company_id = ?', l.id, req.user.company_id).n >= 3)
       throw bad('limit', 'На это объявление вы уже откликались несколько раз — продолжите разговор в чате', 409);
     const free = freeTrucks(l.id);
@@ -512,6 +521,8 @@ export default function dealRoutes(app) {
         .reverse()
         .map((m) => ({
           id: m.id, senderName: m.senderName, text: m.text, createdAt: m.createdAt, isRead: !!m.isRead, mine: m.companyId === req.user.company_id, me: m.senderId === req.user.id,
+          // warn — в чужом сообщении просят код из SMS или перевод на карту: клиент показывает под ним предупреждение
+          warn: m.companyId !== req.user.company_id && L.scamHint(m.text),
           file: m.f_id ? { id: m.f_id, filename: m.f_name, mime: m.f_mime, kind: m.f_kind, size: m.f_size } : null,
         })),
     );
@@ -588,10 +599,12 @@ export default function dealRoutes(app) {
   // Публичная ссылка отслеживания — без входа и без контактов сторон.
   app.get('/api/track/:token', (req, res) => {
     const t = withTerms(q1(`${TRIP_SQL} WHERE t.track_token = ?`, String(req.params.token)));
-    // ссылка действует, пока идёт рейс, и ещё неделю после него
+    // ссылка действует, пока идёт рейс, и ещё двое суток после него
     // сорванный рейс получателю не показываем: машина к нему не едет
-    if (!t || t.status === 'failed' || (t.finished_at && Date.now() - Date.parse(t.finished_at) > 7 * 86400_000)) throw bad('not_found', 'Ссылка недействительна', 404);
+    if (!t || t.status === 'failed' || (t.finished_at && Date.now() - Date.parse(t.finished_at) > TRACK_LINK_HOURS * 3600_000)) throw bad('not_found', 'Ссылка недействительна', 404);
     const out = tripOut(t, null, true, 'public');
+    // что именно и сколько везёт машина, по ссылке не видно: утёкшая ссылка не должна быть наводкой
+    Object.assign(out, { cargoType: null, weight: null, volume: null });
     // получателю хватает маршрута, этапа и положения машины: ни цены, ни заказчика, ни ссылок на объявление.
     // Название перевозчика нужно, чтобы узнать машину на погрузке.
     delete out.listingId;
@@ -651,6 +664,8 @@ export default function dealRoutes(app) {
   app.post('/api/trips/:id/assign', auth, staff, (req, res) => {
     const t = carrierOnly(req);
     const b = parse(assignSchema, req.body);
+    // каждая замена — уведомление заказчику и водителю: повторами их не засыпать
+    L.rateLimit('assign:' + t.id, 10, 3600_000);
     if (t.status !== 'active') throw bad('state', 'Рейс уже завершён', 409);
     if (L.STAGES.indexOf(t.stage) >= L.STAGES.indexOf('in_transit')) throw bad('state', 'Груз уже в пути — машину и водителя заменить нельзя', 409);
     let { brand, plate } = b;
@@ -672,7 +687,8 @@ export default function dealRoutes(app) {
     if (!reloc && plate.length < 4) throw bad('validation', 'Госномер: укажите номер машины', 400);
     if (!brand && reloc) brand = t.vehicle_brand || t.l_brand || '';
     if (!brand) throw bad('validation', 'Марка: укажите марку машины', 400);
-    if (driverName.length < 2) throw bad('validation', 'Водитель: укажите имя водителя', 400);
+    // имя попадает в уведомление заказчику — те же правила, что для имён на площадке
+    if (driverName.length < 2 || (!driverUser && !L.nameOk(driverName))) throw bad('validation', 'Водитель: укажите имя водителя', 400);
     driverPhone = L.normPhone(driverPhone);
     const first = !t.confirmed_at;
     run(`UPDATE trips SET vehicle_brand = ?, plate = ?, trailer_plate = ?, driver_user = ?, driver_name = ?, driver_phone = ?, confirmed_at = COALESCE(confirmed_at, ?) WHERE id = ?`,

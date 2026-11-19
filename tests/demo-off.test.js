@@ -128,6 +128,20 @@ test('очистка базы (npm run seed -- --reset) проходит до к
   assert.deepEqual(JSON.parse(check.stdout.trim()), [users, 0, 0]);
 });
 
+test('база демо-стенда боевой не становится: без демо сервер на ней не запускается, пока её не убрали', () => {
+  const e = env({});
+  // база после показа: отметка «демо» стоит, демо выключено
+  const mark = spawnSync(process.execPath, ['-e', `
+    const { run } = await import(${JSON.stringify(new URL('../server/db.js', import.meta.url).href)});
+    run("INSERT INTO app_state(key, value) VALUES('demo', '1')");
+  `, '--input-type=module'], { env: e, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(mark.status, 0, mark.stderr);
+  const r = spawnSync(process.execPath, [entry], { env: e, encoding: 'utf8', timeout: 20_000 });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /база создана в демо-режиме/);
+  assert.match(r.stderr, /DEMO_DATA_KEEP=1/);
+});
+
 test('демо на боевом сервере без подтверждения не запускается', () => {
   const r = spawnSync(process.execPath, [entry], { env: env({ DEMO_MODE: '1' }), encoding: 'utf8', timeout: 20_000 });
   assert.equal(r.status, 1);

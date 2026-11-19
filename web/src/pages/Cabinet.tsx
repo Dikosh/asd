@@ -2,13 +2,13 @@
 import { Fragment, ReactNode, useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
-  ArrowLeft, BadgeCheck, BarChart3, Ban, Bookmark, Briefcase, Building2, Calculator, ChevronRight, FileText, Handshake, Inbox, LifeBuoy, LogOut, MessageSquare, Paperclip, Pencil, Plus,
+  ArrowLeft, BadgeCheck, BarChart3, Ban, Bookmark, Briefcase, Building2, Calculator, ChevronRight, FileText, Flag, Handshake, Inbox, LifeBuoy, LogOut, MessageSquare, Paperclip, Pencil, Plus,
   Route as RouteIcon, Search, Send, Settings, ShieldCheck, Trash2, TrendingUp, Truck, Upload, UserRound, Users, UsersRound, Wallet,
 } from 'lucide-react';
 import { api, companyTitle, BODY_L, Company, DOC_L, fmtDate, fmtStamp, fmtTime, fmtWhen, KIND_L, LOADING_L, Me, money, num, opts, prepareUpload, ROLE_L, t, Trip, useApp, useEvent, useLoad } from '../core';
 import { Chips, CitySelect, CompanyBadge, Empty, Field, LangSwitch, Loading, Modal, Select, Tabs, ReasonModal } from '../ui';
 import { TripSummary } from './TripPage';
-import { ContactButtons } from '../listing';
+import { ComplaintModal, ContactButtons } from '../listing';
 import { AdminExtra, Partners, PlanCard, Team } from './CabinetExtra';
 import { PushToggle } from './Notifications';
 import MetricsTab from './Metrics';
@@ -282,6 +282,7 @@ function Messages({ chatId }: { chatId: number | null }) {
   };
   // фото груза, техпаспорт, реквизиты — файлом прямо в переписку
   const [sending, setSending] = useState(false);
+  const [complain, setComplain] = useState(false);
   const attach = async (f: File) => {
     setSending(true);
     await act(async () => api(`/chats/${chatId}/files`, 'POST', await prepareUpload(f)));
@@ -312,7 +313,9 @@ function Messages({ chatId }: { chatId: number | null }) {
               </div>
             )}
             {chat?.peerPhone && <div className="row chat-contacts"><ContactButtons phone={chat.peerPhone} /></div>}
+            {chat && <button className="icon-btn" onClick={() => setComplain(true)} aria-label={t('Пожаловаться')} title={t('Пожаловаться')}><Flag size={18} /></button>}
           </header>
+          {complain && chat && <ComplaintModal companyId={chat.peerCompanyId} onClose={() => setComplain(false)} />}
           {msgs.error && <Empty icon={<MessageSquare size={26} />} title={t('Чат не найден')} text={t('Возможно, он принадлежит другой компании или ссылка устарела.')}><Link to="/cabinet/messages" className="btn soft">{t('Все сообщения')}</Link></Empty>}
           <div className="chat-msgs">
             {moreOld && all.length >= 300 && <button className="btn ghost small-btn center-btn" onClick={loadOlder}>{t('Показать более ранние сообщения')}</button>}
@@ -328,6 +331,7 @@ function Messages({ chatId }: { chatId: number | null }) {
                     ? <a className="msg-file" href={`/api/files/${m.file.id}`} target="_blank" rel="noreferrer"><img src={`/api/files/${m.file.id}`} alt={m.file.filename} loading="lazy" /></a>
                     : <a className="msg-file doc" href={`/api/files/${m.file.id}`} target="_blank" rel="noreferrer"><FileText size={16} /> {m.file.filename}</a>
                 ) : <p>{m.text}</p>}
+                {m.warn && <div className="msg-warn">{t('Осторожно: сотрудники Timma не просят код из SMS и переводы на карту. Не отправляйте деньги незнакомой компании.')}</div>}
                 <span>{fmtTime(m.createdAt)}{m.mine && (m.isRead ? ' ✓✓' : ' ✓')}</span>
               </div>
               </Fragment>

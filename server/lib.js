@@ -45,7 +45,8 @@ export const MAX_SPEED = 160; // км/ч: быстрее грузовик не �
 export const REVIEW_VISIBLE = `(EXISTS (SELECT 1 FROM reviews o WHERE o.trip_id = r.trip_id AND o.author_company = r.target_company)
   OR r.created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-7 days'))`;
 // Ограничения на объявления одной компании — чтобы один участник не занял всю выдачу и не исказил статистику цен.
-export const LIMITS = { activeFree: 30, activePro: 200, perHour: 20, boostsPro: 10 };
+// contacts*: сколько карточек с контактами компания открывает в сутки (server/contacts.js) — новая и непроверенная / проверенная или на Pro
+export const LIMITS = { activeFree: 30, activePro: 200, perHour: 20, boostsPro: 10, contactsNew: 100, contactsTrusted: 400 };
 
 export class HttpError extends Error {
   constructor(status, code, message) {
@@ -85,7 +86,11 @@ function issueOut(i) {
   const text = RULE_RU[rule].replace('{n}', n);
   return { field, rule, n, message: FIELD_RU[field] ? `${FIELD_RU[field]}: ${text}` : `${field || 'Запрос'}: ${text}` };
 }
+/** Есть ли в запросе непомерно длинный список: проверка схемой обходит каждый элемент, и тысячи элементов надолго занимают сервер. */
+const hugeList = (v, depth = 0) => depth < 6 && v !== null && typeof v === 'object'
+  && (Array.isArray(v) ? v.length > 2000 || v.slice(0, 50).some((x) => hugeList(x, depth + 1)) : Object.values(v).slice(0, 200).some((x) => hugeList(x, depth + 1)));
 export const parse = (schema, data) => {
+  if (hugeList(data)) throw bad('validation', 'Слишком длинный список в запросе');
   const r = schema.safeParse(data ?? {});
   if (!r.success) {
     const first = issueOut(r.error.issues[0]);
@@ -95,6 +100,58 @@ export const parse = (schema, data) => {
   }
   return r.data;
 };
+// Имя человека и название компании видны другим в чате, откликах и уведомлениях. Поэтому в них нельзя: значки и разметку
+// (галочка «проверено», теги страницы) и слова, которыми называет себя только сама площадка, — иначе мошенник пишет
+// от имени «Поддержки Timma».
+const NAME_CHARS = /^[\p{L}\p{M}\p{N} .,\-–—«»"'’()&№/+]+$/u;
+const NAME_RESERVED = /timma|тимма|jolda|жолда|поддержк|модерат|модерац|администра|support|admin|служб\S* безопасност|проверен|verified|официальн|official|қолдау|тексерілген|客服|官方|管理员/i;
+export const nameOk = (v) => NAME_CHARS.test(v) && !NAME_RESERVED.test(v);
+/** Правила для имени человека и названия компании (см. выше) — добавляются к полю схемы. */
+export const safeName = (field) => field
+  .refine((v) => NAME_CHARS.test(v), 'Допустимы только буквы, цифры, пробелы и знаки . , - « » ( ) & № /')
+  .refine((v) => !NAME_RESERVED.test(v), 'Слова «Timma», «поддержка», «модератор», «проверено» и похожие в имени и названии использовать нельзя');
+// Ограничение частоты: сколько раз за окно времени. Устаревшие записи вычищаются, чтобы таблица не росла.
+const attempts = new Map();
+export function rateLimit(key, max, windowMs, message = '') {
+  const t = Date.now();
+  const list = (attempts.get(key) || []).filter((x) => t - x < windowMs);
+  list.w = windowMs;
+  if (list.length >= max) {
+    attempts.set(key, list);
+    if (message) throw bad('rate_limit', message, 429);
+    throw tbad('rate_limit', 'Слишком много попыток. Попробуйте через {n} мин', { n: Math.max(1, Math.ceil((windowMs - (t - list[0])) / 60_000)) }, 429);
+  }
+  list.push(t);
+  attempts.set(key, list);
+}
+setInterval(() => {
+  const t = Date.now();
+  for (const [k, list] of attempts) if (!list.some((x) => t - x < (list.w || 3600_000))) attempts.delete(k);
+}, 10 * 60_000).unref();
+/** Первое ли это действие за окно времени: для счётчиков, которые нельзя накручивать повторными нажатиями. */
+export function firstTime(key, windowMs = 86400_000) {
+  const t = Date.now();
+  if (attempts.get(key)?.some((x) => t - x < windowMs)) return false;
+  const list = [t];
+  list.w = windowMs;
+  attempts.set(key, list);
+  return true;
+}
+/** Предел на просмотр каталогов (компании, услуги, перегонщики, цены): человеку хватает с запасом, сборщику базы — нет. */
+export function browseLimit(req) {
+  if (!req.user.is_admin) rateLimit('dir:' + req.user.id, 60, 60_000, 'Слишком много запросов, подождите минуту');
+}
+/** Адрес посетителя для счётчиков. У IPv6 один абонент владеет целой подсетью /64 — считаем её одним адресом. */
+export function ip(req) {
+  const a = String(req.ip || '');
+  if (!a.includes(':') || a.startsWith('::ffff:')) return a;
+  return a.split(':').slice(0, 4).join(':') + '::/64';
+}
+// Типовые приёмы мошенников в переписке: номер банковской карты, просьба сообщить код из SMS, перевод «на карту».
+// Сообщение не блокируется (ошибиться легко), но получатель видит под ним предупреждение.
+const SCAM = [/(?<!\d)(?:\d[ -]?){15}\d(?!\d)/, /код\S*\s+(?:из|от|с|по|в)\s+(?:смс|sms)|(?:смс|sms)[\s-]*код|код\S*\s+подтвержд|продиктуйте\s+код|назовите\s+код/i,
+  /(?:перев(?:од|ед|ест)\S*|предоплат\S*|аванс\S*|оплат\S*|скин\S*)[^.!?\n]{0,40}\sна\s+карт/i, /kaspi\s*(?:gold|голд)|каспи\s*(?:голд|gold)/i];
+export const scamHint = (text) => SCAM.some((re) => re.test(String(text || '')));
 export const now = () => new Date().toISOString();
 export const token = (n = 24) => crypto.randomBytes(n).toString('base64url');
 export const j = (s, d) => {
@@ -378,14 +435,17 @@ export function hydrate(viewer, light) {
 }
 
 /** Объявления по условию where (именованные параметры), уже в виде JSON для клиента. */
-export function listings(viewer, where, params = {}, tail = 'ORDER BY l.id DESC') {
-  return q(`${LISTING_SQL} WHERE ${where} ${tail}`, { viewer: viewer.id, viewerCompany: viewer.company_id, ...params }).map((r) => listingOut(r, viewer));
+/** `opts.contact` — отдать телефон автора и точные адреса: только для открытой карточки (в списках их нет, см. server/contacts.js). */
+export function listings(viewer, where, params = {}, tail = 'ORDER BY l.id DESC', opts = {}) {
+  return q(`${LISTING_SQL} WHERE ${where} ${tail}`, { viewer: viewer.id, viewerCompany: viewer.company_id, ...params }).map((r) => listingOut(r, viewer, opts));
 }
-export function listingOut(r, viewer) {
+export function listingOut(r, viewer, opts = {}) {
   const points = j(r.points, []);
   const countries = new Set(points.map((id) => cityById.get(id)?.country));
   const [respId, respStatus] = (r.my_response || '').split(':');
   const mine = r.company_id === viewer.company_id;
+  // контакты — автору и в открытой карточке; компании, которую автор скрыл, не отдаются вовсе
+  const contact = mine || (!!opts.contact && !r.is_blocked);
   return {
     id: r.id,
     kind: r.kind,
@@ -421,14 +481,15 @@ export function listingOut(r, viewer) {
     booked: r.booked,
     // все машины найдены — отклики больше не принимаются
     full: r.booked >= r.trucks,
-    loadAddress: r.load_address,
-    unloadAddress: r.unload_address,
+    loadAddress: contact ? r.load_address : '',
+    unloadAddress: contact ? r.unload_address : '',
     loadTime: r.load_time,
     vehicleKind: r.vehicle_kind || null,
     licenses: j(r.licenses, []),
     company: companyOut(r, 'c_'),
     // владелец может скрыть телефон в настройках — тогда связь только через отклик и чат
-    user: { id: r.user_id, name: r.user_name, phone: mine || r.user_show_phone ? r.user_phone : null },
+    // hasPhone — телефон есть и не скрыт: списки показывают это без самого номера
+    user: { id: r.user_id, name: r.user_name, phone: contact && (mine || r.user_show_phone) ? r.user_phone : null, hasPhone: mine || !!r.user_show_phone },
     mine,
     mark: { marked: !!r.m_marked, note: r.m_note || '', hidden: !!r.m_hidden },
     responsesCount: r.responses_count,

@@ -192,7 +192,7 @@ test('команда, тариф Pro и роли в компании', async () 
 
   // приглашение человеку, у которого уже есть аккаунт: он принимает его сам
   const solo = await signIn('+77051110004', { name: 'Ержан Сам', email: 'e@example.com', companyName: 'Сам по себе', companyForm: 'ИП', role: 'driver' });
-  assert.equal((await owner.post('/api/team/invite', { phone: '+77051110004', role: 'driver' })).existing, true);
+  assert.deepEqual(Object.keys(await owner.post('/api/team/invite', { phone: '+77051110004', role: 'driver' })), ['id'], 'есть ли у номера аккаунт, ответ не сообщает');
   assert.equal((await solo.get('/api/me')).company.name, 'Сам по себе', 'без согласия человек остаётся в своей компании');
   assert.equal((await solo.get('/api/team')).myInvite.companyName, 'Команда Тест');
   assert.equal((await solo.get('/api/notifications'))[0].title, 'Вас пригласили в компанию «{name}»');

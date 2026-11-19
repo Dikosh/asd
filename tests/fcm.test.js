@@ -164,7 +164,7 @@ test('сообщение в чате: push собеседнику без зап�
 
   await sender.post(`/api/chats/${chatId}/messages`, { text: 'Когда подадите машину?' });
   await until(() => toPeer().length === 1);
-  assert.deepEqual(toPeer()[0].message.notification, { title: `Новое сообщение: ${sender.me.company.name}`, body: 'Когда подадите машину?' });
+  assert.deepEqual(toPeer()[0].message.notification, { title: 'Новое сообщение', body: `${sender.me.company.name}: Когда подадите машину?` });
   assert.deepEqual(toPeer()[0].message.data, { link: `/cabinet/messages/${chatId}`, kind: 'message', id: '' });
   assert.equal(notifs(), before, 'в список уведомлений сообщения чата не пишутся');
 

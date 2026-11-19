@@ -5,6 +5,7 @@ import { cityById, haversine, routeFit } from '../geo.js';
 import { route } from '../routing.js';
 import { notify } from '../notify.js';
 import { toKzt } from '../rates.js';
+import { contactAllowed } from '../contacts.js';
 import * as L from '../lib.js';
 
 const { bad, parse, auth, staff } = L;
@@ -419,6 +420,9 @@ export default function listingRoutes(app) {
     const b = parse(listingSchema, req.body);
     if (b.dateTo < L.today()) throw bad('validation', 'Период размещения уже прошёл');
     const c = req.user.company_id;
+    // маршрут считается до проверок: между проверкой пределов и записью не должно быть ожидания, иначе одновременные
+    // запросы проходят предел все разом
+    const values = await save(b);
     const cap = q1('SELECT pro FROM company_stats WHERE id = ?', c).pro ? L.LIMITS.activePro : L.LIMITS.activeFree;
     if (q1(`SELECT COUNT(*) AS n FROM listings WHERE company_id = ? AND status = 'active'`, c).n >= cap)
       throw L.tbad('limit', 'Активных объявлений может быть не больше {n}. Закройте неактуальные', { n: cap }, 429);
@@ -437,7 +441,7 @@ export default function listingRoutes(app) {
          date_from, date_to, pay_terms, rate, currency, description, distance_km, adr_class, flags, trucks, load_address, unload_address, load_time,
          vehicle_kind, licenses)
        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      b.kind, req.user.id, req.user.company_id, ...(await save(b)),
+      b.kind, req.user.id, req.user.company_id, ...values,
     );
     res.json({ id });
     try {
@@ -483,6 +487,16 @@ export default function listingRoutes(app) {
       // по объявлению уже был рейс — это история сделки; для новой перевозки объявление размещают заново
       if (q1(`SELECT 1 FROM trips WHERE listing_id = ? AND status IN ('completed', 'failed')`, l.id)) throw bad('state', 'По этому объявлению уже был рейс. Нажмите «Разместить снова»', 409);
       if (l.date_to < L.today()) throw bad('state', 'Срок объявления истёк. Нажмите «Разместить снова»', 409);
+      // те же пределы, что при размещении: возвратом из архива их не обойти
+      if (l.status !== 'active') {
+        const cap = q1('SELECT pro FROM company_stats WHERE id = ?', l.company_id).pro ? L.LIMITS.activePro : L.LIMITS.activeFree;
+        if (q1(`SELECT COUNT(*) AS n FROM listings WHERE company_id = ? AND status = 'active'`, l.company_id).n >= cap)
+          throw L.tbad('limit', 'Активных объявлений может быть не больше {n}. Закройте неактуальные', { n: cap }, 429);
+        if (q1(`SELECT 1 FROM listings WHERE company_id = ? AND status = 'active' AND id != ? AND kind = ? AND points = ? AND date_from = ? AND date_to = ?
+                  AND COALESCE(weight, 0) = ? AND COALESCE(body_type, '') = ? AND COALESCE(cargo_type, '') = ? AND COALESCE(adr_class, 0) = ?`,
+          l.company_id, l.id, l.kind, l.points, l.date_from, l.date_to, l.weight ?? 0, l.body_type ?? '', l.cargo_type ?? '', l.adr_class ?? 0))
+          throw bad('duplicate', 'Такое объявление у вас уже размещено', 409);
+      }
     }
     // у закрытого объявления поднятие в топ снимается: метка «В топе» у него только сбивает с толку
     run(`UPDATE listings SET status = ?, closed_at = ?, boosted_until = CASE WHEN ? = 'active' THEN boosted_until ELSE NULL END WHERE id = ?`, status, status === 'active' ? null : L.now(), status, l.id);
@@ -513,18 +527,30 @@ export default function listingRoutes(app) {
   // ---- карточка ----
   app.get('/api/listings/:id', auth, (req, res) => {
     const id = Number(req.params.id);
-    const own0 = q1('SELECT company_id FROM listings WHERE id = ?', id);
+    const own0 = q1('SELECT company_id, status FROM listings WHERE id = ?', id);
     if (!own0) throw bad('not_found', 'Объявление не найдено', 404);
+    // Контакты автора и точные адреса (server/contacts.js): своё объявление и то, по которому у компании есть отклик
+    // или рейс, открывается всегда; закрытое чужое — без контактов; остальные — в пределах суточного счёта.
+    let contact = true;
+    let contactLimit = false;
     // просмотры считаем по одному на пользователя в день, свои не считаем
     if (own0.company_id !== req.user.company_id) {
+      if (!req.user.is_admin) L.rateLimit('card:' + req.user.id, 90, 60_000, 'Слишком много запросов, подождите минуту');
+      const c = req.user.company_id;
+      const related = !!q1('SELECT 1 FROM responses WHERE listing_id = ? AND company_id = ? LIMIT 1', id, c)
+        || !!q1('SELECT 1 FROM trips WHERE listing_id = ? AND (customer_company = ? OR carrier_company = ?) LIMIT 1', id, c, c);
+      if (!related) {
+        if (own0.status !== 'active') contact = false;
+        else if (!contactAllowed(req.user, `l:${id}`)) contact = !(contactLimit = true);
+      }
       const first = run('INSERT OR IGNORE INTO listing_views(listing_id, user_id, day) VALUES(?, ?, ?)', id, req.user.id, L.today()).changes;
       if (first) run('UPDATE listings SET views = views + 1 WHERE id = ?', id);
     }
-    const [l] = L.listings(req.user, 'l.id = :id', { id });
+    const [l] = L.listings(req.user, 'l.id = :id', { id }, '', { contact });
     const market = marketRate(l.kind, { exceptId: l.id, bodyType: l.bodyType, km: l.distanceKm, weight: l.weight, fromId: l.fromId, toId: l.toId });
     // ставка этого объявления в тенге за километр — для сравнения с рынком в любой валюте
     if (market && l.rate && l.distanceKm) market.perKm = Math.round(toKzt(l.rate, l.currency) / l.distanceKm);
-    const out = { ...l, market, matches: l.mine && l.status === 'active' ? matchesFor(req.user, l) : [] };
+    const out = { ...l, contactLimit, market, matches: l.mine && l.status === 'active' ? matchesFor(req.user, l) : [] };
     // рейсы по объявлению: владельцу — все, остальным — только свои
     out.trips = q(
       `SELECT t.id, t.status, t.stage, t.plate, t.vehicle_brand AS vehicleBrand, t.driver_name AS driverName, t.confirmed_at IS NOT NULL AS confirmed,

@@ -394,6 +394,13 @@ div.line:not(.card) { padding: 10px 0; border-top: 1px solid var(--line); }
 .chat-last { font-size: 13px; color: var(--ink2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .chat-box { padding: 0; gap: 0; height: calc(100vh - 150px); min-height: 420px; }
 .chat-box > header { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.chat-box > header > .grow { min-width: 0; }
+.chat-box > header > .icon-btn { flex: none; }
+@media (max-width: 640px) {
+  .chat-box > header { gap: 2px; padding: 10px 8px; }
+  .chat-box > header .chat-contacts { gap: 4px; }
+  .chat-box > header .chat-contacts .btn { padding-inline: 10px; }
+}
 .chat-msgs { flex: 1; overflow: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; background: #f7f9fc; }
 .msg { max-width: 78%; align-self: flex-start; background: #fff; border: 1px solid var(--line); border-radius: 14px 14px 14px 4px; padding: 8px 12px; }
 .msg p { white-space: pre-line; }
@@ -517,6 +524,7 @@ div.line:not(.card) { padding: 10px 0; border-top: 1px solid var(--line); }
 .card > .status { align-self: flex-start; }
 .msg-author { display: block; font-size: 12px; color: var(--blue-d); }
 .msg.mine .msg-author { color: rgba(255, 255, 255, 0.85); }
+.msg-warn { margin-top: 6px; padding: 7px 10px; border-radius: 8px; background: var(--red-l); color: #a61d20; font-size: 13px; font-weight: 500; }
 .bl-reply { background: #fff; border-left: 3px solid var(--blue); padding: 6px 10px; border-radius: 0 8px 8px 0; font-size: 14px; }
 .rules { gap: 16px; }
 .rules section { display: flex; flex-direction: column; gap: 4px; }

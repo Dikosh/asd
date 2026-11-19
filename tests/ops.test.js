@@ -150,7 +150,15 @@ test('копии перед обновлением хранятся отдель
 });
 
 test('копия восстанавливается; загруженные файлы хранятся один раз и докладываются', () => {
+  // действующий вход, код и ключ Firebase в копию попасть не должны
+  run(`INSERT INTO sessions(token, user_id) VALUES('secret-session-token-for-backup', (SELECT id FROM users LIMIT 1))`);
   const s = backupSandbox();
+  run(`DELETE FROM sessions WHERE token = 'secret-session-token-for-backup'`);
+  fs.writeFileSync(path.join(s.data, 'fcm.json'), '{"private_key":"firebase-secret"}');
+  // вместо файла с итогом подложена ссылка на чужой файл: копия по ней не пишет
+  const victim = path.join(s.dir, 'victim.txt');
+  fs.writeFileSync(victim, 'не трогать');
+  fs.symlinkSync(victim, path.join(s.data, 'backup-status.json'));
   assert.equal(s.backup().status, 0);
   assert.deepEqual(fs.readdirSync(path.join(s.out, 'uploads')), ['ttn.pdf']);
   // в архиве — база и ключи, без загруженных файлов
@@ -173,9 +181,14 @@ test('копия восстанавливается; загруженные фа
   const check = spawnSync(process.execPath, ['-e', `
     const { DatabaseSync } = require('node:sqlite');
     const d = new DatabaseSync(process.argv[1], { readOnly: true });
-    console.log(Object.values(d.prepare('PRAGMA integrity_check').get())[0], d.prepare('SELECT COUNT(*) AS n FROM users').get().n);
+    const n = (t) => d.prepare('SELECT COUNT(*) AS n FROM ' + t).get().n;
+    console.log(Object.values(d.prepare('PRAGMA integrity_check').get())[0], n('users'), n('sessions'), n('login_codes'), n('known_devices'));
   `, path.join(restored, 'jolda.db')], { encoding: 'utf8' });
-  assert.equal(check.stdout.trim(), `ok ${q1('SELECT COUNT(*) AS n FROM users').n}`);
+  assert.equal(check.stdout.trim(), `ok ${q1('SELECT COUNT(*) AS n FROM users').n} 0 0 0`, 'входов, кодов и запомненных устройств в копии нет');
+  assert.ok(!fs.readFileSync(path.join(restored, 'jolda.db')).includes('secret-session-token-for-backup'), 'и следов входа в файле базы не осталось');
+  assert.equal(fs.readFileSync(victim, 'utf8'), 'не трогать');
+  assert.equal(fs.lstatSync(path.join(s.data, 'backup-status.json')).isFile(), true);
+  assert.equal(s.status().ok, true);
   assert.equal(fs.readFileSync(path.join(restored, 'uploads', 'ttn.pdf'), 'utf8'), 'накладная');
 });
 

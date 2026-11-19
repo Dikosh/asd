@@ -199,6 +199,7 @@ addColumn('login_codes', 'tg_start', 'TEXT');
 db.exec(`CREATE TABLE IF NOT EXISTS tg_links(phone TEXT PRIMARY KEY, chat_id INTEGER NOT NULL, lang TEXT NOT NULL DEFAULT 'ru', created_at ${TS});
 CREATE INDEX IF NOT EXISTS tg_links_chat ON tg_links(chat_id);
 CREATE INDEX IF NOT EXISTS login_codes_tg ON login_codes(tg_start) WHERE tg_start IS NOT NULL;`);
+addColumn('tg_links', 'used_at', 'TEXT');
 addColumn('push_subs', 'sid', 'TEXT');
 addColumn('push_devices', 'sid', 'TEXT');
 // служебные отметки сервера между запусками (например, в каком режиме он работал в прошлый раз)

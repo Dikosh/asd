@@ -35,6 +35,7 @@ export default function relocationRoutes(app) {
 
   // Каталог: рядом с выбранным городом (до 300 км) и с нужными правами; сначала ближние, потом с лучшей репутацией
   app.get('/api/relocators', auth, (req, res) => {
+    L.browseLimit(req);
     const city = cityById.get(String(req.query.city || ''));
     const need = String(req.query.lic || '').split(',').filter((x) => L.LICENSES.includes(x));
     const companies = L.companyMap();

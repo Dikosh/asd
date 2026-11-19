@@ -58,7 +58,9 @@ export default function shipperRoutes(app) {
   });
   // переход на сайт компании; администратора не считаем, чтобы не портить статистику для партнёра
   app.post('/api/shippers/:id/open', auth, (req, res) => {
-    if (!req.user.is_admin && !req.user.is_demo) run('UPDATE shippers SET clicks = clicks + 1 WHERE id = ? AND visible = 1', Number(req.params.id));
+    const sid = Number(req.params.id);
+    // один человек — один переход в сутки
+    if (!req.user.is_admin && !req.user.is_demo && L.firstTime(`sh:${req.user.id}:${sid}`)) run('UPDATE shippers SET clicks = clicks + 1 WHERE id = ? AND visible = 1', sid);
     res.json({ ok: true });
   });
 

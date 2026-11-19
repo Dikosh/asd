@@ -421,7 +421,12 @@ export function MapView({ routes, markers, height = 320, fitKey }: { routes: Map
     for (const mk of markers) {
       const icon = L.divIcon({ className: '', html: `<div class="mk mk-${mk.kind}">${mk.kind === 'truck' ? '🚚' : ''}</div>`, iconSize: [28, 28], iconAnchor: [14, 14] });
       const marker = L.marker(mk.pos, { icon, zIndexOffset: mk.kind === 'truck' ? 1000 : 0 }).addTo(g);
-      if (mk.label) marker.bindTooltip(mk.label, { direction: 'top', offset: [0, -10] });
+      if (mk.label) {
+        // подпись — только текстом: строка, переданная в Leaflet как есть, становится разметкой страницы
+        const tip = document.createElement('span');
+        tip.textContent = mk.label;
+        marker.bindTooltip(tip, { direction: 'top', offset: [0, -10] });
+      }
       all.push(mk.pos);
     }
     const key = fitKey ?? String(all.length);
