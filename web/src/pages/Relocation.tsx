@@ -119,7 +119,7 @@ function Drivers() {
               <div className="lcard-foot">
                 <CompanyBadge c={r.company} />
                 {!r.mine && (r.phone
-                  ? <ContactButtons phone={r.phone} text={t('Здравствуйте! Нашёл вас в разделе «Перегон» на Jolda. Нужно перегнать машину.')} />
+                  ? <ContactButtons phone={r.phone} text={t('Здравствуйте! Нашёл вас в разделе «Перегон» на Timma. Нужно перегнать машину.')} />
                   : <span className="muted small">{t('Телефон скрыт — разместите заявку, и перегонщик сможет откликнуться.')}</span>)}
               </div>
             </article>

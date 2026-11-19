@@ -455,7 +455,7 @@ export default function SearchPage() {
         <Modal title={t('Сохранить поиск')} onClose={() => setSaveName(null)}>
           <Field label={t('Название')}><input autoFocus value={saveName} onChange={(e) => setSaveName(e.target.value)} maxLength={80} /></Field>
           <label className="switch"><input type="checkbox" checked={notifyNew} onChange={(e) => setNotifyNew(e.target.checked)} /><span>{t('Сообщать о новых объявлениях по этому поиску')}</span></label>
-          <p className="muted small">{t('Уведомление придёт в уведомления Jolda и push-сообщением на телефон, если разрешить их в разделе «Уведомления».')} <Link to="/notifications">{t('Открыть уведомления')}</Link></p>
+          <p className="muted small">{t('Уведомление придёт в уведомления Timma и push-сообщением на телефон, если разрешить их в разделе «Уведомления».')} <Link to="/notifications">{t('Открыть уведомления')}</Link></p>
           <p className="muted small">{t('Условий в фильтре: {n}', { n: num(active) })}</p>
           <div className="row end">
             <button className="btn ghost" onClick={() => setSaveName(null)}>{t('Отмена')}</button>

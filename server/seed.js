@@ -24,7 +24,7 @@ function makeBin(i) {
 
 const COMPANIES = [
   // name, form, kind, city, контакт, телефон, проверена
-  ['Jolda Модерация', 'ТОО', 'logist', 'astana', 'Администратор', '+77000000000', 'verified'],
+  ['Timma Модерация', 'ТОО', 'logist', 'astana', 'Администратор', '+77000000000', 'verified'],
   ['Астана Трейд', 'ТОО', 'customer', 'astana', 'Айгерим Сапарова', '+77010000001', 'verified'],
   ['Жумабаев Транс', 'ИП', 'carrier', 'karaganda', 'Ерлан Жумабаев', '+77010000002', 'verified'],
   ['Silk Way Logistics', 'ТОО', 'logist', 'almaty', 'Данияр Ахметов', '+77010000003', 'verified'],
@@ -65,7 +65,7 @@ const DEMO_PDF = `%PDF-1.4
 2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj
 3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 420 200]/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj
 4 0 obj<</Length 58>>stream
-BT /F1 18 Tf 40 110 Td (Jolda demo document) Tj ET
+BT /F1 18 Tf 40 110 Td (Timma demo document) Tj ET
 endstream endobj
 5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj
 trailer<</Root 1 0 R>>
@@ -87,7 +87,7 @@ export function seed() {
     // ---- документы проверенных компаний: отметка «Проверена» в демо подкреплена принятыми документами ----
     fs.mkdirSync(UPLOAD_DIR, { recursive: true });
     COMPANIES.forEach(([name, , kind, , , , verified]) => {
-      if (verified !== 'verified' || name === 'Jolda Модерация') return;
+      if (verified !== 'verified' || name === 'Timma Модерация') return;
       for (const [docKind, title] of [['registration', 'Свидетельство о регистрации.pdf'], ...(kind === 'broker' ? [['customs_license', 'Свидетельство таможенного представителя.pdf']] : [])]) {
         const file = `demo-${comp[name]}-${docKind}.pdf`;
         fs.writeFileSync(path.join(UPLOAD_DIR, file), DEMO_PDF);
@@ -96,7 +96,7 @@ export function seed() {
       }
     });
     const carriers = COMPANIES.filter((c) => c[2] === 'carrier').map((c) => c[0]);
-    const customers = COMPANIES.filter((c) => c[2] === 'customer' || (c[2] === 'logist' && c[0] !== 'Jolda Модерация')).map((c) => c[0]);
+    const customers = COMPANIES.filter((c) => c[2] === 'customer' || (c[2] === 'logist' && c[0] !== 'Timma Модерация')).map((c) => c[0]);
 
     // ---- парк машин и сотрудники ----
     carriers.forEach((name, i) => {

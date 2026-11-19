@@ -13,7 +13,7 @@ delete process.env.SMS_WEBHOOK_URL;
 delete process.env.OSRM_URL;
 delete process.env.FCM_SERVICE_ACCOUNT;
 process.env.TELEGRAM_BOT_TOKEN = '123:test';
-process.env.TELEGRAM_BOT_NAME = 'JoldaTestBot';
+process.env.TELEGRAM_BOT_NAME = 'TimmaTestBot';
 process.env.SMS_DAILY_MAX = '1'; // предел SMS на площадку — коды через Telegram в него не входят
 const { createApp } = await import('../server/index.js');
 const { q1, run } = await import('../server/db.js');
@@ -68,7 +68,7 @@ const codeIn = (m) => /(?<!\d)\d{6}(?!\d)/.exec(m.text)?.[0];
 
 test('сервер сообщает, какими путями можно получить код', async () => {
   const meta = await visitor()('GET', '/api/meta');
-  assert.deepEqual(meta.data.login, { sms: false, telegram: 'JoldaTestBot' });
+  assert.deepEqual(meta.data.login, { sms: false, telegram: 'TimmaTestBot' });
 });
 
 test('первый вход: ссылка на бота → «Поделиться номером» → код в чате → вход; код на экран не попадает', async () => {
@@ -77,7 +77,7 @@ test('первый вход: ссылка на бота → «Поделитьс
   assert.equal(r.status, 200);
   assert.deepEqual(Object.keys(r.data).sort(), ['ok', 'sent', 'telegramUrl', 'via']);
   assert.equal(r.data.sent, false);
-  const start = /^https:\/\/t\.me\/JoldaTestBot\?start=([A-Za-z0-9_-]+)$/.exec(r.data.telegramUrl)[1];
+  const start = /^https:\/\/t\.me\/TimmaTestBot\?start=([A-Za-z0-9_-]+)$/.exec(r.data.telegramUrl)[1];
 
   sent.length = 0;
   await telegram.handleUpdate(msg(5001, { text: `/start ${start}` }));
@@ -103,12 +103,12 @@ test('следующие входы: код приходит в чат сраз�
   for (let i = 0; i < 2; i++) {
     const r = await visitor()('POST', '/api/auth/request-code', { phone: '+77011112233', via: 'telegram' });
     // ссылка ведёт прямо в чат с ботом: человеку не нужно искать его самому
-    assert.deepEqual(r.data, { ok: true, via: 'telegram', sent: true, telegramUrl: 'https://t.me/JoldaTestBot' });
+    assert.deepEqual(r.data, { ok: true, via: 'telegram', sent: true, telegramUrl: 'https://t.me/TimmaTestBot' });
   }
   assert.equal(sent.length, 2);
   assert.deepEqual(sent.map((m) => m.chat_id), [5001, 5001]);
   // код размечен так, чтобы в Telegram копироваться одним нажатием
-  assert.match(sent[0].text, /^Код входа в Jolda: <code>\d{6}<\/code>\nНажмите на код, чтобы скопировать/);
+  assert.match(sent[0].text, /^Код входа в Timma: <code>\d{6}<\/code>\nНажмите на код, чтобы скопировать/);
   assert.equal(sent[0].parse_mode, 'HTML');
 });
 
@@ -117,7 +117,7 @@ test('язык бота — из настроек Telegram; привязанно
   await telegram.handleUpdate(msg(5002, { text: '/start' }, 'kk'));
   assert.match(sent[0].text, /Нөмірмен бөлісу/);
   await telegram.handleUpdate(msg(5002, { contact: { phone_number: '+77022223344', user_id: 5002 } }, 'en'));
-  assert.match(sent[1].text, /^Done\. Go back to Jolda/);
+  assert.match(sent[1].text, /^Done\. Go back to Timma/);
   await telegram.handleUpdate(msg(5002, { text: 'привет' }, 'en'));
   assert.match(sent[2].text, /already linked to \+77022223344/);
   assert.deepEqual([telegram.tgLang('zh-hans'), telegram.tgLang('de'), telegram.tgLang(undefined)], ['zh', 'ru', 'ru']);
@@ -130,14 +130,14 @@ test('чужой контакт не принимается: нужен номе
   assert.equal(q1('SELECT chat_id AS c FROM tg_links WHERE phone = ?', '+77011112233').c, 5001, 'связка чужого номера не изменилась');
 });
 
-test('номер Telegram не совпал с введённым в Jolda — код не выдаётся', async () => {
+test('номер Telegram не совпал с введённым в Timma — код не выдаётся', async () => {
   const me = visitor();
   const r = await me('POST', '/api/auth/request-code', { phone: '+77033334455', via: 'telegram' });
   const start = new URL(r.data.telegramUrl).searchParams.get('start');
   sent.length = 0;
   await telegram.handleUpdate(msg(5004, { text: `/start ${start}` }));
   await telegram.handleUpdate(msg(5004, { contact: { phone_number: '+77039990000', user_id: 5004 } }));
-  assert.match(sent[1].text, /не совпадает с номером, который вы ввели в Jolda/);
+  assert.match(sent[1].text, /не совпадает с номером, который вы ввели в Timma/);
   assert.equal(codeIn(sent[1]), undefined);
   assert.ok(q1('SELECT tg_start FROM login_codes WHERE tg_start = ?', start), 'запрос остаётся ждать своего номера');
 });
@@ -146,7 +146,7 @@ test('ссылку из бота нельзя использовать дваж�
   const me = visitor();
   const r = await me('POST', '/api/auth/request-code', { phone: '+77022223344', via: 'telegram' });
   // номер уже привязан (тест выше) — код ушёл сразу; новый запрос для непривязанного номера даёт ссылку
-  assert.deepEqual(r.data, { ok: true, via: 'telegram', sent: true, telegramUrl: 'https://t.me/JoldaTestBot' });
+  assert.deepEqual(r.data, { ok: true, via: 'telegram', sent: true, telegramUrl: 'https://t.me/TimmaTestBot' });
   const fresh = await me('POST', '/api/auth/request-code', { phone: '+77044445566', via: 'telegram' });
   const start = new URL(fresh.data.telegramUrl).searchParams.get('start');
   run(`UPDATE login_codes SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ','now','-20 minutes') WHERE tg_start = ?`, start);
@@ -160,7 +160,7 @@ test('человек удалил бота: связка снимается, в�
   run(`INSERT INTO tg_links(phone, chat_id, lang) VALUES('+77055556677', 403, 'ru')`);
   const r = await visitor()('POST', '/api/auth/request-code', { phone: '+77055556677', via: 'telegram' });
   assert.equal(r.status, 200);
-  assert.match(r.data.telegramUrl, /^https:\/\/t\.me\/JoldaTestBot\?start=/);
+  assert.match(r.data.telegramUrl, /^https:\/\/t\.me\/TimmaTestBot\?start=/);
   assert.equal(q1(`SELECT 1 AS x FROM tg_links WHERE phone = '+77055556677'`), undefined);
 });
 

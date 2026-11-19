@@ -443,7 +443,7 @@ export function Logo() {
         <circle cx="48" cy="20" r="6.5" fill="#e5383b" stroke="#fff" strokeWidth="3" />
         <circle cx="16" cy="44" r="4.5" fill="#fff" />
       </svg>
-      Jolda
+      Timma
     </span>
   );
 }

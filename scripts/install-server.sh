@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Установка или обновление Jolda на чистом сервере Ubuntu 22.04/24.04.
+# Установка или обновление Timma на чистом сервере Ubuntu 22.04/24.04.
 # Запуск под root:
 #   curl -fsSL https://raw.githubusercontent.com/Dikosh/asd/main/scripts/install-server.sh | bash -s -- moindomen.kz
 # Домен необязателен. С доменом сайт будет на https:// с бесплатным сертификатом
@@ -79,7 +79,7 @@ INSECURE=0; [ -z "$DOMAIN" ] && INSECURE=1
 [ -f "$DATA/fcm.json" ] && chown jolda:jolda "$DATA/fcm.json" && chmod 600 "$DATA/fcm.json"
 cat > /etc/systemd/system/jolda.service <<EOF
 [Unit]
-Description=Jolda freight exchange
+Description=Timma freight exchange
 After=network.target
 
 [Service]
@@ -104,7 +104,7 @@ RestartSec=3
 WantedBy=multi-user.target
 EOF
 # свои настройки (SMS_WEBHOOK_URL, TELEGRAM_BOT_TOKEN, ADMIN_PHONE, SUPPORT_PHONE, TILE_URL…) — в /etc/jolda.env
-[ -f /etc/jolda.env ] || printf '# Настройки Jolda, по одной в строке: ИМЯ=значение\n' > /etc/jolda.env
+[ -f /etc/jolda.env ] || printf '# Настройки Timma, по одной в строке: ИМЯ=значение\n' > /etc/jolda.env
 systemctl daemon-reload
 systemctl enable -q jolda
 systemctl restart jolda
@@ -114,7 +114,7 @@ say "Резервные копии и сторож"
 # BACKUP_REMOTE в /etc/jolda.env (адрес для rsync) — отправлять ночную копию ещё и на другой сервер.
 cat > /etc/systemd/system/jolda-backup.service <<EOF
 [Unit]
-Description=Jolda nightly backup
+Description=Timma nightly backup
 
 [Service]
 Type=oneshot
@@ -124,7 +124,7 @@ ExecStart=/usr/bin/node $APP/scripts/backup.mjs /var/backups/jolda
 EOF
 cat > /etc/systemd/system/jolda-backup.timer <<'EOF'
 [Unit]
-Description=Jolda nightly backup
+Description=Timma nightly backup
 
 [Timer]
 OnCalendar=*-*-* 03:30
@@ -144,7 +144,7 @@ EOF
 chmod +x /usr/local/bin/jolda-watchdog
 cat > /etc/systemd/system/jolda-watchdog.service <<'EOF'
 [Unit]
-Description=Jolda watchdog
+Description=Timma watchdog
 
 [Service]
 Type=oneshot
@@ -152,7 +152,7 @@ ExecStart=/usr/local/bin/jolda-watchdog
 EOF
 cat > /etc/systemd/system/jolda-watchdog.timer <<'EOF'
 [Unit]
-Description=Jolda watchdog
+Description=Timma watchdog
 
 [Timer]
 OnBootSec=2min
@@ -186,7 +186,7 @@ ufw --force enable >/dev/null
 say "Проверка"
 for i in $(seq 1 20); do curl -fs localhost:3000/api/meta >/dev/null && break; sleep 1; done
 if curl -fs localhost:3000/api/meta >/dev/null; then
-  echo "Jolda работает."
+  echo "Timma работает."
   if [ -n "$DOMAIN" ]; then echo "Откройте https://$DOMAIN (сертификат выпускается в первую минуту)"
   else echo "Откройте http://$(curl -fs https://api.ipify.org || hostname -I | cut -d' ' -f1)"; fi
   if [ "$DEMO" = 1 ]; then

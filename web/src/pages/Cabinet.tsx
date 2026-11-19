@@ -449,7 +449,7 @@ function Employees() {
         <h1 className="page-title">{t('Водители и персонал')}</h1>
         <button className="btn primary" onClick={() => setEdit({ name: '', phone: '', position: t('Водитель'), licenseCats: '', experience: '', esutd: 'unknown', esutdNumber: '' })}><Plus size={17} /> {t('Добавить сотрудника')}</button>
       </div>
-      <p className="muted small">{t('Список людей без входа в Jolda: их данные подставляются в рейс и в заявку. Тем, кто должен сам вести рейсы в приложении, отправьте приглашение в разделе «Команда».')}</p>
+      <p className="muted small">{t('Список людей без входа в Timma: их данные подставляются в рейс и в заявку. Тем, кто должен сам вести рейсы в приложении, отправьте приглашение в разделе «Команда».')}</p>
       <div className="banner slim">
         <ShieldCheck size={18} />
         <div><b>{t('ЕСУТД')}</b><span>{t('Отмечайте, зарегистрирован ли трудовой договор в esutd.gov.kz. Автоматическая сверка появится после подключения API ЕСУТД.')}</span></div>

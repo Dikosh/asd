@@ -141,7 +141,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   housekeeping();
   setInterval(housekeeping, 15 * 60_000).unref();
   const server = createApp().listen(port);
-  server.on('listening', () => console.log(`Jolda: http://localhost:${port}${DEMO ? ' (демо-режим)' : ''}`));
+  server.on('listening', () => console.log(`Timma: http://localhost:${port}${DEMO ? ' (демо-режим)' : ''}`));
   startTelegram(); // бот с кодами входа; без TELEGRAM_BOT_TOKEN ничего не делает
   server.on('error', (e) => {
     console.error(`Не удалось запустить сервер на порту ${port}: ${e.code === 'EADDRINUSE' ? 'порт занят' : e.message}`);

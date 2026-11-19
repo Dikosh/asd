@@ -351,7 +351,7 @@ export function ListingCard({ l, onChange, footer }: { l: Listing; onChange: () 
         <div className={`row ${footer ? '' : 'lcard-actions'}`}>
           {footer ?? (
             <>
-              {!l.mine && l.user.phone && <ContactButtons phone={l.user.phone} text={`${t('Здравствуйте! Пишу по объявлению на Jolda')}: ${routeName(l.points)}`} />}
+              {!l.mine && l.user.phone && <ContactButtons phone={l.user.phone} text={`${t('Здравствуйте! Пишу по объявлению на Timma')}: ${routeName(l.points)}`} />}
               <ActionsMenu l={l} onChange={onChange} />
               {respond
                 ? <Link to={`/listing/${l.id}#respond`} className="btn primary lcard-go">{t('Откликнуться')}</Link>

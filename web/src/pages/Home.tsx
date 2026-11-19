@@ -23,7 +23,7 @@ export default function HomePage() {
         <div>
           <div className="muted-on-blue">{t(ROLE_L[role])} · {companyTitle(c)}</div>
           <h1>{t('Здравствуйте, {name}!', { name: me!.user.name.split(' ')[0] })}</h1>
-          <p>{t('Jolda — биржа грузов и транспорта: заказчики и перевозчики договариваются напрямую, а рейс виден на карте.')}</p>
+          <p>{t('Timma — биржа грузов и транспорта: заказчики и перевозчики договариваются напрямую, а рейс виден на карте.')}</p>
           <div className="row wrap">
             {role === 'driver' ? (
               <>

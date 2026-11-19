@@ -146,7 +146,7 @@ test('демо-стенд с подтверждением запускается
       });
       child.on('exit', (code) => { clearTimeout(timer); reject(new Error(`сервер завершился с кодом ${code}: ${text}`)); });
     });
-    assert.match(out, /Jolda: http:\/\/localhost:\d+ \(демо-режим\)/);
+    assert.match(out, /Timma: http:\/\/localhost:\d+ \(демо-режим\)/);
   } finally {
     child.removeAllListeners('exit');
     child.kill();
