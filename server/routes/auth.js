@@ -191,7 +191,7 @@ export default function authRoutes(app) {
     companyForm: z.enum(['ИП', 'ТОО', '']).optional(),
     role: z.enum(L.ROLES).optional(),
     joinInvite: z.boolean().default(false),
-    accept: z.literal(true, { errorMap: () => ({ message: 'нужно принять правила платформы' }) }),
+    accept: z.literal(true), // текст ошибки — в issueOut (lib.js)
   });
   app.post('/api/auth/register', (req, res) => {
     const b = parse(regSchema, req.body);

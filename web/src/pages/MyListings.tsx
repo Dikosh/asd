@@ -195,9 +195,9 @@ const FIELD_STEP: Record<string, number> = {
   points: 0, loadAddress: 0, unloadAddress: 0, loadTime: 0, brand: 1, bodyType: 1, cargoType: 1, weight: 1, volume: 1, loading: 1, adrClass: 1, flags: 1, trucks: 1,
   dateFrom: 2, dateTo: 2, payTerms: 2, rate: 2, currency: 2, description: 3,
 };
-function stepOfError(e: { field?: string; message?: string }) {
+function stepOfError(e: { field?: string; message?: string; raw?: string }) {
   if (e.field && e.field in FIELD_STEP) return FIELD_STEP[e.field];
-  const m = (e.message || '').toLowerCase();
+  const m = (e.raw || e.message || '').toLowerCase();
   if (/маршрут|пункт|город|points/.test(m)) return 0;
   if (/вес|объ[её]м|кузов|марк|weight|volume|brand|bodytype|cargotype|loading|adr|flags/.test(m)) return 1;
   if (/дат|период|срок|ставк|сумм|валют|оплат|date|rate|currency|payterms/.test(m)) return 2;

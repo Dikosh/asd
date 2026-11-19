@@ -81,6 +81,7 @@ function issueOut(i) {
   else if (i.code === 'too_big') [rule, n] = [i.type === 'string' || i.type === 'array' ? 'max_len' : 'max', Number(i.maximum)];
   else if (i.code === 'invalid_string' && i.validation === 'email') rule = 'email';
   else if (i.code === 'custom') return { field, message: i.message }; // свой текст — уже по-русски
+  else if (field === 'accept') return { field, message: 'Нужно принять правила платформы' };
   const text = RULE_RU[rule].replace('{n}', n);
   return { field, rule, n, message: FIELD_RU[field] ? `${FIELD_RU[field]}: ${text}` : `${field || 'Запрос'}: ${text}` };
 }

@@ -53,6 +53,7 @@ async function register(phone, role, companyName) {
   assert.equal(v.registered, false);
   const noConsent = await c.call('POST', '/api/auth/register', { regToken: v.regToken, name: 'Тест Тестов', email: 't@example.com', companyName, companyForm: 'ТОО', role });
   assert.equal(noConsent.status, 400, 'без согласия с правилами регистрация невозможна');
+  assert.equal(noConsent.data.message, 'Нужно принять правила платформы');
   const me = await c.post('/api/auth/register', { regToken: v.regToken, name: 'Тест Тестов', email: 't@example.com', companyName, companyForm: 'ТОО', role, accept: true });
   assert.equal(me.user.role, role);
   return c;

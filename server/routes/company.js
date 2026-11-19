@@ -299,7 +299,7 @@ export default function companyRoutes(app) {
   const jobSchema = z.object({
     kind: z.enum(['vacancy', 'resume']),
     title: z.string().trim().min(3).max(120),
-    cityId: z.string({ required_error: 'Укажите город' }).refine((c) => cityById.has(c), 'Неизвестный город'),
+    cityId: z.string().refine((c) => cityById.has(c), 'Неизвестный город'),
     vehicle: z.string().trim().max(120).default(''),
     licenseCats: z.string().trim().max(30).default(''),
     experience: optNum(70),

@@ -386,14 +386,14 @@ export default function listingRoutes(app) {
     if (q1('SELECT COUNT(*) AS n FROM searches WHERE user_id = ?', req.user.id).n >= 30) throw bad('limit', 'Не более 30 сохранённых поисков');
     const limit = alertLimit(req.user);
     if (b.notify && q1('SELECT COUNT(*) AS n FROM searches WHERE user_id = ? AND notify = 1', req.user.id).n >= limit)
-      throw bad('alert_limit', `На вашем тарифе доступно подписок: ${limit}. Снимите галочку уведомлений или подключите тариф Pro.`, 402);
+      throw L.tbad('alert_limit', 'На вашем тарифе доступно подписок: {n}. Снимите галочку уведомлений или подключите тариф Pro.', { n: limit }, 402);
     res.json({ id: insert('INSERT INTO searches(user_id, kind, name, params, notify) VALUES(?, ?, ?, ?, ?)', req.user.id, b.kind, b.name, JSON.stringify(b.params), b.notify ? 1 : 0), notify: b.notify });
   });
   app.patch('/api/searches/:id', auth, (req, res) => {
     const { notify: on } = parse(z.object({ notify: z.boolean() }), req.body);
     const limit = alertLimit(req.user);
     if (on && q1('SELECT COUNT(*) AS n FROM searches WHERE user_id = ? AND notify = 1 AND id != ?', req.user.id, Number(req.params.id)).n >= limit)
-      throw bad('alert_limit', `На вашем тарифе доступно подписок: ${limit}. Тариф Pro снимает ограничение.`, 402);
+      throw L.tbad('alert_limit', 'На вашем тарифе доступно подписок: {n}. Тариф Pro снимает ограничение.', { n: limit }, 402);
     run('UPDATE searches SET notify = ? WHERE id = ? AND user_id = ?', on ? 1 : 0, Number(req.params.id), req.user.id);
     res.json({ ok: true });
   });
@@ -421,7 +421,7 @@ export default function listingRoutes(app) {
     const c = req.user.company_id;
     const cap = q1('SELECT pro FROM company_stats WHERE id = ?', c).pro ? L.LIMITS.activePro : L.LIMITS.activeFree;
     if (q1(`SELECT COUNT(*) AS n FROM listings WHERE company_id = ? AND status = 'active'`, c).n >= cap)
-      throw bad('limit', `Активных объявлений может быть не больше ${cap}. Закройте неактуальные`, 429);
+      throw L.tbad('limit', 'Активных объявлений может быть не больше {n}. Закройте неактуальные', { n: cap }, 429);
     if (q1('SELECT COUNT(*) AS n FROM listings WHERE company_id = ? AND created_at > ?', c, new Date(Date.now() - 3600_000).toISOString()).n >= L.LIMITS.perHour)
       throw bad('rate_limit', 'Слишком много объявлений за час — попробуйте позже', 429);
     if (q1(`SELECT 1 FROM listings WHERE company_id = ? AND status = 'active' AND kind = ? AND points = ? AND date_from = ? AND date_to = ?
@@ -463,7 +463,7 @@ export default function listingRoutes(app) {
     if (q1(`SELECT 1 FROM trips WHERE listing_id = ? AND status = 'active'`, l.id)) throw bad('in_trip', 'По объявлению идёт рейс — изменить его нельзя', 409);
     const b = parse(listingSchema, { ...req.body, kind: l.kind });
     const booked = q1(`SELECT COUNT(*) AS n FROM trips WHERE listing_id = ? AND status = 'completed'`, l.id).n;
-    if (l.kind !== 'truck' && b.trucks < booked) throw bad('validation', `По объявлению уже выполнено рейсов: ${booked} — машин не может быть меньше`);
+    if (l.kind !== 'truck' && b.trucks < booked) throw L.tbad('validation', 'По объявлению уже выполнено рейсов: {n} — машин не может быть меньше', { n: booked });
     run(
       `UPDATE listings SET points = ?, from_id = ?, to_id = ?, brand = ?, body_type = ?, cargo_type = ?, weight = ?, volume = ?, loading = ?,
          date_from = ?, date_to = ?, pay_terms = ?, rate = ?, currency = ?, description = ?, distance_km = ?, adr_class = ?, flags = ?,
@@ -499,7 +499,7 @@ export default function listingRoutes(app) {
       const c = q1('SELECT cs.pro, c.balance FROM companies c JOIN company_stats cs ON cs.id = c.id WHERE c.id = ?', req.user.company_id);
       // на тарифе Pro поднятие в топ входит в подписку, но не безлимитно — иначе одна компания займёт всю первую страницу
       if (c.pro && q1('SELECT COUNT(*) AS n FROM listings WHERE company_id = ? AND boosted_until > ?', req.user.company_id, L.now()).n >= L.LIMITS.boostsPro)
-        throw bad('limit', `Одновременно в топе может быть не больше ${L.LIMITS.boostsPro} объявлений`, 429);
+        throw L.tbad('limit', 'Одновременно в топе может быть не больше {n} объявлений', { n: L.LIMITS.boostsPro }, 429);
       if (!c.pro) {
         if (c.balance < L.BOOST_PRICE) throw bad('balance', 'Недостаточно средств на балансе', 402);
         run('UPDATE companies SET balance = balance - ? WHERE id = ?', L.BOOST_PRICE, req.user.company_id);

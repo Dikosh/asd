@@ -141,7 +141,11 @@ export default function extraRoutes(app) {
     if (q1('SELECT 1 FROM invites WHERE phone = ?', phone)) throw bad('exists', 'Этот номер уже приглашён', 409);
     const used = q1('SELECT (SELECT COUNT(*) FROM users WHERE company_id = :c) + (SELECT COUNT(*) FROM invites WHERE company_id = :c) AS n', { c: req.user.company_id }).n;
     const limit = seats(req.user.company_id);
-    if (used >= limit) throw bad('seats', `На вашем тарифе доступно мест: ${limit}. Тариф Pro расширяет команду до ${L.PLAN.pro.seats}.`, 402);
+    // подсказку про Pro не показываем тому, кто уже на нём
+    if (used >= limit)
+      throw limit < L.PLAN.pro.seats
+        ? L.tbad('seats', 'На вашем тарифе доступно мест: {n}. Тариф Pro расширяет команду до {max}.', { n: limit, max: L.PLAN.pro.seats }, 402)
+        : L.tbad('seats', 'В команде может быть не больше {n} человек', { n: limit }, 402);
     const inviteId = insert('INSERT INTO invites(company_id, phone, name, role, user_id) VALUES(?, ?, ?, ?, ?)', req.user.company_id, phone, b.name, b.role, existing?.id ?? null);
     // у человека уже есть аккаунт — он сам решает, переходить ли в компанию
     if (existing) {

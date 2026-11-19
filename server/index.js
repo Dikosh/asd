@@ -83,7 +83,7 @@ export function createApp() {
     if (res.headersSent) return res.destroy();
     if (err instanceof HttpError) return res.status(err.status).json({ error: err.code, message: err.message, ...err.extra });
     if (err.type === 'entity.too.large') return res.status(413).json({ error: 'too_large', message: 'Слишком большой запрос' });
-    if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'bad_json', message: 'Некорректный JSON' });
+    if (err.type === 'entity.parse.failed') return res.status(400).json({ error: 'bad_json', message: 'Запрос повреждён — попробуйте ещё раз' });
     console.error(err);
     res.status(500).json({ error: 'internal', message: 'Внутренняя ошибка сервера' });
   });

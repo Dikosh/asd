@@ -258,6 +258,12 @@ function App() {
     connectEvents(logged);
     return () => connectEvents(false);
   }, [logged]);
+  // Уведомления сервер пишет на языке из настроек человека. Язык, выбранный до входа, он не знает,
+  // поэтому после входа (и при каждой смене языка) сообщаем его серверу.
+  const myId = me?.user.id;
+  useEffect(() => {
+    if (me && me.user.settings?.lang !== lang) api<Me>('/me', 'PATCH', { settings: { lang } }).then((u) => setMeState((cur) => (cur ? u : cur))).catch(() => {});
+  }, [myId, lang]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const ctx = useMemo<AppCtx | null>(() => {
     if (!meta || me === undefined) return null;
@@ -278,7 +284,6 @@ function App() {
       setLang: (l) => {
         storeLang(l);
         setLangState(l);
-        if (me) api('/me', 'PATCH', { settings: { lang: l } }).catch(() => {});
       },
       setMe: setMeState,
       reloadMe: async () => setMeState(await api<Me | null>('/me')),

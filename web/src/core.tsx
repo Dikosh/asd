@@ -62,6 +62,8 @@ export interface TripFile {
 export class ApiError extends Error {
   field?: string;
   need?: number;
+  /** Текст сервера как есть, по-русски: по нему код узнаёт, о чём ошибка; человеку показывают `message` — перевод. */
+  raw?: string;
   constructor(public status: number, public code: string, message: string) {
     super(message);
   }
@@ -93,8 +95,9 @@ export async function api<T = any>(url: string, method = 'GET', body?: unknown):
   const data = await res.json().catch(() => null);
   if (!res.ok) {
     const known = data?.rule && FIELD_L[data.field] && RULE_L[data.rule];
-    const e = new ApiError(res.status, data?.error || 'error', data?.tpl ? t(data.tpl, data.vars) : known ? `${t(FIELD_L[data.field])}: ${t(RULE_L[data.rule], { n: data.n })}` : data?.message || `Ошибка ${res.status}`);
+    const e = new ApiError(res.status, data?.error || 'error', data?.tpl ? t(data.tpl, data.vars) : known ? `${t(FIELD_L[data.field])}: ${t(RULE_L[data.rule], { n: data.n })}` : data?.message ? t(data.message) : t('Ошибка {n}', { n: res.status }));
     e.field = data?.field;
+    e.raw = data?.message;
     e.need = data?.need;
     throw e;
   }
