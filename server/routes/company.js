@@ -12,10 +12,9 @@ const MIME = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png'
 const id = (req) => Number(req.params.id);
 const optNum = (max) => z.number().min(0).max(max).nullable().optional();
 
-/** Был ли между компаниями рейс (в любом статусе) — основание для записи в чёрный список. */
-// чёрный список — по итогам рейса: пока рейс идёт, вносить нельзя
+/** Была ли между компаниями состоявшаяся сделка — основание для записи в чёрный список (см. L.DEAL_DONE_SQL). */
 const dealBetween = (a, b) =>
-  q1(`SELECT id FROM trips WHERE status != 'active' AND ((customer_company = :a AND carrier_company = :b) OR (customer_company = :b AND carrier_company = :a)) LIMIT 1`, { a, b });
+  q1(`SELECT id FROM trips WHERE ${L.DEAL_DONE_SQL} AND ((customer_company = :a AND carrier_company = :b) OR (customer_company = :b AND carrier_company = :a)) LIMIT 1`, { a, b });
 
 export default function companyRoutes(app) {
   // ---------- каталог компаний ----------
@@ -60,7 +59,8 @@ export default function companyRoutes(app) {
          FROM blacklist b JOIN companies a ON a.id = b.author_company WHERE b.company_id = ? ORDER BY b.id DESC`,
         c.id,
       ),
-      listings: L.listings(req.user, `l.company_id = :c AND l.status = 'active' AND l.date_to >= :today`, { c: c.id, today: L.today() }).slice(0, 10),
+      // водителю из команды объявления и ставки не показываются
+      listings: req.user.company_role === 'driver' ? [] : L.listings(req.user, `l.company_id = :c AND l.status = 'active' AND l.date_to >= :today`, { c: c.id, today: L.today() }).slice(0, 10),
     });
   });
 
@@ -78,6 +78,7 @@ export default function companyRoutes(app) {
   });
   app.post('/api/blacklist', auth, owner, (req, res) => {
     const b = parse(z.object({ companyId: z.number().int(), reason: z.string().trim().min(3).max(200), review: z.string().trim().max(1000).default('') }), req.body);
+    L.requireActiveCompany(req.user);
     if (b.companyId === req.user.company_id) throw bad('own', 'Нельзя добавить свою компанию');
     if (!q1('SELECT 1 FROM companies WHERE id = ?', b.companyId)) throw bad('not_found', 'Компания не найдена', 404);
     if (!dealBetween(req.user.company_id, b.companyId))

@@ -94,6 +94,8 @@ export default function serviceRoutes(app) {
     L.requireActiveCompany(req.user);
     const { price, days } = L.SERVICE_PLAN;
     const until = tx(() => {
+      // карточек у компании может быть несколько, но две оплаты за полминуты — это повторное нажатие
+      L.requireNoRecentPayment(req.user.company_id, 'service');
       const c = q1('SELECT balance FROM companies WHERE id = ?', req.user.company_id);
       if (c.balance < price) {
         const e = bad('balance', 'Недостаточно средств на балансе', 402);

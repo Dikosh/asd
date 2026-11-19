@@ -1746,4 +1746,8 @@ export const EN: Record<string, string> = {
   "Меньше — выше": "Lower comes first",
   "Показывать пользователям": "Show to users",
   "Адрес сайта должен начинаться с https://": "The website address must start with https://",
+  "Оплата уже прошла. Если нужно оплатить ещё раз, повторите через минуту": "The payment has already gone through. If you need to pay again, try in a minute",
+  "Эта компания заблокирована модератором — принять её отклик нельзя": "This company has been blocked by a moderator — its response cannot be accepted",
+  "Рейс не состоялся — отзыв по нему оставить нельзя": "The trip did not take place — you cannot leave a review for it",
+  "Объявление уже в топе": "The listing is already at the top",
 };

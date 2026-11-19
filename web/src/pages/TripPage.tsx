@@ -556,7 +556,7 @@ export default function TripPage() {
             </div>
           )}
 
-          {!active && !trip.reviewed && !isDriver && (
+          {!active && !trip.reviewed && !isDriver && trip.canReview !== false && (
             <div className="card stack-s highlight">
               <b>{t('Оцените работу компании «{name}»', { name: other.name })}</b>
               <p className="muted small">

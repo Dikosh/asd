@@ -17,8 +17,14 @@ import { loadRates } from './rates.js';
 import { seed } from './seed.js';
 
 // Что может менять водитель из команды: вести рейс и свои личные настройки. Остальное — сотрудники и владелец.
-const DRIVER_WRITE = [/^\/trips\/\d+\/(stage|gps|position|files)$/, /^\/notifications\/read$/, /^\/push\//, /^\/me$/, /^\/auth\//, /^\/feedback$/, /^\/team\/accept$/];
-const DRIVER_HIDDEN = [/^\/balance/, /^\/documents/, /^\/responses/, /^\/chats/, /^\/vehicles/, /^\/employees/, /^\/partners/, /^\/blocks/];
+// По ссылке водителя (/drive/…) право даёт сама ссылка, поэтому вошедшему водителю она тоже доступна.
+const DRIVER_WRITE = [/^\/trips\/\d+\/(stage|gps|position|files)$/, /^\/drive\/[^/]+\/(stage|gps|position|files)$/, /^\/notifications\/read$/, /^\/push\//, /^\/me$/, /^\/auth\//, /^\/feedback$/, /^\/team\/accept$/];
+// Что водитель из команды видит: свои рейсы и их файлы, профиль, команду, справочные разделы. Список разрешающий:
+// объявления, ставки, отклики, чаты, деньги и всё, что появится позже, для него закрыто, пока не добавлено сюда.
+const DRIVER_READ = [
+  /^\/(me|meta|events|notifications|news|places|team|jobs|services|shippers)$/, /^\/trips(\/\d+)?$/, /^\/files\/\d+$/, /^\/companies(\/\d+)?$/,
+  /^\/shippers\/\d+\/logo$/, /^\/feedback\/mine$/, /^\/(push|tools|drive|track|public|auth)\//,
+];
 
 export function createApp() {
   const app = express();
@@ -46,7 +52,7 @@ export function createApp() {
     rateLimit(req.user ? `u:${req.user.id}` : `a:${req.ip}`, 600, 60_000, 'Слишком много запросов, подождите минуту');
     const u = req.user;
     if (u?.company_role === 'driver') {
-      const blocked = req.method === 'GET' ? DRIVER_HIDDEN.some((r) => r.test(req.path)) : !DRIVER_WRITE.some((r) => r.test(req.path));
+      const blocked = !(req.method === 'GET' ? DRIVER_READ : DRIVER_WRITE).some((r) => r.test(req.path));
       if (blocked) return next(new HttpError(403, 'forbidden', 'Водителю это действие недоступно — обратитесь к владельцу компании'));
     }
     next();

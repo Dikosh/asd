@@ -120,7 +120,8 @@ function Layout() {
     { to: '/cabinet/catalog', icon: <Building2 size={17} />, label: t('Каталог компаний') },
     { to: '/marked', icon: <Bookmark size={17} />, label: t('Отмеченные') },
     { to: '/help', icon: <LifeBuoy size={17} />, label: t('Помощь') },
-  ];
+    // водителю из команды объявления и ставки закрыты, поэтому разделов с ними в меню нет
+  ].filter((m) => !teamDriver || !['/relocation', '/prices', '/marked'].includes(m.to));
   const [menu, setMenu] = useState(false);
   const menuBox = useRef<HTMLDivElement>(null);
   useEffect(() => {

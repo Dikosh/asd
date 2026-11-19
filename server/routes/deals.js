@@ -17,10 +17,15 @@ const STAGE_TITLE = { to_loading: 'Машина едет на погрузку: 
 const RELOC_STAGE_TITLE = { to_loading: 'Перегонщик едет к машине: {route}', loading: 'Перегонщик принимает машину: {route}', in_transit: 'Машина в пути: {route}', unloading: 'Перегонщик сдаёт машину: {route}', delivered: 'Машина доставлена: {route}' };
 
 // Сделки ведёт компания, а не один человек: чат и рейс видят все её сотрудники.
-const usersOf = (companyId) => q('SELECT id FROM users WHERE company_id = ?', companyId).map((u) => u.id);
 const staffOf = (companyId) => q(`SELECT id FROM users WHERE company_id = ? AND company_role != 'driver'`, companyId).map((u) => u.id);
 const chatUsers = (chat) => [...staffOf(chat.owner_company), ...staffOf(chat.peer_company)];
-const tripUsers = (t) => [...usersOf(t.customer_company), ...usersOf(t.carrier_company)];
+// события рейса (этапы, GPS) получают сотрудники обеих компаний и водитель, назначенный на этот рейс, — не вся команда водителей
+const tripUsers = (t) => [...new Set([...staffOf(t.customer_company), ...staffOf(t.carrier_company), ...(t.driver_user ? [t.driver_user] : [])])];
+/** Заблокированная компания новых сделок не ведёт. Писать она может только партнёру, с которым у неё ещё идёт рейс. */
+function requireChatAllowed(user, chat) {
+  if (q1(`SELECT 1 FROM trips WHERE status = 'active' AND customer_company IN (:a, :b) AND carrier_company IN (:a, :b)`, { a: chat.owner_company, b: chat.peer_company })) return;
+  L.requireActiveCompany(user);
+}
 
 function postMessage(chatId, sender, text, fileId = null) {
   const id = insert('INSERT INTO messages(chat_id, sender_id, text, file_id) VALUES(?, ?, ?, ?)', chatId, sender.id, text, fileId);
@@ -111,6 +116,8 @@ function tripOut(t, viewer, full = false, mode = 'party') {
       trackToken: t.track_token,
       driverToken: t.carrier_company === viewer.company_id ? t.driver_token : undefined,
       reviewed: !!q1('SELECT 1 FROM reviews WHERE trip_id = ? AND author_company = ?', t.id, viewer.company_id),
+      // отзыв — только по состоявшейся сделке: по рейсу, отменённому до выезда, оценивать нечего
+      canReview: L.dealDone(t),
       autoCompleteAt: t.status === 'active' && t.stage === 'delivered' && done ? new Date(Date.parse(done) + AUTO_COMPLETE_HOURS * 3600_000).toISOString() : null,
       dateFrom: t.l_date_from, dateTo: t.l_date_to, description: t.l_description, loading: L.j(t.l_loading, []), payTerms: L.j(t.l_pay_terms, []), brand: t.l_brand,
     });
@@ -253,7 +260,7 @@ export function autoCompleteTrips() {
   for (const t of q(`${TRIP_SQL} WHERE t.status = 'active' AND t.stage = 'delivered'`).map(withTerms)) {
     if ((deliveredAt(t.id) || L.now()) > limit) continue;
     completeTrip(t);
-    notify(tripUsers(t), { kind: 'trip', title: 'Рейс завершён автоматически: {route}', vars: routeOf(t.listing_id), body: 'Оставьте отзыв о партнёре', link: `/trip/${t.id}` });
+    notify([...staffOf(t.customer_company), ...staffOf(t.carrier_company)], { kind: 'trip', title: 'Рейс завершён автоматически: {route}', vars: routeOf(t.listing_id), body: 'Оставьте отзыв о партнёре', link: `/trip/${t.id}` });
   }
 }
 
@@ -351,6 +358,9 @@ export default function dealRoutes(app) {
       if (action === 'withdraw' && isAuthor) run(`UPDATE responses SET status = 'withdrawn' WHERE id = ?`, row.id);
       else if (action === 'decline' && isOwner) run(`UPDATE responses SET status = 'declined' WHERE id = ?`, row.id);
       else if (action === 'accept' && isOwner) {
+        // заблокированная компания рейсов не начинает — ни своим решением, ни по своему отклику
+        L.requireActiveCompany(req.user);
+        if (q1('SELECT banned FROM companies WHERE id = ?', row.company_id)?.banned) throw bad('banned', 'Эта компания заблокирована модератором — принять её отклик нельзя', 409);
         if (row.l_status !== 'active') throw bad('state', 'Объявление уже закрыто', 409);
         const free = freeTrucks(row.listing_id);
         if (free <= 0 && row.l_trucks > 1) throw bad('in_trip', 'Все машины по объявлению уже найдены', 409);
@@ -451,6 +461,7 @@ export default function dealRoutes(app) {
   app.post('/api/chats/:id/messages', auth, staff, (req, res) => {
     const chat = chatOf(req);
     const { text } = parse(z.object({ text: z.string().trim().min(1).max(2000) }), req.body);
+    requireChatAllowed(req.user, chat);
     rateLimit('msg:' + req.user.id, 30, 60_000, 'Слишком много сообщений — подождите минуту');
     if (q1('SELECT 1 FROM blocks WHERE (company_id = :a AND blocked_id = :b) OR (company_id = :b AND blocked_id = :a)', { a: chat.owner_company, b: chat.peer_company }))
       throw bad('blocked', 'Переписка недоступна: одна из компаний скрыла другую', 403);
@@ -461,6 +472,7 @@ export default function dealRoutes(app) {
   app.post('/api/chats/:id/files', auth, staff, (req, res) => {
     const chat = chatOf(req);
     const b = parse(fileSchema, req.body);
+    requireChatAllowed(req.user, chat);
     rateLimit('file:' + req.user.id, 30, 3600_000, 'Слишком много файлов за час — попробуйте позже');
     if (q1('SELECT 1 FROM blocks WHERE (company_id = :a AND blocked_id = :b) OR (company_id = :b AND blocked_id = :a)', { a: chat.owner_company, b: chat.peer_company }))
       throw bad('blocked', 'Переписка недоступна: одна из компаний скрыла другую', 403);
@@ -605,7 +617,8 @@ export default function dealRoutes(app) {
     const first = !t.confirmed_at;
     run(`UPDATE trips SET vehicle_brand = ?, plate = ?, trailer_plate = ?, driver_user = ?, driver_name = ?, driver_phone = ?, confirmed_at = COALESCE(confirmed_at, ?) WHERE id = ?`,
       brand, plate, b.trailerPlate.toUpperCase(), driverUser, driverName, driverPhone, L.now(), t.id);
-    L.push(tripUsers(t), 'trip', { tripId: t.id });
+    // и новому водителю, и тому, кого сняли с рейса: у обоих список рейсов должен обновиться
+    L.push(tripUsers({ ...t, driver_user: driverUser }).concat(t.driver_user ? [t.driver_user] : []), 'trip', { tripId: t.id });
     notify(staffOf(t.customer_company), {
       kind: 'trip', title: first ? 'Перевозчик подтвердил рейс: {route}' : 'Перевозчик заменил машину или водителя: {route}',
       vars: routeOf(t.listing_id), body: `${brand}, ${plate} · ${driverName}`, link: `/trip/${t.id}`,
@@ -648,8 +661,9 @@ export default function dealRoutes(app) {
     if (t.status !== 'active') throw bad('state', 'Рейс уже завершён', 409);
     tx(() => {
       run(`UPDATE trips SET status = 'failed', finished_at = ?, share_gps = 0, fail_reason = ?, failed_by = ? WHERE id = ?`, L.now(), reason, req.user.company_id, t.id);
-      // по объявлению на несколько машин остальные рейсы продолжаются
-      closeListingIfDone(t.listing_id, true);
+      // объявление на одну машину закрывается: перевозка не состоялась, для новой его размещают заново.
+      // На несколько машин — остаётся в поиске, пока найдены не все: остальные рейсы и отклики продолжаются
+      closeListingIfDone(t.listing_id, t.l_trucks <= 1);
     });
     L.push(tripUsers(t), 'trip', { tripId: t.id });
     notify(staffOf(t.customer_company === req.user.company_id ? t.carrier_company : t.customer_company), {
@@ -659,11 +673,13 @@ export default function dealRoutes(app) {
     res.json({ ok: true });
   });
 
-  // Отзыв можно оставить по завершённому, сорванному и отменённому рейсу; обязателен он только по завершённому.
+  // Отзыв можно оставить по завершённому и по сорванному рейсу (см. L.dealDone); обязателен он только по завершённому.
   app.post('/api/trips/:id/review', auth, staff, (req, res) => {
     const t = tripOf(req);
     const b = parse(z.object({ rating: z.number().int().min(1).max(5), text: z.string().trim().max(1000).default('') }), req.body);
     if (t.status === 'active') throw bad('state', 'Отзыв можно оставить после завершения рейса', 409);
+    if (!L.dealDone(t)) throw bad('state', 'Рейс не состоялся — отзыв по нему оставить нельзя', 409);
+    L.requireActiveCompany(req.user);
     const target = t.customer_company === req.user.company_id ? t.carrier_company : t.customer_company;
     if (q1('SELECT 1 FROM reviews WHERE trip_id = ? AND author_company = ?', t.id, req.user.company_id)) throw bad('duplicate', 'Отзыв уже оставлен', 409);
     run('INSERT INTO reviews(trip_id, author_user, author_company, target_company, rating, text) VALUES(?, ?, ?, ?, ?, ?)',

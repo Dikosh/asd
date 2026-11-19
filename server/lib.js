@@ -169,6 +169,17 @@ export function staff(req, _res, next) {
 export function requireActiveCompany(user) {
   if (q1('SELECT banned FROM companies WHERE id = ?', user.company_id)?.banned) throw bad('banned', 'Компания заблокирована модератором. Причина и обжалование — в разделе «Помощь → Поддержка»', 403);
 }
+/** Состоявшаяся сделка — основание для отзыва и записи в чёрный список: рейс завершён либо сорван после того,
+ *  как перевозчик подтвердил машину и водителя. Рейс, отменённый до выезда, основанием не считается —
+ *  иначе можно принять отклик конкурента, сразу отменить рейс и испортить ему репутацию. */
+export const DEAL_DONE_SQL = `(status = 'completed' OR (status = 'failed' AND confirmed_at IS NOT NULL))`;
+export const dealDone = (trip) => trip.status === 'completed' || (trip.status === 'failed' && !!trip.confirmed_at);
+/** Повторное нажатие «Оплатить» не должно списывать деньги второй раз: такую же покупку принимаем не раньше чем через полминуты. */
+export function requireNoRecentPayment(companyId, kind) {
+  const since = new Date(Date.now() - 30_000).toISOString();
+  if (q1('SELECT 1 FROM transactions WHERE company_id = ? AND kind = ? AND created_at > ?', companyId, kind, since))
+    throw bad('duplicate', 'Оплата уже прошла. Если нужно оплатить ещё раз, повторите через минуту', 409);
+}
 /** Журнал действий модератора: кто, что и почему сделал. */
 export function modLog(user, action, target = '', note = '') {
   run('INSERT INTO mod_log(admin_user, action, target, note) VALUES(?, ?, ?, ?)', user.id, action, String(target), note);
@@ -420,7 +431,7 @@ export function meOut(user) {
       companyRole: user.company_role,
       settings: j(user.settings, {}),
     },
-    company: { ...companyOut(c), bin: c.bin, binValid: isValidBin(c.bin), about: c.about, cityId: c.city_id, balance: c.balance, verifyNote: c.verify_note, banReason: c.ban_reason, planUntil: c.pro ? c.plan_until : null },
+    company: { ...companyOut(c), bin: c.bin, binValid: isValidBin(c.bin), about: c.about, cityId: c.city_id, balance: user.company_role === 'driver' ? 0 : c.balance, verifyNote: c.verify_note, banReason: c.ban_reason, planUntil: c.pro ? c.plan_until : null },
     counters: {
       notifications: q1('SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND is_read = 0', user.id).n,
       unread: user.company_role === 'driver' ? 0 : q1(
@@ -428,7 +439,7 @@ export function meOut(user) {
          WHERE m.is_read = 0 AND s.company_id != :c AND (c.owner_company = :c OR c.peer_company = :c)`,
         { c: user.company_id },
       ).n,
-      responses: q1(
+      responses: user.company_role === 'driver' ? 0 : q1(
         `SELECT COUNT(*) AS n FROM responses r JOIN listings l ON l.id = r.listing_id WHERE l.company_id = ? AND r.status = 'sent'`,
         user.company_id,
       ).n,

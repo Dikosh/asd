@@ -445,6 +445,8 @@ export default function listingRoutes(app) {
   };
   app.put('/api/listings/:id', auth, staff, async (req, res) => {
     const l = own(req);
+    // без отзыва о завершённом рейсе нельзя не только разместить новое объявление, но и переделать или вернуть старое
+    L.requireNoPendingReviews(req.user);
     if (l.status === 'removed') throw bad('removed', 'Объявление снято модератором', 403);
     // условия, о которых уже договорились, задним числом не меняются
     if (q1(`SELECT 1 FROM trips WHERE listing_id = ? AND status = 'active'`, l.id)) throw bad('in_trip', 'По объявлению идёт рейс — изменить его нельзя', 409);
@@ -466,6 +468,7 @@ export default function listingRoutes(app) {
     if (q1(`SELECT 1 FROM trips WHERE listing_id = ? AND status = 'active'`, l.id)) throw bad('in_trip', 'По объявлению идёт рейс — сначала завершите его', 409);
     if (status === 'active') {
       L.requireActiveCompany(req.user);
+      L.requireNoPendingReviews(req.user);
       // по объявлению уже был рейс — это история сделки; для новой перевозки объявление размещают заново
       if (q1(`SELECT 1 FROM trips WHERE listing_id = ? AND status IN ('completed', 'failed')`, l.id)) throw bad('state', 'По этому объявлению уже был рейс. Нажмите «Разместить снова»', 409);
       if (l.date_to < L.today()) throw bad('state', 'Срок объявления истёк. Нажмите «Разместить снова»', 409);
@@ -478,7 +481,10 @@ export default function listingRoutes(app) {
   app.post('/api/listings/:id/boost', auth, staff, (req, res) => {
     const l = own(req);
     if (l.status !== 'active') throw bad('state', 'Поднять можно только активное объявление', 409);
+    L.requireNoPendingReviews(req.user);
     tx(() => {
+      // повторное нажатие не должно списывать деньги второй раз: пока объявление в топе, поднять его снова нельзя
+      if (q1('SELECT boosted_until FROM listings WHERE id = ?', l.id).boosted_until > L.now()) throw bad('state', 'Объявление уже в топе', 409);
       const c = q1('SELECT cs.pro, c.balance FROM companies c JOIN company_stats cs ON cs.id = c.id WHERE c.id = ?', req.user.company_id);
       // на тарифе Pro поднятие в топ входит в подписку, но не безлимитно — иначе одна компания займёт всю первую страницу
       if (c.pro && q1('SELECT COUNT(*) AS n FROM listings WHERE company_id = ? AND boosted_until > ?', req.user.company_id, L.now()).n >= L.LIMITS.boostsPro)

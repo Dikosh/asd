@@ -30,6 +30,8 @@ export default function JobsPage() {
   const isVac = form?.kind === 'vacancy';
   // водителю не показываем действия работодателя
   const isDriver = me!.user.role === 'driver';
+  // водитель из команды смотрит вакансии, но резюме и заявки на перегон — не его раздел
+  const teamDriver = me!.user.companyRole === 'driver';
   const canHire = !isDriver && me!.user.companyRole === 'owner';
 
   return (
@@ -39,13 +41,13 @@ export default function JobsPage() {
         <div className="row wrap">
           {/* город из фильтра подставляем сразу: иначе объявление «пропадает» из отфильтрованного списка */}
           {!isDriver && <button className="btn primary" onClick={() => setForm({ ...blank, cityId: city, kind: 'vacancy' })}><Plus size={17} /> {t('Ищу водителя')}</button>}
-          <button className={`btn ${isDriver ? 'primary' : 'soft'}`} onClick={() => setForm({ ...blank, cityId: city, kind: 'resume' })}><Plus size={17} /> {t('Ищу работу')}</button>
+          {!teamDriver && <button className={`btn ${isDriver ? 'primary' : 'soft'}`} onClick={() => setForm({ ...blank, cityId: city, kind: 'resume' })}><Plus size={17} /> {t('Ищу работу')}</button>}
         </div>
       </div>
       <p className="muted">{t('Поиск водителей и работы внутри платформы — без перехода на другие сайты.')}</p>
       {/* подработка для водителей: перегон машин и сопровождение негабарита */}
       <div className="row wrap">
-        <Link to="/relocation" className="btn soft"><CarFront size={16} /> {t('Перегон: заявки и перегонщики')}</Link>
+        {!teamDriver && <Link to="/relocation" className="btn soft"><CarFront size={16} /> {t('Перегон: заявки и перегонщики')}</Link>}
         <Link to="/services?cat=escort" className="btn soft"><Megaphone size={16} /> {t('Сопровождение негабарита')}</Link>
       </div>
       <div className="page-head">

@@ -98,7 +98,8 @@ export default function extraRoutes(app) {
       myInvite: q1('SELECT i.id, i.role, c.name AS companyName, c.form AS companyForm FROM invites i JOIN companies c ON c.id = i.company_id WHERE i.phone = ?', req.user.phone) || null,
     });
   });
-  // Принять приглашение: человек переходит в компанию, его прежняя пустая компания остаётся в истории.
+  // Принять приглашение: человек переходит в другую компанию. Если он был в прежней один, она остаётся в истории пустой;
+  // если уходит сотрудник, прежняя компания работает дальше, а его объявления переходят её владельцу.
   app.post('/api/team/accept', auth, (req, res) => {
     const { accept } = parse(z.object({ accept: z.boolean() }), req.body);
     const inv = q1('SELECT * FROM invites WHERE phone = ?', req.user.phone);
@@ -108,12 +109,24 @@ export default function extraRoutes(app) {
       return res.json({ ok: true });
     }
     const mine = req.user.company_id;
-    if (q1('SELECT COUNT(*) AS n FROM users WHERE company_id = ?', mine).n > 1 && req.user.company_role === 'owner')
+    const alone = q1('SELECT COUNT(*) AS n FROM users WHERE company_id = ?', mine).n === 1;
+    if (!alone && req.user.company_role === 'owner')
       throw bad('state', 'Вы владелец компании с сотрудниками — сначала удалите их из команды', 409);
-    const busy = q(`SELECT id FROM trips WHERE status = 'active' AND (customer_company = :c OR carrier_company = :c) ORDER BY id LIMIT 5`, { c: mine });
+    // единственного человека держат рейсы его компании, сотрудника — только рейсы, на которые он назначен водителем
+    const busy = alone
+      ? q(`SELECT id FROM trips WHERE status = 'active' AND (customer_company = :c OR carrier_company = :c) ORDER BY id LIMIT 5`, { c: mine })
+      : q(`SELECT id FROM trips WHERE status = 'active' AND driver_user = ? ORDER BY id LIMIT 5`, req.user.id);
     if (busy.length) throw L.tbad('state', 'У вашей компании есть активные рейсы ({n}) — сначала завершите их в разделе «Рейсы»', { n: busy.map((x) => `№${x.id}`).join(', ') }, 409);
     tx(() => {
-      run(`UPDATE listings SET status = 'archived', closed_at = ? WHERE company_id = ? AND status = 'active'`, L.now(), mine);
+      if (alone) {
+        // в компании никого не остаётся: её объявления уходят в архив, отклики без ответа отклоняются
+        run(`UPDATE responses SET status = 'declined' WHERE status = 'sent' AND listing_id IN (SELECT id FROM listings WHERE company_id = ? AND status = 'active')`, mine);
+        run(`UPDATE listings SET status = 'archived', closed_at = ? WHERE company_id = ? AND status = 'active'`, L.now(), mine);
+      } else {
+        // объявления остаются у компании: контактом по ним становится владелец
+        const boss = q1(`SELECT id FROM users WHERE company_id = ? AND company_role = 'owner' ORDER BY id LIMIT 1`, mine);
+        if (boss) run('UPDATE listings SET user_id = ? WHERE user_id = ? AND company_id = ?', boss.id, req.user.id, mine);
+      }
       run('UPDATE users SET company_id = ?, company_role = ?, role = CASE WHEN ? = \'driver\' THEN \'driver\' ELSE role END WHERE id = ?',
         inv.company_id, inv.role === 'driver' ? 'driver' : 'manager', inv.role, req.user.id);
       run('DELETE FROM invites WHERE id = ?', inv.id);
@@ -159,6 +172,7 @@ export default function extraRoutes(app) {
   // ---------- тариф ----------
   app.post('/api/plan/buy', auth, L.owner, (req, res) => {
     tx(() => {
+      L.requireNoRecentPayment(req.user.company_id, 'plan');
       const c = q1('SELECT balance, plan, plan_until FROM companies WHERE id = ?', req.user.company_id);
       if (c.balance < L.PLAN.price) {
         const e = bad('balance', 'Недостаточно средств на балансе', 402);

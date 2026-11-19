@@ -46,7 +46,7 @@ export interface Trip {
   customer: { companyId: number; name: string; userName?: string; phone?: string; form?: string; bin?: string | null };
   dateFrom?: string; dateTo?: string; description?: string; loading?: string[]; payTerms?: string[]; brand?: string;
   position: { lat: number; lon: number; speed: number | null; at: string } | null; remainingKm: number | null; etaHours: number | null;
-  myRole?: 'customer' | 'carrier'; trackToken?: string; reviewed?: boolean; chatId?: number | null;
+  myRole?: 'customer' | 'carrier'; trackToken?: string; reviewed?: boolean; canReview?: boolean; chatId?: number | null;
   confirmed: boolean; vehicle: { brand: string; plate: string; trailerPlate: string; bodyType: string | null };
   driver?: { userId: number | null; name: string; phone: string }; loadAddress?: string; unloadAddress?: string; loadTime?: string;
   files?: TripFile[];
