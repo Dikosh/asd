@@ -103,7 +103,7 @@ RestartSec=3
 [Install]
 WantedBy=multi-user.target
 EOF
-# свои настройки (SMS_WEBHOOK_URL, ADMIN_PHONE, SUPPORT_PHONE, TILE_URL…) — в /etc/jolda.env
+# свои настройки (SMS_WEBHOOK_URL, TELEGRAM_BOT_TOKEN, ADMIN_PHONE, SUPPORT_PHONE, TILE_URL…) — в /etc/jolda.env
 [ -f /etc/jolda.env ] || printf '# Настройки Jolda, по одной в строке: ИМЯ=значение\n' > /etc/jolda.env
 systemctl daemon-reload
 systemctl enable -q jolda
@@ -192,10 +192,10 @@ if curl -fs localhost:3000/api/meta >/dev/null; then
   if [ "$DEMO" = 1 ]; then
     printf '\n\033[1;31m%s\033[0m\n' "ВНИМАНИЕ: включён демо-режим. Любой посетитель входит под любым номером и как администратор."
     echo "Это стенд для показа, настоящих пользователей на него пускать нельзя."
-    echo "Боевой запуск: подключите SMS (SMS_WEBHOOK_URL в /etc/jolda.env) и запустите установщик с DEMO=0."
-  elif ! grep -qs '^SMS_WEBHOOK_URL=.' /etc/jolda.env; then
-    echo "Демо-режим выключен, а отправка SMS не подключена — войти пока никто не сможет."
-    echo "Укажите SMS_WEBHOOK_URL в /etc/jolda.env и выполните: systemctl restart jolda"
+    echo "Боевой запуск: подключите SMS (SMS_WEBHOOK_URL) или бота Telegram (TELEGRAM_BOT_TOKEN) в /etc/jolda.env и запустите установщик с DEMO=0."
+  elif ! grep -qsE '^(SMS_WEBHOOK_URL|TELEGRAM_BOT_TOKEN)=.' /etc/jolda.env; then
+    echo "Демо-режим выключен, а коды входа отправлять нечем — войти пока никто не сможет."
+    echo "Укажите SMS_WEBHOOK_URL или TELEGRAM_BOT_TOKEN в /etc/jolda.env и выполните: systemctl restart jolda"
     echo "Нужен стенд для показа без SMS — запустите установщик с DEMO=1."
   fi
   if ! grep -qs '^BACKUP_REMOTE=.' /etc/jolda.env; then

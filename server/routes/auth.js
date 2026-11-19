@@ -6,6 +6,7 @@ import { q, q1, run, insert, tx } from '../db.js';
 import { CITIES, cityById, isValidBin } from '../geo.js';
 import * as L from '../lib.js';
 import { sendSms } from '../sms.js';
+import { tgBot, tgLink, tgSendCode } from '../telegram.js';
 
 const PLACES_JSON = Buffer.from(JSON.stringify(CITIES.map((c) => [c.id, c.ru, c.kz, c.en, c.country, c.lat, c.lon, c.region, c.zh === c.en ? '' : c.zh])));
 const PLACES_GZ = zlib.gzipSync(PLACES_JSON);
@@ -30,6 +31,7 @@ setInterval(() => {
 }, 10 * 60_000).unref();
 
 const CODE_TTL = 5 * 60_000; // сколько живёт код из SMS
+const TG_WAIT = 15 * 60_000; // сколько ждём, пока человек откроет бота в Telegram и поделится номером
 const CODE_TRIES = 5; // неверных вводов на один код — потом нужен новый
 const PHONE_DAY = 10; // кодов на номер в сутки: столько с чужих устройств и столько же со «своих»
 const IP_DAY = 300; // кодов с одного адреса в сутки
@@ -100,6 +102,8 @@ export default function authRoutes(app) {
       boostPrice: L.BOOST_PRICE,
       // контакты поддержки задаются при установке; без них остаётся форма обращения
       tiles: L.TILES,
+      // какими путями можно получить код входа: SMS (в демо код показывается на экране) и бот в Telegram (его имя)
+      login: { sms: L.DEMO || !!process.env.SMS_WEBHOOK_URL, telegram: tgBot() },
       support: { phone: process.env.SUPPORT_PHONE || '', telegram: process.env.TELEGRAM_URL || '', hours: process.env.SUPPORT_HOURS || '' },
       stats: {
         cargo: active('cargo'),
@@ -144,6 +148,9 @@ export default function authRoutes(app) {
     // «своё» устройство — то, с которого под этим номером уже входили. У него отдельный счёт кодов: посторонний,
     // который засыпает номер запросами, исчерпает только общий счёт и не оставит владельца без входа
     const known = knownDevice(req, phone) ? 1 : 0;
+    // код можно получить в Telegram вместо SMS, если бот подключён (server/telegram.js)
+    const viaTelegram = req.body?.via === 'telegram';
+    if (viaTelegram && !tgBot()) throw bad('telegram_off', 'Вход через Telegram не подключён', 503);
     rateLimit(`code:${known}:${phone}`, 5, 10 * 60_000);
     rateLimit('ip:' + req.ip, 100, 10 * 60_000); // за одним адресом мобильного оператора — много людей
     // учётные записи из демо-данных вне демо-режима не действуют
@@ -152,7 +159,8 @@ export default function authRoutes(app) {
     if (!L.DEMO) {
       const sent = (where, ...args) => q1(`SELECT COUNT(*) AS n FROM login_codes WHERE ${where} AND created_at > strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 day')`, ...args).n;
       if (sent('phone = ? AND known = ?', phone, known) >= PHONE_DAY || sent('ip = ?', req.ip) >= IP_DAY) throw bad('rate_limit', 'Слишком много запросов кода за сутки. Попробуйте завтра', 429);
-      if (SMS_DAY && sent('1 = 1') >= SMS_DAY) {
+      // общий предел площадки — про деньги: коды через Telegram бесплатны и в него не входят
+      if (!viaTelegram && SMS_DAY && sent(`channel = 'sms'`) >= SMS_DAY) {
         console.error(`[sms] за сутки отправлено ${SMS_DAY} кодов входа — отправка приостановлена (предел SMS_DAILY_MAX)`);
         throw bad('sms_limit', 'Отправка кодов временно приостановлена. Попробуйте позже', 503);
       }
@@ -160,6 +168,29 @@ export default function authRoutes(app) {
     const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
     // новый код не отменяет прежние: чужой запрос на тот же номер не обесценивает код, который человек уже получил
     const ticket = L.token(32);
+    if (viaTelegram) {
+      const link = tgLink(phone);
+      // номер уже привязан к чату — код уходит сразу; человек удалил бота — привязываем заново по ссылке
+      if (link) {
+        run(`INSERT INTO login_codes(ticket, phone, code, expires, ip, known, channel) VALUES(?, ?, ?, ?, ?, ?, 'tg')`, ticket, phone, code, Date.now() + CODE_TTL, req.ip, known);
+        const sent = await tgSendCode(link, code);
+        if (sent === 'error') {
+          run('DELETE FROM login_codes WHERE ticket = ?', ticket);
+          throw bad('telegram_failed', 'Не удалось отправить код в Telegram, попробуйте позже', 502);
+        }
+        if (sent === 'ok') {
+          L.setCookie(req, res, 'otp', ticket, 1800, '/api/auth');
+          return res.json({ ok: true, via: 'telegram' });
+        }
+        run('DELETE FROM login_codes WHERE ticket = ?', ticket);
+      }
+      // номер ещё не привязан: человек открывает бота по ссылке и делится номером — тогда бот пришлёт этот код
+      const start = L.token(24);
+      run(`INSERT INTO login_codes(ticket, phone, code, expires, ip, known, channel, tg_start) VALUES(?, ?, ?, ?, ?, ?, 'tg', ?)`,
+        ticket, phone, code, Date.now() + TG_WAIT, req.ip, known, start);
+      L.setCookie(req, res, 'otp', ticket, 1800, '/api/auth');
+      return res.json({ ok: true, via: 'telegram', telegramUrl: `https://t.me/${tgBot()}?start=${start}` });
+    }
     run('INSERT INTO login_codes(ticket, phone, code, expires, ip, known) VALUES(?, ?, ?, ?, ?, ?)', ticket, phone, code, Date.now() + CODE_TTL, req.ip, known);
     try {
       await sendSms(phone, `Jolda: код входа ${code}`);

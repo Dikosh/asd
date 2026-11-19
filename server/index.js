@@ -16,6 +16,7 @@ import shipperRoutes from './routes/shippers.js';
 import { loadRates } from './rates.js';
 import { checkHealth } from './health.js';
 import { seed } from './seed.js';
+import { startTelegram } from './telegram.js';
 
 // Что может менять водитель из команды: вести рейс и свои личные настройки. Остальное — сотрудники и владелец.
 // По ссылке водителя (/drive/…) право даёт сама ссылка, поэтому вошедшему водителю она тоже доступна.
@@ -141,6 +142,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   setInterval(housekeeping, 15 * 60_000).unref();
   const server = createApp().listen(port);
   server.on('listening', () => console.log(`Jolda: http://localhost:${port}${DEMO ? ' (демо-режим)' : ''}`));
+  startTelegram(); // бот с кодами входа; без TELEGRAM_BOT_TOKEN ничего не делает
   server.on('error', (e) => {
     console.error(`Не удалось запустить сервер на порту ${port}: ${e.code === 'EADDRINUSE' ? 'порт занят' : e.message}`);
     process.exit(1);

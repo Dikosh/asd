@@ -1,7 +1,7 @@
 // Вход по номеру телефона и регистрация одной формой; для гостей — витрина свежих объявлений.
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, BadgeCheck, FileCheck2, Lock, MapPinned, Users } from 'lucide-react';
+import { ArrowRight, BadgeCheck, FileCheck2, Lock, MapPinned, Send, Users } from 'lucide-react';
 import { api, BODY_L, CARGO_L, fmtDates, Me, money, num, KIND_L, ROLE_HINT, ROLE_L, t, useApp, useLoad } from '../core';
 import { Field, LangSwitch, Logo, Select } from '../ui';
 
@@ -20,6 +20,9 @@ export default function AuthPage() {
   const [number, setNumber] = useState('');
   const [code, setCode] = useState('');
   const [devCode, setDevCode] = useState('');
+  // код входа приходит по SMS или в Telegram (бот); tgUrl — ссылка на бота, пока номер к нему не привязан
+  const [via, setVia] = useState<'sms' | 'telegram'>('sms');
+  const [tgUrl, setTgUrl] = useState('');
   const [regToken, setRegToken] = useState('');
   const [invite, setInvite] = useState<Invite | null>(null);
   const [join, setJoin] = useState(true);
@@ -59,9 +62,13 @@ export default function AuthPage() {
   ].filter(Boolean) as string[];
   const emailOptional = joining ? invite!.role === 'driver' : isDriver;
 
-  const requestCode = () =>
+  const canSms = meta.login?.sms ?? true;
+  const canTelegram = !!meta.login?.telegram;
+  const requestCode = (how: 'sms' | 'telegram' = via) =>
     run(async () => {
-      const r = await api('/auth/request-code', 'POST', { phone });
+      const r = await api('/auth/request-code', 'POST', how === 'telegram' ? { phone, via: 'telegram' } : { phone });
+      setVia(how);
+      setTgUrl(r.telegramUrl || '');
       setDevCode(r.devCode || '');
       setCode('');
       setWait(60);
@@ -132,7 +139,7 @@ export default function AuthPage() {
       </section>
 
       <section className="auth-panel">
-        <form className="card auth-card" onSubmit={(e) => { e.preventDefault(); step === 'phone' ? requestCode() : step === 'code' ? verify() : register(); }}>
+        <form className="card auth-card" onSubmit={(e) => { e.preventDefault(); step === 'phone' ? requestCode(canSms || !canTelegram ? 'sms' : 'telegram') : step === 'code' ? verify() : register(); }}>
           {step === 'phone' && (
             <>
               <h2>{t('Вход и регистрация')}</h2>
@@ -143,20 +150,32 @@ export default function AuthPage() {
                   <input ref={phoneInput} type="tel" inputMode="tel" autoFocus placeholder="701 123 45 67" value={number} onChange={(e) => setNumber(e.target.value)} autoComplete="tel-national" />
                 </div>
               </Field>
-              <button className="btn primary block" disabled={busy || !phoneOk}>{t('Получить код')}</button>
+              {(canSms || !canTelegram) && <button className="btn primary block" disabled={busy || !phoneOk}>{t('Получить код')}</button>}
+              {canTelegram && (
+                <button type={canSms ? 'button' : 'submit'} className={`btn ${canSms ? 'soft' : 'primary'} block`} disabled={busy || !phoneOk} onClick={canSms ? () => requestCode('telegram') : undefined}>
+                  <Send size={16} /> {t('Получить код в Telegram')}
+                </button>
+              )}
               {!phoneOk && number.replace(/\D/g, '').length > 0 && <p className="muted small">{t('Введите номер полностью: 10 цифр, например 701 123 45 67')}</p>}
             </>
           )}
           {step === 'code' && (
             <>
-              <h2>{t('Код из SMS')}</h2>
-              <p className="muted">{t('Отправили код на {phone}', { phone })}</p>
+              <h2>{via === 'telegram' ? t('Код из Telegram') : t('Код из SMS')}</h2>
+              {via !== 'telegram' && <p className="muted">{t('Отправили код на {phone}', { phone })}</p>}
+              {via === 'telegram' && !tgUrl && <p className="muted">{t('Код отправлен в Telegram, в чат с ботом Jolda')}</p>}
+              {via === 'telegram' && tgUrl && (
+                <>
+                  <p className="muted">{t('Откройте бота Jolda в Telegram и нажмите «Поделиться номером» — бот пришлёт код. Введите его здесь.')}</p>
+                  <a className="btn soft block" href={tgUrl} target="_blank" rel="noopener noreferrer"><Send size={16} /> {t('Открыть Telegram')}</a>
+                </>
+              )}
               {devCode && <div className="demo-note">{t('Демо-режим: SMS не отправляется, ваш код')} <b>{devCode}</b></div>}
               <Field label={t('Код')}>
                 <input className="code-input" inputMode="numeric" autoFocus maxLength={6} value={code} onChange={(e) => setCode(e.target.value.replace(/\D/g, ''))} autoComplete="one-time-code" />
               </Field>
               <button className="btn primary block" disabled={busy || code.length < 6}>{t('Продолжить')}</button>
-              <button type="button" className="btn ghost block" disabled={busy || wait > 0} onClick={requestCode}>{wait > 0 ? t('Отправить код ещё раз через {n} с', { n: wait }) : t('Отправить код ещё раз')}</button>
+              <button type="button" className="btn ghost block" disabled={busy || wait > 0} onClick={() => requestCode()}>{wait > 0 ? t('Отправить код ещё раз через {n} с', { n: wait }) : t('Отправить код ещё раз')}</button>
               <button type="button" className="btn ghost block" onClick={() => setStep('phone')}>{t('Изменить номер')}</button>
             </>
           )}

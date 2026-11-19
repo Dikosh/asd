@@ -191,6 +191,12 @@ CREATE INDEX IF NOT EXISTS login_codes_created ON login_codes(created_at);
 CREATE TABLE IF NOT EXISTS known_devices(token TEXT PRIMARY KEY, phone TEXT NOT NULL, created_at ${TS});
 CREATE INDEX IF NOT EXISTS known_devices_phone ON known_devices(phone);`);
 // уведомления привязаны к входу, с которого их включили: закрыт вход — на это устройство они больше не приходят
+// код входа через бота в Telegram: каким путём ушёл код и метка из ссылки на бота, пока человек не поделился номером
+addColumn('login_codes', 'channel', `TEXT NOT NULL DEFAULT 'sms'`);
+addColumn('login_codes', 'tg_start', 'TEXT');
+db.exec(`CREATE TABLE IF NOT EXISTS tg_links(phone TEXT PRIMARY KEY, chat_id INTEGER NOT NULL, lang TEXT NOT NULL DEFAULT 'ru', created_at ${TS});
+CREATE INDEX IF NOT EXISTS tg_links_chat ON tg_links(chat_id);
+CREATE INDEX IF NOT EXISTS login_codes_tg ON login_codes(tg_start) WHERE tg_start IS NOT NULL;`);
 addColumn('push_subs', 'sid', 'TEXT');
 addColumn('push_devices', 'sid', 'TEXT');
 // служебные отметки сервера между запусками (например, в каком режиме он работал в прошлый раз)
