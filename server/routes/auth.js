@@ -180,7 +180,8 @@ export default function authRoutes(app) {
         }
         if (sent === 'ok') {
           L.setCookie(req, res, 'otp', ticket, 1800, '/api/auth');
-          return res.json({ ok: true, via: 'telegram' });
+          // sent — код уже в чате; ссылка ведёт прямо в чат с ботом, чтобы человек не искал его сам
+          return res.json({ ok: true, via: 'telegram', sent: true, telegramUrl: `https://t.me/${tgBot()}` });
         }
         run('DELETE FROM login_codes WHERE ticket = ?', ticket);
       }
@@ -189,7 +190,7 @@ export default function authRoutes(app) {
       run(`INSERT INTO login_codes(ticket, phone, code, expires, ip, known, channel, tg_start) VALUES(?, ?, ?, ?, ?, ?, 'tg', ?)`,
         ticket, phone, code, Date.now() + TG_WAIT, req.ip, known, start);
       L.setCookie(req, res, 'otp', ticket, 1800, '/api/auth');
-      return res.json({ ok: true, via: 'telegram', telegramUrl: `https://t.me/${tgBot()}?start=${start}` });
+      return res.json({ ok: true, via: 'telegram', sent: false, telegramUrl: `https://t.me/${tgBot()}?start=${start}` });
     }
     run('INSERT INTO login_codes(ticket, phone, code, expires, ip, known) VALUES(?, ?, ?, ?, ?, ?)', ticket, phone, code, Date.now() + CODE_TTL, req.ip, known);
     try {

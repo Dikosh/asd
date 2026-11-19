@@ -32,11 +32,19 @@ const T = {
   ],
   button: ['Поделиться номером', 'Нөмірмен бөлісу', 'Share my number', '分享我的号码'],
   code: [
-    'Код входа в Jolda: {code}\nНикому его не сообщайте.',
-    'Jolda-ға кіру коды: {code}\nОны ешкімге айтпаңыз.',
-    'Your Jolda sign-in code: {code}\nDo not share it with anyone.',
-    'Jolda 登录验证码：{code}\n请勿告诉任何人。',
+    'Код входа в Jolda: <code>{code}</code>\nНажмите на код, чтобы скопировать, и введите его в Jolda. Никому его не сообщайте.',
+    'Jolda-ға кіру коды: <code>{code}</code>\nКөшіру үшін кодты басыңыз да, оны Jolda-ға енгізіңіз. Оны ешкімге айтпаңыз.',
+    'Your Jolda sign-in code: <code>{code}</code>\nTap the code to copy it, then enter it in Jolda. Do not share it with anyone.',
+    'Jolda 登录验证码：<code>{code}</code>\n点击验证码即可复制，然后在 Jolda 中输入。请勿告诉任何人。',
   ],
+  // описание бота: его видит человек, который открыл бота впервые, ещё до первой кнопки
+  about: [
+    'Бот присылает коды для входа в Jolda — биржу грузов и транспорта.\n\nЗапустите бота и нажмите «Поделиться номером» — код придёт в этот чат.',
+    'Бот Jolda — жүк және көлік биржасына кіру кодтарын жібереді.\n\nБотты іске қосып, «Нөмірмен бөлісу» түймесін басыңыз — код осы чатқа келеді.',
+    'This bot sends sign-in codes for Jolda, the freight and transport exchange.\n\nStart the bot and tap “Share my number” — the code will arrive in this chat.',
+    '此机器人发送 Jolda 货运与运力交易平台的登录验证码。\n\n启动机器人并点击“分享我的号码”，验证码将发送到此聊天。',
+  ],
+  short: ['Коды входа в Jolda', 'Jolda-ға кіру кодтары', 'Jolda sign-in codes', 'Jolda 登录验证码'],
   linked: [
     'Готово. Вернитесь в Jolda и запросите код — он придёт в этот чат.',
     'Дайын. Jolda-ға оралып, код сұраңыз — ол осы чатқа келеді.',
@@ -108,7 +116,8 @@ export const tgLink = (phone) => q1('SELECT phone, chat_id AS chatId, lang FROM 
  * номер нужно привязать заново); 'error' — Telegram недоступен.
  */
 export async function tgSendCode(link, code) {
-  const r = await say(link.chatId, text('code', link.lang, { code }), hideKeyboard);
+  // <code> — в Telegram такой текст копируется одним нажатием
+  const r = await say(link.chatId, text('code', link.lang, { code }), { ...hideKeyboard, parse_mode: 'HTML' });
   if (r.ok) return 'ok';
   if (r.error_code === 403 || (r.error_code === 400 && /chat not found/i.test(r.description || ''))) {
     run('DELETE FROM tg_links WHERE phone = ?', link.phone);
@@ -194,6 +203,11 @@ export async function startTelegram() {
     await sleep(15_000);
   }
   await tgCall('deleteWebhook'); // иначе getUpdates не работает
+  // подсказка для того, кто открыл бота впервые; язык Telegram подставит сам (без языка — русский)
+  for (const [i, code] of [undefined, 'kk', 'en', 'zh'].entries()) {
+    await tgCall('setMyDescription', { description: T.about[i], language_code: code });
+    await tgCall('setMyShortDescription', { short_description: T.short[i], language_code: code });
+  }
   console.log(`Telegram: бот @${tg.name} выдаёт коды входа`);
   let offset = 0;
   for (;;) {

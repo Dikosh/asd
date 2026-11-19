@@ -20,9 +20,10 @@ export default function AuthPage() {
   const [number, setNumber] = useState('');
   const [code, setCode] = useState('');
   const [devCode, setDevCode] = useState('');
-  // код входа приходит по SMS или в Telegram (бот); tgUrl — ссылка на бота, пока номер к нему не привязан
+  // код входа приходит по SMS или в Telegram (бот); tgUrl — ссылка на чат с ботом, tgSent — код уже там (номер привязан)
   const [via, setVia] = useState<'sms' | 'telegram'>('sms');
   const [tgUrl, setTgUrl] = useState('');
+  const [tgSent, setTgSent] = useState(false);
   const [regToken, setRegToken] = useState('');
   const [invite, setInvite] = useState<Invite | null>(null);
   const [join, setJoin] = useState(true);
@@ -69,6 +70,7 @@ export default function AuthPage() {
       const r = await api('/auth/request-code', 'POST', how === 'telegram' ? { phone, via: 'telegram' } : { phone });
       setVia(how);
       setTgUrl(r.telegramUrl || '');
+      setTgSent(!!r.sent);
       setDevCode(r.devCode || '');
       setCode('');
       setWait(60);
@@ -163,11 +165,14 @@ export default function AuthPage() {
             <>
               <h2>{via === 'telegram' ? t('Код из Telegram') : t('Код из SMS')}</h2>
               {via !== 'telegram' && <p className="muted">{t('Отправили код на {phone}', { phone })}</p>}
-              {via === 'telegram' && !tgUrl && <p className="muted">{t('Код отправлен в Telegram, в чат с ботом Jolda')}</p>}
-              {via === 'telegram' && tgUrl && (
+              {via === 'telegram' && (
                 <>
-                  <p className="muted">{t('Откройте бота Jolda в Telegram и нажмите «Поделиться номером» — бот пришлёт код. Введите его здесь.')}</p>
-                  <a className="btn soft block" href={tgUrl} target="_blank" rel="noopener noreferrer"><Send size={16} /> {t('Открыть Telegram')}</a>
+                  <p className="muted">
+                    {tgSent
+                      ? t('Код отправлен в Telegram, в чат с ботом @{bot}. Скопируйте его там и введите здесь.', { bot: meta.login?.telegram || '' })
+                      : t('Нажмите «Открыть Telegram», запустите бота @{bot} и нажмите «Поделиться номером». Бот пришлёт код — введите его здесь.', { bot: meta.login?.telegram || '' })}
+                  </p>
+                  {tgUrl && <a className="btn soft block" href={tgUrl} target="_blank" rel="noopener noreferrer"><Send size={16} /> {t('Открыть Telegram')}</a>}
                 </>
               )}
               {devCode && <div className="demo-note">{t('Демо-режим: SMS не отправляется, ваш код')} <b>{devCode}</b></div>}

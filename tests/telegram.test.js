@@ -75,7 +75,8 @@ test('первый вход: ссылка на бота → «Поделитьс
   const me = visitor();
   const r = await me('POST', '/api/auth/request-code', { phone: '+7 701 111 22 33', via: 'telegram' });
   assert.equal(r.status, 200);
-  assert.deepEqual(Object.keys(r.data).sort(), ['ok', 'telegramUrl', 'via']);
+  assert.deepEqual(Object.keys(r.data).sort(), ['ok', 'sent', 'telegramUrl', 'via']);
+  assert.equal(r.data.sent, false);
   const start = /^https:\/\/t\.me\/JoldaTestBot\?start=([A-Za-z0-9_-]+)$/.exec(r.data.telegramUrl)[1];
 
   sent.length = 0;
@@ -101,11 +102,14 @@ test('следующие входы: код приходит в чат сраз�
   sent.length = 0;
   for (let i = 0; i < 2; i++) {
     const r = await visitor()('POST', '/api/auth/request-code', { phone: '+77011112233', via: 'telegram' });
-    assert.deepEqual(r.data, { ok: true, via: 'telegram' });
+    // ссылка ведёт прямо в чат с ботом: человеку не нужно искать его самому
+    assert.deepEqual(r.data, { ok: true, via: 'telegram', sent: true, telegramUrl: 'https://t.me/JoldaTestBot' });
   }
   assert.equal(sent.length, 2);
   assert.deepEqual(sent.map((m) => m.chat_id), [5001, 5001]);
-  assert.match(sent[0].text, /^Код входа в Jolda: \d{6}\nНикому его не сообщайте\.$/);
+  // код размечен так, чтобы в Telegram копироваться одним нажатием
+  assert.match(sent[0].text, /^Код входа в Jolda: <code>\d{6}<\/code>\nНажмите на код, чтобы скопировать/);
+  assert.equal(sent[0].parse_mode, 'HTML');
 });
 
 test('язык бота — из настроек Telegram; привязанному чату без запроса бот объясняет, что делать', async () => {
@@ -142,7 +146,7 @@ test('ссылку из бота нельзя использовать дваж�
   const me = visitor();
   const r = await me('POST', '/api/auth/request-code', { phone: '+77022223344', via: 'telegram' });
   // номер уже привязан (тест выше) — код ушёл сразу; новый запрос для непривязанного номера даёт ссылку
-  assert.deepEqual(r.data, { ok: true, via: 'telegram' });
+  assert.deepEqual(r.data, { ok: true, via: 'telegram', sent: true, telegramUrl: 'https://t.me/JoldaTestBot' });
   const fresh = await me('POST', '/api/auth/request-code', { phone: '+77044445566', via: 'telegram' });
   const start = new URL(fresh.data.telegramUrl).searchParams.get('start');
   run(`UPDATE login_codes SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ','now','-20 minutes') WHERE tg_start = ?`, start);
