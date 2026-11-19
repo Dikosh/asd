@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { q, q1, run, insert, tx } from '../db.js';
 import { CITIES, cityById, isValidBin } from '../geo.js';
 import * as L from '../lib.js';
+import { notify } from '../notify.js';
 import { sendSms } from '../sms.js';
 import { tgBot, tgLink, tgSendCode } from '../telegram.js';
 
@@ -35,7 +36,22 @@ const TG_WAIT = 15 * 60_000; // сколько ждём, пока человек
 const CODE_TRIES = 5; // неверных вводов на один код — потом нужен новый
 const PHONE_DAY = 10; // кодов на номер в сутки: столько с чужих устройств и столько же со «своих»
 const IP_DAY = 300; // кодов с одного адреса в сутки
-const SMS_DAY = Number(process.env.SMS_DAILY_MAX ?? 3000); // кодов в сутки на всю площадку (0 — без предела): защита от рассылки за наш счёт
+const SMS_DAY = Number(process.env.SMS_DAILY_MAX ?? 300); // SMS с кодами в сутки на всю площадку (0 — без предела): защита от рассылки за наш счёт
+// На номера каких стран отправляются SMS: коды стран через запятую, `*` — на любые. По умолчанию — страны из списка
+// на экране входа. SMS за границу дороже, и рассылка кодов по чужим странам — прямой способ накрутить расходы.
+const SMS_COUNTRIES = (process.env.SMS_COUNTRIES || '').trim() === '*' ? null
+  : (process.env.SMS_COUNTRIES || '7,998,996,992,993,86,375,994,995,90').split(/[,;\s]+/).map((c) => c.replace(/\D/g, '')).filter(Boolean);
+/** Можно ли отправить SMS на этот номер (страна разрешена). */
+export const smsAllowed = (phone, countries = SMS_COUNTRIES) => !countries || countries.some((c) => phone.startsWith('+' + c));
+/** Модераторы узнают, что суточный предел SMS исчерпан, — не чаще раза в сутки. */
+function smsLimitAlert(now = Date.now()) {
+  const last = Number(q1(`SELECT value FROM app_state WHERE key = 'sms:limit'`)?.value || 0);
+  if (now - last < 86400_000) return;
+  run(`INSERT INTO app_state(key, value) VALUES('sms:limit', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, String(now));
+  for (const a of q('SELECT id FROM users WHERE is_admin = 1')) {
+    notify(a.id, { kind: 'system', title: 'Суточный предел SMS исчерпан', body: 'За сутки отправлено {n} кодов входа, новые SMS не отправляются. Если это не атака, попросите разработчика увеличить предел.', vars: { n: SMS_DAY }, link: '/cabinet/admin' });
+  }
+}
 const sha = (s) => crypto.createHash('sha256').update(s).digest('base64url');
 /** Устройство, с которого под этим номером уже входили: cookie `kd`, в базе — только её отпечаток. */
 const knownDevice = (req, phone) => {
@@ -162,7 +178,13 @@ export default function authRoutes(app) {
       // общий предел площадки — про деньги: коды через Telegram бесплатны и в него не входят
       if (!viaTelegram && SMS_DAY && sent(`channel = 'sms'`) >= SMS_DAY) {
         console.error(`[sms] за сутки отправлено ${SMS_DAY} кодов входа — отправка приостановлена (предел SMS_DAILY_MAX)`);
+        smsLimitAlert();
+        if (tgBot()) throw bad('sms_limit', 'Отправка SMS временно приостановлена. Получите код в Telegram', 503);
         throw bad('sms_limit', 'Отправка кодов временно приостановлена. Попробуйте позже', 503);
+      }
+      if (!viaTelegram && !smsAllowed(phone)) {
+        if (tgBot()) throw bad('sms_country', 'На номера этой страны код по SMS не отправляется. Получите код в Telegram', 400);
+        throw bad('sms_country', 'На номера этой страны код по SMS не отправляется', 400);
       }
     }
     const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');

@@ -16,7 +16,7 @@ delete process.env.OSRM_URL;
 delete process.env.FCM_SERVICE_ACCOUNT;
 process.env.SMS_DAILY_MAX = '400'; // предел кодов на всю площадку — небольшой, чтобы его можно было проверить
 const { createApp, leaveDemoMode } = await import('../server/index.js');
-const { syncAdmins } = await import('../server/routes/auth.js');
+const { syncAdmins, smsAllowed } = await import('../server/routes/auth.js');
 const { seed } = await import('../server/seed.js');
 const { q1, run, insert, tx } = await import('../server/db.js');
 
@@ -243,6 +243,16 @@ test('сутки: предел кодов с одного адреса и на �
   run(`DELETE FROM login_codes WHERE ticket LIKE 'seed-+77050000000-%'`);
   assert.equal((await device().call('POST', '/api/auth/request-code', { phone: '+77059990012' })).status, 200);
 
+  // SMS уходят только на номера стран из списка на экране входа: рассылка кодов по всему миру не пройдёт
+  const abroad = await device().call('POST', '/api/auth/request-code', { phone: '+447911123456' });
+  assert.equal(abroad.status, 400);
+  assert.equal(abroad.data.error, 'sms_country');
+  assert.equal(count(), rows + 1, 'запрос на номер чужой страны в пределы не засчитан');
+  assert.equal((await device().call('POST', '/api/auth/request-code', { phone: '+998901234567' })).status, 200);
+  assert.equal(smsAllowed('+77011234567', ['7']), true);
+  assert.equal(smsAllowed('+998901234567', ['7']), false);
+  assert.equal(smsAllowed('+447911123456', null), true, '`*` в SMS_COUNTRIES — любые страны');
+
   // рассылка с тысяч адресов: общий предел площадки (в тесте — 400 кодов в сутки)
   sentBefore(400, '+77050000001', '198.51.100.1');
   const before = sms.length;
@@ -250,5 +260,12 @@ test('сутки: предел кодов с одного адреса и на �
   assert.equal(all.status, 503);
   assert.equal(all.data.error, 'sms_limit');
   assert.equal(sms.length, before);
+  // модераторы узнают об исчерпанном пределе — один раз, а не на каждый отказ
+  const alerts = () => q1(`SELECT COUNT(*) AS n FROM notifications WHERE title = 'Суточный предел SMS исчерпан'`).n;
+  const admins = q1('SELECT COUNT(*) AS n FROM users WHERE is_admin = 1').n;
+  assert.ok(admins > 0);
+  assert.equal(alerts(), admins);
+  assert.equal((await device().call('POST', '/api/auth/request-code', { phone: '+77059990014' })).status, 503);
+  assert.equal(alerts(), admins);
   provider.close();
 });

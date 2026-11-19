@@ -1,8 +1,8 @@
 // Вход по номеру телефона и регистрация одной формой; для гостей — витрина свежих объявлений.
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowRight, BadgeCheck, FileCheck2, Lock, MapPinned, Send, Users } from 'lucide-react';
-import { api, BODY_L, CARGO_L, fmtDates, Me, money, num, KIND_L, ROLE_HINT, ROLE_L, t, useApp, useLoad } from '../core';
+import { ArrowRight, BadgeCheck, FileCheck2, Lock, MapPinned, MessageCircle, Phone, Send, Users } from 'lucide-react';
+import { api, BODY_L, CARGO_L, fmtDates, Me, money, num, KIND_L, ROLE_HINT, ROLE_L, t, useApp, useLoad, waLink } from '../core';
 import { Field, LangSwitch, Logo, Select } from '../ui';
 
 const CODES = [
@@ -183,6 +183,17 @@ export default function AuthPage() {
               <button type="button" className="btn ghost block" disabled={busy || wait > 0} onClick={() => requestCode()}>{wait > 0 ? t('Отправить код ещё раз через {n} с', { n: wait }) : t('Отправить код ещё раз')}</button>
               <button type="button" className="btn ghost block" onClick={() => setStep('phone')}>{t('Изменить номер')}</button>
             </>
+          )}
+          {/* человеку, которому не пришёл код, больше некуда обратиться: форма обращения — только после входа */}
+          {step !== 'reg' && (meta.support.phone || meta.support.telegram) && (
+            <div className="stack-s">
+              <span className="muted small">{t('Не получается войти? Напишите в поддержку')}</span>
+              <div className="row wrap">
+                {meta.support.phone && <a className="btn soft" href={`tel:${meta.support.phone}`}><Phone size={16} /> {meta.support.phone}</a>}
+                {meta.support.phone && <a className="btn soft wa" href={waLink(meta.support.phone)} target="_blank" rel="noreferrer"><MessageCircle size={16} /> WhatsApp</a>}
+                {meta.support.telegram && <a className="btn soft" href={meta.support.telegram} target="_blank" rel="noreferrer"><Send size={16} /> Telegram</a>}
+              </div>
+            </div>
           )}
           {step === 'reg' && (
             <>
