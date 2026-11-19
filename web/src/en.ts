@@ -946,6 +946,8 @@ export const EN: Record<string, string> = {
   'Проверка компании не пройдена': 'Company verification failed',
   'Проверьте БИН и документы и отправьте заявку заново.': 'Check the BIN and documents and submit the request again.',
   'Новая жалоба': 'New report',
+  'Новое сообщение: {name}': 'New message: {name}',
+  'Новая заявка на проверку компании': 'New company verification request',
   'Новое обращение в поддержку': 'New support request',
   'Объявление №{n} снято модератором': 'Listing No. {n} taken down by a moderator',
   'Причина: жалоба пользователей. Если это ошибка, напишите в поддержку.': 'Reason: user reports. If this is a mistake, contact support.',

@@ -168,6 +168,9 @@ export default function companyRoutes(app) {
     if (c.verified === 'verified') throw bad('state', 'Компания уже проверена', 409);
     run(`UPDATE companies SET verified = 'pending', verify_note = '' WHERE id = ?`, c.id);
     L.resetCompanyCache();
+    // модераторы узнают о заявке сразу: клиенту обещан ответ в течение рабочего дня. Повторная отправка той же заявки молчит
+    if (c.verified !== 'pending')
+      for (const a of q('SELECT id FROM users WHERE is_admin = 1')) notify(a.id, { kind: 'system', title: 'Новая заявка на проверку компании', body: c.name, link: '/cabinet/admin' });
     res.json({ ok: true });
   });
 

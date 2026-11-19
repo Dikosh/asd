@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { q1, run } from './db.js';
 import { DEMO, HttpError, PROD, TILE_ORIGIN, loadUser } from './lib.js';
-import authRoutes, { rateLimit } from './routes/auth.js';
+import authRoutes, { rateLimit, syncAdmins } from './routes/auth.js';
 import listingRoutes, { expireListings } from './routes/listings.js';
 import dealRoutes, { autoCompleteTrips } from './routes/deals.js';
 import companyRoutes from './routes/company.js';
@@ -134,6 +134,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
   if (DEMO && PROD) console.warn('ВНИМАНИЕ: демо-режим на сервере в боевой конфигурации — вход под любой ролью открыт всем. Только для показа.');
   leaveDemoMode();
+  syncAdmins();
   if (DEMO && !q1('SELECT 1 FROM users LIMIT 1')) seed();
   const port = Number(process.env.PORT || 3000);
   housekeeping();

@@ -236,6 +236,8 @@ export function subscribe(userId, res, sid = null) {
   set.add(res);
   res.on('close', () => streams.get(userId)?.delete(res));
 }
+/** Входы (сессии) человека, в которых сайт или приложение сейчас открыты: у них есть живой поток событий. */
+export const openSessions = (userId) => new Set([...(streams.get(userId) || [])].map((res) => res.sid).filter(Boolean));
 export function push(userIds, type, data = {}) {
   for (const id of new Set([userIds].flat())) {
     for (const res of streams.get(id) || []) res.write(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`);

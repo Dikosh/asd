@@ -4,13 +4,25 @@
 #   curl -fsSL https://raw.githubusercontent.com/Dikosh/asd/main/scripts/install-server.sh | bash -s -- moindomen.kz
 # Домен необязателен. С доменом сайт будет на https:// с бесплатным сертификатом
 # (A-запись домена должна указывать на этот сервер). Без домена — http://IP-адрес.
-# Повторный запуск обновляет код до последней версии; данные остаются в /var/lib/jolda.
+# Повторный запуск обновляет код до последней версии; данные остаются в /var/lib/jolda. Домен и демо-режим
+# прошлой установки сохраняются, указывать их заново не нужно (снять домен: `bash -s -- none`).
 # Демо-стенд для показа (вход одним нажатием под любой ролью, коды входа на экране) — только явно:
 #   curl -fsSL https://raw.githubusercontent.com/Dikosh/asd/main/scripts/install-server.sh | DEMO=1 bash -s -- moindomen.kz
 # Настоящим пользователям демо-стенд открывать нельзя: в нём любой входит под любым номером и как администратор.
 set -euo pipefail
 
-DOMAIN="${1:-}"
+DOMAIN="${1:-${DOMAIN:-}}"
+# Домен при обновлении запоминается так же, как демо-режим: если его не указали, берётся из настроек веб-сервера
+# прошлой установки. Иначе обновление «короткой командой» молча вернуло бы сайт на http:// и сломало вход.
+# Сознательно вернуться к работе без домена: указать вместо домена слово none.
+if [ -z "$DOMAIN" ] && [ -f /etc/caddy/Caddyfile ]; then
+  PREV="$(awk '!/^[[:space:]]*(#|$)/ { if ($2 == "{") print $1; exit }' /etc/caddy/Caddyfile)"
+  if printf '%s' "$PREV" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,}$'; then
+    DOMAIN="$PREV"
+    echo "Домен из прошлой установки: $DOMAIN"
+  fi
+fi
+[ "$DOMAIN" = none ] && DOMAIN=""
 REPO="${REPO:-https://github.com/Dikosh/asd.git}"
 APP=/opt/jolda
 DATA=/var/lib/jolda

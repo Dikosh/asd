@@ -16,6 +16,7 @@ delete process.env.OSRM_URL;
 delete process.env.FCM_SERVICE_ACCOUNT;
 process.env.SMS_DAILY_MAX = '400'; // предел кодов на всю площадку — небольшой, чтобы его можно было проверить
 const { createApp, leaveDemoMode } = await import('../server/index.js');
+const { syncAdmins } = await import('../server/routes/auth.js');
 const { seed } = await import('../server/seed.js');
 const { q1, run, insert, tx } = await import('../server/db.js');
 
@@ -87,6 +88,45 @@ test('база без отметки о режиме, но с демо-поль�
 });
 
 const env = (extra) => ({ ...process.env, DATA_DIR: fs.mkdtempSync(path.join(os.tmpdir(), 'jolda-test-demo-prod-')), NODE_ENV: 'production', PORT: '0', ...extra });
+
+test('модераторы — по списку ADMIN_PHONE: права выдаются и снимаются, демо-аккаунты не затрагиваются', () => {
+  const admin = (id) => q1('SELECT is_admin FROM users WHERE id = ?', id).is_admin;
+  assert.deepEqual(syncAdmins(new Set()), { granted: 0, revoked: 0 }, 'без списка права никто не трогает');
+  assert.deepEqual(syncAdmins(new Set(['+77059990001', '+77059990002'])), { granted: 1, revoked: 0 });
+  assert.equal(admin(realUser.id), 1);
+  assert.deepEqual(syncAdmins(new Set(['+77059990002'])), { granted: 0, revoked: 1 }, 'номер убрали из списка — права сняты');
+  assert.equal(admin(realUser.id), 0);
+  assert.equal(admin(demoAdmin.id), 1, 'демо-администратор остаётся для демо-стенда');
+});
+
+test('опечатка в ADMIN_PHONE: сервер не запускается и говорит, какой номер неверный', () => {
+  const r = spawnSync(process.execPath, [entry], { env: env({ ADMIN_PHONE: '+7 701 123 45 67, 12345' }), encoding: 'utf8', timeout: 20_000 });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /ADMIN_PHONE: некорректный номер «12345»/);
+});
+
+test('очистка базы (npm run seed -- --reset) проходит до конца и не оставляет старых данных', () => {
+  const seedJs = fileURLToPath(new URL('../server/seed.js', import.meta.url));
+  const e = env({ NODE_ENV: 'test' });
+  const first = spawnSync(process.execPath, [seedJs], { env: e, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(first.status, 0, first.stderr);
+  // следы работы площадки в таблицах, которых не было в прежнем ручном списке
+  const mark = spawnSync(process.execPath, ['-e', `
+    const { run, q1 } = await import(${JSON.stringify(new URL('../server/db.js', import.meta.url).href)});
+    run("INSERT INTO known_devices(token, phone) VALUES('t', '+77010000000')");
+    run("INSERT INTO companies(name, form) VALUES('Лишняя компания', 'ТОО')");
+    console.log(q1('SELECT COUNT(*) AS n FROM users').n);
+  `, '--input-type=module'], { env: e, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(mark.status, 0, mark.stderr);
+  const users = Number(mark.stdout.trim());
+  const reset = spawnSync(process.execPath, [seedJs, '--reset'], { env: e, encoding: 'utf8', timeout: 60_000 });
+  assert.equal(reset.status, 0, reset.stderr);
+  const check = spawnSync(process.execPath, ['-e', `
+    const { q1 } = await import(${JSON.stringify(new URL('../server/db.js', import.meta.url).href)});
+    console.log(JSON.stringify([q1('SELECT COUNT(*) AS n FROM users').n, q1('SELECT COUNT(*) AS n FROM known_devices').n, q1("SELECT COUNT(*) AS n FROM companies WHERE name = 'Лишняя компания'").n]));
+  `, '--input-type=module'], { env: e, encoding: 'utf8', timeout: 60_000 });
+  assert.deepEqual(JSON.parse(check.stdout.trim()), [users, 0, 0]);
+});
 
 test('демо на боевом сервере без подтверждения не запускается', () => {
   const r = spawnSync(process.execPath, [entry], { env: env({ DEMO_MODE: '1' }), encoding: 'utf8', timeout: 20_000 });

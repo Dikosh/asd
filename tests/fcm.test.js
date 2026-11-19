@@ -22,7 +22,8 @@ fs.writeFileSync(process.env.FCM_SERVICE_ACCOUNT, JSON.stringify(sa));
 
 const { createApp } = await import('../server/index.js');
 const { seed } = await import('../server/seed.js');
-const { q, run } = await import('../server/db.js');
+const { q, q1, run, insert } = await import('../server/db.js');
+const lib = await import('../server/lib.js');
 const { notify } = await import('../server/notify.js');
 const fcm = await import('../server/fcm.js');
 
@@ -78,7 +79,7 @@ async function demo(role) {
     return data;
   };
   const me = await call('POST', '/api/auth/demo', { role });
-  return { me, post: (u, b = {}) => call('POST', u, b) };
+  return { me, post: (u, b = {}) => call('POST', u, b), get: (u) => call('GET', u) };
 }
 const until = async (cond, ms = 3000) => {
   for (const t0 = Date.now(); !cond(); ) {
@@ -147,4 +148,60 @@ test('уведомление уходит на устройства; токен 
   const t = await carrier.post('/api/push/test');
   assert.deepEqual([t.devices, t.fcm], [3, true]);
   await until(() => calls.send.length === before + 3);
+});
+
+test('сообщение в чате: push собеседнику без записи в уведомления, пачка сообщений — один push, после прочтения — снова', async () => {
+  const sender = await demo('logist');
+  const peer = await demo('broker');
+  const listing = q1('SELECT id FROM listings ORDER BY id LIMIT 1').id;
+  const chatId = insert('INSERT INTO chats(listing_id, owner_id, peer_id, owner_company, peer_company) VALUES(?, ?, ?, ?, ?)',
+    listing, sender.me.user.id, peer.me.user.id, sender.me.company.id, peer.me.company.id);
+  await sender.post('/api/push/device', { token: 'ok-chat-sender', platform: 'android' });
+  await peer.post('/api/push/device', { token: 'ok-chat-peer', platform: 'ios' });
+  const toPeer = () => calls.send.filter((c) => c.message.token === 'ok-chat-peer');
+  const notifs = () => q1('SELECT COUNT(*) AS n FROM notifications WHERE user_id = ?', peer.me.user.id).n;
+  const before = notifs();
+
+  await sender.post(`/api/chats/${chatId}/messages`, { text: 'Когда подадите машину?' });
+  await until(() => toPeer().length === 1);
+  assert.deepEqual(toPeer()[0].message.notification, { title: `Новое сообщение: ${sender.me.company.name}`, body: 'Когда подадите машину?' });
+  assert.deepEqual(toPeer()[0].message.data, { link: `/cabinet/messages/${chatId}`, kind: 'message', id: '' });
+  assert.equal(notifs(), before, 'в список уведомлений сообщения чата не пишутся');
+
+  // ещё два сообщения подряд — нового push нет
+  await sender.post(`/api/chats/${chatId}/messages`, { text: 'Алло?' });
+  await sender.post(`/api/chats/${chatId}/messages`, { text: 'Жду ответа' });
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(toPeer().length, 1);
+
+  // собеседник открыл переписку — о следующем сообщении узнаёт сразу
+  await peer.get(`/api/chats/${chatId}/messages`);
+  await sender.post(`/api/chats/${chatId}/messages`, { text: 'Спасибо, договорились' });
+  await until(() => toPeer().length === 2);
+  assert.equal(calls.send.filter((c) => c.message.token === 'ok-chat-sender').length, 0, 'отправителю и его коллегам push о своём сообщении не идёт');
+
+  // ответ идёт уже в обратную сторону
+  await peer.post(`/api/chats/${chatId}/messages`, { text: 'Хорошо' });
+  await until(() => calls.send.filter((c) => c.message.token === 'ok-chat-sender').length === 1);
+});
+
+test('в какие входы сайт открыт: по живым потокам событий', () => {
+  const stream = { write() {}, end() {}, on() {} };
+  lib.subscribe(987654, stream, 'sid-open');
+  assert.deepEqual([...lib.openSessions(987654)], ['sid-open']);
+  assert.deepEqual([...lib.openSessions(987655)], []);
+});
+
+test('заявка на проверку компании: модераторы узнают сразу, повторная отправка не шумит', async () => {
+  const owner = await demo('broker');
+  run(`UPDATE companies SET verified = 'none' WHERE id = ?`, owner.me.company.id);
+  await owner.post('/api/documents', { kind: 'registration', filename: 'справка.pdf', mime: 'application/pdf', data: Buffer.from('%PDF-1.4 test').toString('base64') });
+  const admins = q('SELECT id FROM users WHERE is_admin = 1').length;
+  const count = () => q1(`SELECT COUNT(*) AS n FROM notifications WHERE title = 'Новая заявка на проверку компании' AND body = ?`, owner.me.company.name).n;
+  assert.ok(admins > 0);
+  await owner.post('/api/company/verify-request');
+  assert.equal(count(), admins);
+  assert.equal(q1(`SELECT link FROM notifications WHERE title = 'Новая заявка на проверку компании' LIMIT 1`).link, '/cabinet/admin');
+  await owner.post('/api/company/verify-request');
+  assert.equal(count(), admins, 'та же заявка второй раз модераторов не будит');
 });

@@ -320,6 +320,20 @@ export function seedServices() {
   return true;
 }
 
+/**
+ * Очистить базу целиком. Таблицы берутся из самой базы: список, который вели вручную, устарел —
+ * в нём осталась удалённая таблица, и очистка обрывалась на полпути.
+ * Отметка о режиме (app_state) остаётся: она не данные площадки.
+ */
+export function wipe() {
+  db.exec('PRAGMA foreign_keys=OFF;');
+  try {
+    for (const { name } of q(`SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name != 'app_state'`)) db.exec(`DELETE FROM "${name}"`);
+  } finally {
+    db.exec('PRAGMA foreign_keys=ON;');
+  }
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url) && process.argv.includes('--relocation')) {
   console.log(seedRelocation() ? '[seed] демо раздела «Перегон» добавлено' : '[seed] демо раздела «Перегон» уже есть');
   console.log(seedServices() ? '[seed] демо каталога услуг добавлено' : '[seed] демо каталога услуг уже есть');
@@ -331,10 +345,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       console.log('База не пуста. Запустите с --reset, чтобы очистить её и загрузить демо-данные заново.');
       process.exit(1);
     }
-    db.exec('PRAGMA foreign_keys=OFF;');
-    for (const t of ['files', 'route_cache', 'feedback', 'news', 'push_subs', 'push_devices', 'notifications', 'complaints', 'partners', 'blocks', 'listing_views', 'invites', 'transactions', 'jobs', 'blacklist', 'reviews', 'positions', 'trip_events', 'trips', 'messages', 'chats', 'responses', 'searches', 'marks', 'listings', 'employees', 'vehicles', 'documents', 'otps', 'sessions', 'users', 'companies'])
-      db.exec(`DELETE FROM ${t}`);
-    db.exec('PRAGMA foreign_keys=ON;');
+    wipe();
   }
   seed();
 }

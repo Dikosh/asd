@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { q, q1, run, insert, tx } from '../db.js';
 import { cityById, haversine, ROAD_FACTOR } from '../geo.js';
 import * as L from '../lib.js';
-import { notify } from '../notify.js';
+import { notify, pushOnly } from '../notify.js';
 import { rateLimit } from './auth.js';
 import { fileOut, fileSchema, saveFile, sendFile } from '../files.js';
 import { forgetRecommendations } from './listings.js';
@@ -27,10 +27,27 @@ function requireChatAllowed(user, chat) {
   L.requireActiveCompany(user);
 }
 
-function postMessage(chatId, sender, text, fileId = null) {
+// О новом сообщении собеседникам уходит push на телефон и в браузер, где сайт закрыт: с открытым приложением они видят
+// сообщение сразу, а с закрытым раньше не узнавали о нём вовсе. Несколько сообщений подряд — один push: следующий уйдёт,
+// когда собеседник открыл переписку или прошло MSG_PUSH_GAP.
+const MSG_PUSH_GAP = 3 * 60_000;
+const lastMsgPush = new Map(); // «чат:пользователь» → когда ему ушёл push о сообщении
+function pushMessage(chat, sender, text) {
+  const now = Date.now();
+  if (lastMsgPush.size > 5000) for (const [k, at] of lastMsgPush) if (now - at > MSG_PUSH_GAP) lastMsgPush.delete(k);
+  const peers = staffOf(chat.owner_company === sender.company_id ? chat.peer_company : chat.owner_company);
+  const due = peers.filter((u) => now - (lastMsgPush.get(`${chat.id}:${u}`) || 0) > MSG_PUSH_GAP);
+  if (!due.length) return;
+  for (const u of due) lastMsgPush.set(`${chat.id}:${u}`, now);
+  const from = q1('SELECT name FROM companies WHERE id = ?', sender.company_id)?.name || sender.name;
+  pushOnly(due, { kind: 'message', title: 'Новое сообщение: {name}', vars: { name: from }, body: text.slice(0, 140), link: `/cabinet/messages/${chat.id}` });
+}
+/** silent — сообщение, о котором уже есть своё уведомление (текст отклика). */
+function postMessage(chatId, sender, text, fileId = null, { silent = false } = {}) {
   const id = insert('INSERT INTO messages(chat_id, sender_id, text, file_id) VALUES(?, ?, ?, ?)', chatId, sender.id, text, fileId);
   const chat = q1('SELECT * FROM chats WHERE id = ?', chatId);
   L.push(chatUsers(chat), 'message', { chatId, id });
+  if (!silent) pushMessage(chat, sender, text);
   return id;
 }
 function chatOf(req) {
@@ -353,7 +370,7 @@ export default function dealRoutes(app) {
       l.kind !== 'truck' && b.trucks > 1 ? `— машин: ${b.trucks}` : '',
       v ? `— машина: ${v.brand}${v.plate ? `, ${v.plate}` : ''}` : '',
     ].filter(Boolean);
-    postMessage(out.chatId, req.user, [b.message, ...extra].join('\n'));
+    postMessage(out.chatId, req.user, [b.message, ...extra].join('\n'), null, { silent: true });
     forgetRecommendations(req.user.id);
     L.push(staffOf(l.company_id), 'response', { listingId: l.id });
     notify(staffOf(l.company_id), { kind: 'response', title: 'Новый отклик: {route}', vars: routeOf(l.id), body: b.message.slice(0, 140), link: `/listing/${l.id}` });
@@ -481,6 +498,8 @@ export default function dealRoutes(app) {
       chat.id, req.user.company_id,
     ).changes;
     if (changed) L.push(chatUsers(chat), 'read', { chatId: chat.id });
+    // переписку открыли — о следующем сообщении снова сообщим сразу
+    for (const u of staffOf(req.user.company_id)) lastMsgPush.delete(`${chat.id}:${u}`);
     res.json(
       q(
         `SELECT m.id, m.sender_id AS senderId, u.name AS senderName, u.company_id AS companyId, m.text, m.is_read AS isRead, m.created_at AS createdAt,

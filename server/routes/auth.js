@@ -47,7 +47,28 @@ function rememberDevice(req, res, phone) {
   run('DELETE FROM known_devices WHERE phone = ? AND token NOT IN (SELECT token FROM known_devices WHERE phone = ? ORDER BY created_at DESC, rowid DESC LIMIT 10)', phone, phone);
   L.setCookie(req, res, 'kd', kd, 31536000, '/api/auth');
 }
-const ADMIN_PHONE = process.env.ADMIN_PHONE ? L.normPhone(process.env.ADMIN_PHONE) : null;
+// Модераторы — номера из ADMIN_PHONE, через запятую. Этот список — единственный источник прав: добавили номер —
+// человек становится модератором (сразу, если уже зарегистрирован, иначе при регистрации), убрали — права снимаются
+// при следующем запуске сервера. Без ADMIN_PHONE права никому не выдаются и ни у кого не снимаются.
+const ADMIN_PHONES = new Set(
+  String(process.env.ADMIN_PHONE || '').split(/[,;]+/).map((x) => x.trim()).filter(Boolean).map((x) => {
+    try {
+      return L.normPhone(x);
+    } catch {
+      throw new Error(`ADMIN_PHONE: некорректный номер «${x}». Номера указываются через запятую, например +77011234567,+77017654321`);
+    }
+  }),
+);
+/** Привести права модераторов к списку ADMIN_PHONE. Демо-аккаунты список не затрагивает. */
+export function syncAdmins(phones = ADMIN_PHONES) {
+  if (!phones.size) return { granted: 0, revoked: 0 };
+  const list = [...phones];
+  const marks = list.map(() => '?').join(', ');
+  const revoked = run(`UPDATE users SET is_admin = 0 WHERE is_admin = 1 AND is_demo = 0 AND phone NOT IN (${marks})`, ...list).changes;
+  const granted = run(`UPDATE users SET is_admin = 1 WHERE is_admin = 0 AND is_demo = 0 AND phone IN (${marks})`, ...list).changes;
+  if (revoked || granted) console.log(`Модераторы по ADMIN_PHONE: права выданы — ${granted}, сняты — ${revoked}`);
+  return { granted, revoked };
+}
 const INVITE_DAYS = 14;
 const inviteFor = (phone) =>
   q1(
@@ -170,7 +191,7 @@ export default function authRoutes(app) {
       if (user.is_demo && !L.DEMO) throw bad('forbidden', 'Этот номер недоступен', 403);
       // код использован; строка остаётся — отправленное SMS учтено в суточных пределах
       run('UPDATE login_codes SET code = ?, expires = 0 WHERE ticket = ?', L.token(8), ticket);
-      if (ADMIN_PHONE === phone && !user.is_admin) run('UPDATE users SET is_admin = 1 WHERE id = ?', user.id);
+      if (ADMIN_PHONES.has(phone) && !user.is_admin) run('UPDATE users SET is_admin = 1 WHERE id = ?', user.id);
       L.startSession(req, res, user.id);
       rememberDevice(req, res, phone);
       L.setCookie(req, res, 'otp', '', 0, '/api/auth');
@@ -204,7 +225,7 @@ export default function authRoutes(app) {
     if (!invite && (!b.companyName || (!b.companyForm && b.role !== 'driver') || !b.role)) throw bad('validation', 'Укажите компанию и роль');
     const userId = tx(() => {
       run('UPDATE login_codes SET reg_token = NULL, expires = 0 WHERE ticket = ?', otp.ticket);
-      const isAdmin = ADMIN_PHONE === otp.phone ? 1 : 0;
+      const isAdmin = ADMIN_PHONES.has(otp.phone) ? 1 : 0;
       if (invite) {
         // сотрудник присоединяется к компании, которая его пригласила
         run('DELETE FROM invites WHERE id = ?', invite.id);
