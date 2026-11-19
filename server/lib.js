@@ -127,23 +127,33 @@ function cookie(req, name) {
     return null; // испорченная cookie — считаем, что её нет
   }
 }
+function sessionCookie(req, res, sid) {
+  const secure = req.secure || (PROD && process.env.INSECURE_COOKIES !== '1') ? '; Secure' : '';
+  res.setHeader('Set-Cookie', `sid=${sid}; HttpOnly; Path=/; SameSite=Lax; Max-Age=2592000${secure}`);
+}
 export function startSession(req, res, userId) {
   const sid = token(32);
   run('INSERT INTO sessions(token, user_id) VALUES(?, ?)', sid, userId);
-  const secure = req.secure || (PROD && process.env.INSECURE_COOKIES !== '1') ? '; Secure' : '';
-  res.setHeader('Set-Cookie', `sid=${sid}; HttpOnly; Path=/; SameSite=Lax; Max-Age=2592000${secure}`);
+  sessionCookie(req, res, sid);
 }
 export function endSession(req, res) {
   const sid = cookie(req, 'sid');
   if (sid) run('DELETE FROM sessions WHERE token = ?', sid);
   res.setHeader('Set-Cookie', 'sid=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0');
 }
-export function loadUser(req, _res, next) {
+export function loadUser(req, res, next) {
   const sid = cookie(req, 'sid');
-  // сессия живёт 30 дней
-  req.user = sid ? q1(`SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.created_at > strftime('%Y-%m-%dT%H:%M:%fZ','now','-30 days')`, sid) || null : null;
+  // вход действует 30 дней с последнего обращения: пока человек пользуется сайтом или приложением (например, передаёт GPS
+  // в длинном рейсе), он не обрывается. Месяц без единого запроса — и нужно войти заново
+  const s = sid ? q1(`SELECT user_id, COALESCE(used_at, created_at) AS used FROM sessions WHERE token = ? AND COALESCE(used_at, created_at) > strftime('%Y-%m-%dT%H:%M:%fZ','now','-30 days')`, sid) : null;
+  req.user = s ? q1('SELECT * FROM users WHERE id = ?', s.user_id) || null : null;
   // учётные записи из демо-данных вне демо-режима не действуют — в том числе вход, открытый ещё во время демо
   if (req.user?.is_demo && !DEMO) req.user = null;
+  // продлеваем не чаще раза в сутки: отметка в базе и cookie на новые 30 дней
+  if (req.user && Date.parse(s.used) < Date.now() - 86400_000) {
+    run('UPDATE sessions SET used_at = ? WHERE token = ?', now(), sid);
+    sessionCookie(req, res, sid);
+  }
   // отметка активности не чаще раза в час — лишних записей в базу на каждый запрос не делаем
   if (req.user && (!req.user.last_seen || Date.parse(req.user.last_seen) < Date.now() - 3600_000)) run('UPDATE users SET last_seen = ? WHERE id = ?', now(), req.user.id);
   next();

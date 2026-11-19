@@ -18,7 +18,7 @@ import { seed } from './seed.js';
 
 // Что может менять водитель из команды: вести рейс и свои личные настройки. Остальное — сотрудники и владелец.
 // По ссылке водителя (/drive/…) право даёт сама ссылка, поэтому вошедшему водителю она тоже доступна.
-const DRIVER_WRITE = [/^\/trips\/\d+\/(stage|gps|position|files)$/, /^\/drive\/[^/]+\/(stage|gps|position|files)$/, /^\/notifications\/read$/, /^\/push\//, /^\/me$/, /^\/auth\//, /^\/feedback$/, /^\/team\/accept$/];
+const DRIVER_WRITE = [/^\/trips\/\d+\/(stage|gps|positions?|files)$/, /^\/drive\/[^/]+\/(stage|gps|positions?|files)$/, /^\/notifications\/read$/, /^\/push\//, /^\/me$/, /^\/auth\//, /^\/feedback$/, /^\/team\/accept$/];
 // Что водитель из команды видит: свои рейсы и их файлы, профиль, команду, справочные разделы. Список разрешающий:
 // объявления, ставки, отклики, чаты, деньги и всё, что появится позже, для него закрыто, пока не добавлено сюда.
 const DRIVER_READ = [
@@ -94,7 +94,7 @@ export function housekeeping() {
   try {
     expireListings();
     autoCompleteTrips();
-    run(`DELETE FROM sessions WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-30 days')`);
+    run(`DELETE FROM sessions WHERE COALESCE(used_at, created_at) < strftime('%Y-%m-%dT%H:%M:%fZ','now','-30 days')`);
     run('DELETE FROM otps WHERE expires < ?', Date.now() - 3600_000);
     run(`DELETE FROM invites WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-14 days')`);
     run(`DELETE FROM route_cache WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-90 days')`);

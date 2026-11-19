@@ -264,3 +264,63 @@ test('повторное нажатие на платное действие н�
   await owner.post('/api/plan/buy');
   assert.equal(await balance(), before - 2 * 9900);
 });
+
+test('вход продлевается, пока им пользуются, и обрывается после месяца тишины', async () => {
+  const user = await signIn('+77061370001', { name: 'Водитель', companyName: 'Долгий рейс', companyForm: 'ИП', role: 'carrier' });
+  const sid = user.cookie.split('=')[1];
+  const ago = (days) => new Date(Date.now() - days * 86400_000).toISOString();
+
+  // вошёл 29 дней назад и продолжает работать: вход продлевается, cookie выдаётся на новый срок
+  run('UPDATE sessions SET created_at = ? WHERE token = ?', ago(29), sid);
+  const res = await fetch(base + '/api/me', { headers: { Cookie: user.cookie } });
+  assert.match(res.headers.get('set-cookie') || '', new RegExp(`^sid=${sid}; .*Max-Age=2592000`));
+  assert.ok(q1('SELECT used_at FROM sessions WHERE token = ?', sid).used_at > ago(1));
+
+  // со дня входа прошло больше месяца, но приложением пользовались вчера — вход действует
+  run('UPDATE sessions SET created_at = ?, used_at = ? WHERE token = ?', ago(45), ago(1.5), sid);
+  assert.equal((await user.get('/api/me')).user.id, user.me.user.id);
+  // в тот же день cookie заново не выдаётся и база не трогается
+  const same = await fetch(base + '/api/me', { headers: { Cookie: user.cookie } });
+  assert.equal(same.headers.get('set-cookie'), null);
+
+  // месяц без единого обращения — нужно войти заново
+  run('UPDATE sessions SET used_at = ? WHERE token = ?', ago(31), sid);
+  assert.equal(await user.get('/api/me'), null);
+});
+
+test('точки GPS, накопленные без связи, досылаются со своим временем', async () => {
+  const customer = await signIn('+77061380001', { name: 'Заказчик', companyName: 'Груз Трасса', companyForm: 'ТОО', role: 'customer' });
+  const carrier = await signIn('+77061380002', { name: 'Перевозчик', companyName: 'Везу Трасса', companyForm: 'ТОО', role: 'carrier' });
+  const { tripId } = await deal(customer, carrier, cargo({ points: ['almaty', 'astana'] }));
+  await confirm(carrier, tripId);
+  const pt = (minutesAgo, lat, lon) => ({ lat, lon, speed: 70, at: new Date(Date.now() - minutesAgo * 60_000).toISOString() });
+
+  assert.equal(await status(carrier, 'POST', `/api/trips/${tripId}/positions`, { points: [pt(5, 43.3, 76.9)] }), 409, 'GPS ещё не включён');
+  await carrier.post(`/api/trips/${tripId}/gps`, { share: true });
+  assert.equal(await status(customer, 'POST', `/api/trips/${tripId}/positions`, { points: [pt(5, 43.3, 76.9)] }), 403, 'позицию передаёт только перевозчик');
+
+  // телефон был без связи полчаса: три точки приходят одним запросом, не по порядку; точка «из будущего» отбрасывается
+  const r = await carrier.post(`/api/trips/${tripId}/positions`, { points: [pt(10, 43.6, 76.95), pt(30, 43.3, 76.9), pt(20, 43.45, 76.92), pt(-30, 50, 70)] });
+  assert.equal(r.saved, 3);
+  const trip = await customer.get(`/api/trips/${tripId}`);
+  assert.equal(trip.track.length, 3, 'маршрут на карте без разрыва');
+  assert.deepEqual([trip.position.lat, trip.position.lon], [43.6, 76.95], 'последняя позиция — самая поздняя точка');
+  assert.ok(Date.now() - Date.parse(trip.position.at) > 9 * 60_000, 'у точки её настоящее время, а не время отправки');
+  // повторная отправка тех же точек ничего не дублирует
+  assert.equal((await carrier.post(`/api/trips/${tripId}/positions`, { points: [pt(20, 43.45, 76.92)] })).saved, 0);
+
+  // по ссылке водителя — так же; событие о позиции несёт остаток пути
+  const { driverToken } = await carrier.get(`/api/trips/${tripId}`);
+  const ctl = new AbortController();
+  const stream = await fetch(base + '/api/events', { headers: { Cookie: customer.cookie }, signal: ctl.signal });
+  let text = '';
+  (async () => { for await (const chunk of stream.body) text += Buffer.from(chunk).toString(); })().catch(() => {});
+  const anon = client();
+  assert.equal((await anon.post(`/api/drive/${driverToken}/positions`, { points: [pt(2, 43.8, 77.0)] })).saved, 1);
+  await new Promise((r) => setTimeout(r, 200));
+  ctl.abort();
+  const ev = JSON.parse(text.split('event: position\ndata: ')[1].split('\n')[0]);
+  assert.deepEqual([ev.tripId, ev.lat, ev.lon], [tripId, 43.8, 77.0]);
+  assert.ok(ev.remainingKm > 500, 'в событии есть остаток пути до Астаны');
+  assert.match(text, /event: trip/, 'после досылки отрезка пути экраны перечитывают рейс');
+});

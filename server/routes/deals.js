@@ -62,12 +62,18 @@ function withTerms(t) {
 const AUTO_COMPLETE_HOURS = 72; // если заказчик молчит после доставки, рейс завершается сам
 const deliveredAt = (tripId) => q1(`SELECT at FROM trip_events WHERE trip_id = ? AND stage = 'delivered' ORDER BY id DESC LIMIT 1`, tripId)?.at;
 
+/** Сколько осталось до пункта выгрузки от позиции машины. На месте (меньше 5 км) время в пути не показываем: «≈ 1 ч» на финише сбивает с толку. */
+function progress(t, pos) {
+  const points = L.j(t.l_points, []);
+  const dest = cityById.get(points[points.length - 1]);
+  const remainingKm = pos && dest ? Math.round(haversine(pos, dest) * ROAD_FACTOR) : null;
+  return { remainingKm, etaHours: remainingKm !== null && t.stage === 'in_transit' && remainingKm >= 5 ? Math.max(1, Math.round(remainingKm / 55)) : null };
+}
 /** mode: 'party' — участник сделки, 'driver' — водитель по ссылке, 'public' — получатель по ссылке. */
 function tripOut(t, viewer, full = false, mode = 'party') {
   const points = L.j(t.l_points, []);
   const last = q1('SELECT lat, lon, speed, at FROM positions WHERE trip_id = ? ORDER BY id DESC LIMIT 1', t.id) || null;
-  const dest = cityById.get(points[points.length - 1]);
-  const remainingKm = last && dest ? Math.round(haversine(last, dest) * ROAD_FACTOR) : null;
+  const { remainingKm, etaHours } = progress(t, last);
   const out = {
     id: t.id,
     status: t.status,
@@ -90,8 +96,7 @@ function tripOut(t, viewer, full = false, mode = 'party') {
     // связь с машиной считается потерянной, если позиции нет дольше 20 минут
     signalLost: t.status === 'active' && !!t.share_gps && !!last && Date.now() - Date.parse(last.at) > 20 * 60_000,
     remainingKm,
-    // на месте (меньше 5 км) время в пути не показываем: «≈ 1 ч» на финише сбивает с толку
-    etaHours: remainingKm !== null && t.stage === 'in_transit' && remainingKm >= 5 ? Math.max(1, Math.round(remainingKm / 55)) : null,
+    etaHours,
     // перевозчик подтвердил рейс: назначил машину и водителя
     confirmed: !!t.confirmed_at,
     vehicle: { brand: t.vehicle_brand || '', plate: t.plate || '', trailerPlate: t.trailer_plate || '', bodyType: t.body_type },
@@ -185,23 +190,56 @@ function setGps(t, share) {
   run('UPDATE trips SET share_gps = ? WHERE id = ?', share ? 1 : 0, t.id);
   L.push(tripUsers(t), 'trip', { tripId: t.id });
 }
+/** Точка, до которой машина не могла доехать, — сбой геолокации или подмена: не записываем. Фильтр нужен в пути
+ *  и при непрерывной передаче: до выезда и после паузы точку принимаем — GPS могли включить с другого телефона. */
+function isJump(t, last, p, seconds) {
+  const km = haversine(last, { lat: p.lat, lon: p.lon });
+  const moving = L.STAGES.indexOf(t.stage) >= L.STAGES.indexOf('in_transit');
+  return moving && seconds < 600 && km > 5 && km / (seconds / 3600) > L.MAX_SPEED;
+}
+/** Событие «машина сдвинулась»: в нём всё, что нужно экрану, чтобы обновить карту и остаток пути без нового запроса. */
+const pushPosition = (t, p, at) => L.push(tripUsers(t), 'position', { tripId: t.id, lat: p.lat, lon: p.lon, speed: p.speed ?? null, at, ...progress(t, p) });
 function addPosition(t, b) {
   if (t.status !== 'active' || !t.share_gps) throw bad('state', 'Передача GPS выключена', 409);
   const last = q1('SELECT lat, lon, at FROM positions WHERE trip_id = ? ORDER BY id DESC LIMIT 1', t.id);
   if (last) {
     const seconds = (Date.now() - Date.parse(last.at)) / 1000;
     if (seconds < 1.5) return { ok: true, skipped: true };
-    // точка, до которой машина не могла доехать, — сбой геолокации или подмена: не записываем
-    const km = haversine(last, { lat: b.lat, lon: b.lon });
-    // в демо-режиме симуляция движения «едет» быстрее настоящей машины. Фильтр нужен в пути и при непрерывной передаче:
-    // до выезда и после паузы точку принимаем — GPS могли включить с другого телефона
-    const moving = L.STAGES.indexOf(t.stage) >= L.STAGES.indexOf('in_transit');
-    if (!(L.DEMO && b.sim) && moving && seconds < 600 && km > 5 && km / (seconds / 3600) > L.MAX_SPEED) return { ok: true, skipped: true, reason: 'jump' };
+    // в демо-режиме симуляция движения «едет» быстрее настоящей машины
+    if (!(L.DEMO && b.sim) && isJump(t, last, b, seconds)) return { ok: true, skipped: true, reason: 'jump' };
   }
   if (L.DEMO && b.sim && !t.sim) run('UPDATE trips SET sim = 1 WHERE id = ?', t.id);
   run('INSERT INTO positions(trip_id, lat, lon, speed) VALUES(?, ?, ?, ?)', t.id, b.lat, b.lon, b.speed ?? null);
-  L.push(tripUsers(t), 'position', { tripId: t.id, lat: b.lat, lon: b.lon, at: L.now() });
+  pushPosition(t, b, L.now());
   return { ok: true };
+}
+/** Точки, которые телефон накопил без связи: записываются со своим временем, чтобы маршрут на карте не рвался.
+ *  Время точки — не из будущего, не старше суток и позже предыдущей записанной; «прыжки» отбрасываются, как и у одиночных точек. */
+function addPositions(t, points) {
+  if (t.status !== 'active' || !t.share_gps) throw bad('state', 'Передача GPS выключена', 409);
+  const nowMs = Date.now();
+  let last = q1('SELECT lat, lon, at FROM positions WHERE trip_id = ? ORDER BY id DESC LIMIT 1', t.id);
+  let saved = 0;
+  tx(() => {
+    for (const p of [...points].sort((a, b) => Date.parse(a.at) - Date.parse(b.at))) {
+      const ms = Math.min(Date.parse(p.at), nowMs);
+      if (Date.parse(p.at) > nowMs + 60_000 || ms < nowMs - 86400_000) continue;
+      if (last) {
+        const seconds = (ms - Date.parse(last.at)) / 1000;
+        if (seconds < 1.5 || isJump(t, last, p, seconds)) continue;
+      }
+      const at = new Date(ms).toISOString();
+      run('INSERT INTO positions(trip_id, lat, lon, speed, at) VALUES(?, ?, ?, ?, ?)', t.id, p.lat, p.lon, p.speed ?? null, at);
+      last = { lat: p.lat, lon: p.lon, speed: p.speed, at };
+      saved++;
+    }
+  });
+  if (saved) {
+    pushPosition(t, last, last.at);
+    // на карте появился целый отрезок пути — экраны рейса перечитывают его один раз
+    L.push(tripUsers(t), 'trip', { tripId: t.id });
+  }
+  return { ok: true, saved };
 }
 function setStage(t, stage) {
   if (t.status !== 'active') throw bad('state', 'Рейс уже завершён', 409);
@@ -265,6 +303,7 @@ export function autoCompleteTrips() {
 }
 
 const posSchema = z.object({ lat: z.number().min(-90).max(90), lon: z.number().min(-180).max(180), speed: z.number().min(0).max(250).nullable().optional(), sim: z.boolean().optional() });
+const positionsSchema = z.object({ points: z.array(z.object({ lat: z.number().min(-90).max(90), lon: z.number().min(-180).max(180), speed: z.number().min(0).max(250).nullable().optional(), at: z.string().datetime() })).min(1).max(300) });
 const stageSchema = z.object({ stage: z.enum(L.STAGES) });
 const gpsSchema = z.object({ share: z.boolean() });
 
@@ -558,6 +597,7 @@ export default function dealRoutes(app) {
     res.json({ ok: true });
   });
   app.post('/api/trips/:id/position', auth, (req, res) => res.json(addPosition(carrierOnly(req), parse(posSchema, req.body))));
+  app.post('/api/trips/:id/positions', auth, (req, res) => res.json(addPositions(carrierOnly(req), parse(positionsSchema, req.body).points)));
 
   // Водитель без аккаунта ведёт рейс по личной ссылке: видит маршрут и контакт на погрузке, но не цену.
   app.get('/api/drive/:token', (req, res) => res.json(tripOut(tripByDriverToken(req), null, true, 'driver')));
@@ -570,6 +610,7 @@ export default function dealRoutes(app) {
     res.json({ ok: true });
   });
   app.post('/api/drive/:token/position', (req, res) => res.json(addPosition(tripByDriverToken(req), parse(posSchema, req.body))));
+  app.post('/api/drive/:token/positions', (req, res) => res.json(addPositions(tripByDriverToken(req), parse(positionsSchema, req.body).points)));
   // Перевозчик может выпустить новую ссылку, если прежняя попала не тому человеку.
   app.post('/api/trips/:id/driver-link', auth, staff, (req, res) => {
     const t = carrierOnly(req);
