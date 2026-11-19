@@ -6,7 +6,7 @@ import { cityById, roadKm } from '../geo.js';
 import { route } from '../routing.js';
 import { isPushEndpoint, notify, pushPublicKey } from '../notify.js';
 import { fcmAccount } from '../fcm.js';
-import { marketRate, priceSamples } from './listings.js';
+import { declineOrphanResponses, marketRate, priceSamples } from './listings.js';
 import { loadRates } from '../rates.js';
 import * as L from '../lib.js';
 
@@ -376,6 +376,7 @@ export default function extraRoutes(app) {
     if (action === 'close_listing' && c.listing_id) {
       const l = q1('SELECT user_id FROM listings WHERE id = ?', c.listing_id);
       run(`UPDATE listings SET status = 'removed', closed_at = ? WHERE id = ?`, L.now(), c.listing_id);
+      declineOrphanResponses(c.listing_id);
       if (l) notify(l.user_id, { kind: 'system', title: 'Объявление №{n} снято модератором', vars: { n: c.listing_id }, body: 'Причина: жалоба пользователей. Если это ошибка, напишите в поддержку.', link: '/help' });
       // остальные жалобы на то же объявление решены этим же действием
       run(`UPDATE complaints SET status = 'closed' WHERE listing_id = ?`, c.listing_id);

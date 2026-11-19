@@ -268,6 +268,17 @@ const FILTER_KEYS = ['vehicle', 'lic', 'from', 'to', 'radius', 'fromCountry', 't
 export function expireListings() {
   run(`UPDATE listings SET status = 'closed', closed_at = ? WHERE status = 'active' AND date_to < ?
        AND NOT EXISTS (SELECT 1 FROM trips t WHERE t.listing_id = listings.id AND t.status = 'active')`, L.now(), L.today());
+  declineOrphanResponses();
+}
+/**
+ * Объявление закрыто (срок вышел, снято модератором, убрано в архив) — ждать ответа на отклик больше не от кого.
+ * Отклики «на рассмотрении» по таким объявлениям отклоняются: владелец не видит значок новых откликов на закрытое,
+ * перевозчик не ждёт ответа, которого не будет. Без объявления (listingId) — по всем закрытым сразу.
+ */
+export function declineOrphanResponses(listingId = null) {
+  if (listingId) return run(`UPDATE responses SET status = 'declined' WHERE listing_id = ? AND status = 'sent'`, listingId);
+  return run(`UPDATE responses SET status = 'declined' WHERE status = 'sent'
+              AND NOT EXISTS (SELECT 1 FROM listings l WHERE l.id = responses.listing_id AND l.status = 'active')`);
 }
 
 const recCache = new Map();
@@ -475,7 +486,7 @@ export default function listingRoutes(app) {
     }
     // у закрытого объявления поднятие в топ снимается: метка «В топе» у него только сбивает с толку
     run(`UPDATE listings SET status = ?, closed_at = ?, boosted_until = CASE WHEN ? = 'active' THEN boosted_until ELSE NULL END WHERE id = ?`, status, status === 'active' ? null : L.now(), status, l.id);
-    if (status !== 'active') run(`UPDATE responses SET status = 'declined' WHERE listing_id = ? AND status = 'sent'`, l.id);
+    if (status !== 'active') declineOrphanResponses(l.id);
     res.json({ ok: true });
   });
   app.post('/api/listings/:id/boost', auth, staff, (req, res) => {

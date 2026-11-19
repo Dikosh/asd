@@ -14,6 +14,7 @@ import relocationRoutes from './routes/relocation.js';
 import serviceRoutes from './routes/services.js';
 import shipperRoutes from './routes/shippers.js';
 import { loadRates } from './rates.js';
+import { checkHealth } from './health.js';
 import { seed } from './seed.js';
 
 // Что может менять водитель из команды: вести рейс и свои личные настройки. Остальное — сотрудники и владелец.
@@ -100,6 +101,8 @@ export function housekeeping() {
     for (const table of ['push_subs', 'push_devices']) run(`DELETE FROM ${table} WHERE sid IS NOT NULL AND sid NOT IN (SELECT token FROM sessions)`);
     run(`DELETE FROM invites WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-14 days')`);
     run(`DELETE FROM route_cache WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-90 days')`);
+    // на боевом сервере — присмотр за резервными копиями и местом на диске
+    if (PROD) checkHealth();
   } catch (e) {
     console.error('[housekeeping]', e);
   }

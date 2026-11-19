@@ -206,7 +206,37 @@ CREATE INDEX IF NOT EXISTS listings_company ON listings(company_id, status);
 CREATE INDEX IF NOT EXISTS responses_listing ON responses(listing_id, status);
 CREATE INDEX IF NOT EXISTS trips_listing ON trips(listing_id, status);
 CREATE INDEX IF NOT EXISTS trips_driver ON trips(driver_user, status);
-CREATE INDEX IF NOT EXISTS reviews_target ON reviews(target_company);
+-- репутация компании считает её завершённые рейсы и отзывы о ней: без этих индексов каждый пересчёт перебирал все рейсы
+-- столько раз, сколько компаний (секунды на 2000 компаний и 20 000 рейсов; с индексами — сотые доли секунды)
+CREATE INDEX IF NOT EXISTS trips_customer ON trips(customer_company, status);
+CREATE INDEX IF NOT EXISTS trips_carrier ON trips(carrier_company, status);
+DROP INDEX IF EXISTS reviews_target;
+CREATE INDEX IF NOT EXISTS reviews_target_author ON reviews(target_company, author_company, id);
+-- то, что сервер спрашивает на каждом шагу: сотрудники компании, история рейса, чаты и отклики компании
+CREATE INDEX IF NOT EXISTS users_company ON users(company_id);
+CREATE INDEX IF NOT EXISTS users_admin ON users(is_admin) WHERE is_admin = 1;
+CREATE INDEX IF NOT EXISTS users_relocator ON users(relocator) WHERE relocator = 1;
+CREATE INDEX IF NOT EXISTS trip_events_trip ON trip_events(trip_id, id);
+CREATE INDEX IF NOT EXISTS trips_response ON trips(response_id);
+CREATE INDEX IF NOT EXISTS chats_owner ON chats(owner_company);
+CREATE INDEX IF NOT EXISTS chats_peer ON chats(peer_company);
+CREATE INDEX IF NOT EXISTS responses_company ON responses(company_id, status);
+-- отклики «на рассмотрении» — их мало, а спрашивают о них постоянно (значок новых откликов, закрытие объявления)
+CREATE INDEX IF NOT EXISTS responses_sent ON responses(listing_id) WHERE status = 'sent';
+CREATE INDEX IF NOT EXISTS listings_status_date ON listings(status, date_to);
+CREATE INDEX IF NOT EXISTS blacklist_author ON blacklist(author_company);
+-- кабинет компании и служебные таблицы
+CREATE INDEX IF NOT EXISTS documents_company ON documents(company_id);
+CREATE INDEX IF NOT EXISTS vehicles_company ON vehicles(company_id);
+CREATE INDEX IF NOT EXISTS employees_company ON employees(company_id);
+CREATE INDEX IF NOT EXISTS searches_user ON searches(user_id);
+CREATE INDEX IF NOT EXISTS transactions_company ON transactions(company_id, id);
+CREATE INDEX IF NOT EXISTS invites_company ON invites(company_id);
+CREATE INDEX IF NOT EXISTS feedback_user ON feedback(user_id);
+CREATE INDEX IF NOT EXISTS sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS push_subs_user ON push_subs(user_id);
+CREATE INDEX IF NOT EXISTS push_subs_sid ON push_subs(sid);
+CREATE INDEX IF NOT EXISTS push_devices_sid ON push_devices(sid);
 `);
 
 db.exec(`
@@ -227,7 +257,10 @@ CREATE VIEW company_stats AS SELECT c.id, c.name, c.form, c.kind, c.bin, c.about
   (SELECT ROUND(AVG(rating), 1) FROM rated_reviews r WHERE r.target_company = c.id) AS rating,
   (SELECT COUNT(*) FROM visible_reviews r WHERE r.target_company = c.id) AS reviews,
   (SELECT COUNT(*) FROM rated_reviews r WHERE r.target_company = c.id) AS reviewers,
-  (SELECT COUNT(*) FROM trips t WHERE t.status = 'completed' AND (t.customer_company = c.id OR t.carrier_company = c.id)) AS trips,
+  -- два простых подсчёта вместо одного с «или»: каждый идёт по своему индексу при любом состоянии базы.
+  -- Компания не бывает заказчиком и перевозчиком в одном рейсе (на своё объявление откликнуться нельзя), так что сумма точна.
+  (SELECT COUNT(*) FROM trips t WHERE t.customer_company = c.id AND t.status = 'completed')
+    + (SELECT COUNT(*) FROM trips t WHERE t.carrier_company = c.id AND t.status = 'completed') AS trips,
   (SELECT COUNT(*) FROM blacklist b JOIN companies a ON a.id = b.author_company WHERE b.company_id = c.id AND a.verified = 'verified' AND a.banned = 0) AS bl
 FROM companies c;
 `);

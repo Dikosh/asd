@@ -28,7 +28,7 @@ export DEBIAN_FRONTEND=noninteractive
 
 say "Системные пакеты"
 apt-get update -qq
-apt-get install -y -qq ca-certificates curl git gnupg debian-keyring debian-archive-keyring apt-transport-https ufw >/dev/null
+apt-get install -y -qq ca-certificates curl git gnupg debian-keyring debian-archive-keyring apt-transport-https ufw rsync >/dev/null
 
 say "Node.js 22"
 if ! command -v node >/dev/null || [ "$(node -p 'process.versions.node.split(".")[0]')" -lt 22 ]; then
@@ -45,10 +45,6 @@ if ! command -v caddy >/dev/null; then
 fi
 
 say "Код приложения"
-# перед обновлением — копия текущей базы: если новая версия что-то испортит, будет к чему вернуться
-if [ -f "$DATA/jolda.db" ] && [ -f "$APP/scripts/backup.mjs" ]; then
-  DATA_DIR="$DATA" node "$APP/scripts/backup.mjs" /var/backups/jolda || echo "Копия перед обновлением не удалась"
-fi
 id jolda >/dev/null 2>&1 || useradd --system --home "$DATA" --shell /usr/sbin/nologin jolda
 if [ -d "$APP/.git" ]; then git -C "$APP" fetch -q origin main && git -C "$APP" reset -q --hard origin/main
 else git clone -q --depth 1 "$REPO" "$APP"; fi
@@ -56,6 +52,12 @@ cd "$APP"
 npm ci --no-audit --no-fund --loglevel=error
 npm run build >/dev/null
 mkdir -p "$DATA" && chown -R jolda:jolda "$DATA"
+# Перед перезапуском на новую версию — копия текущей базы: если обновление что-то испортит, будет к чему вернуться.
+# База до перезапуска службы не меняется, поэтому копию делает уже новый скрипт. Такие копии хранятся отдельно от ночных
+# (последние 5): серия обновлений ночные копии не вытесняет.
+if [ -f "$DATA/jolda.db" ]; then
+  DATA_DIR="$DATA" node "$APP/scripts/backup.mjs" /var/backups/jolda --update || echo "Копия перед обновлением не удалась"
+fi
 
 say "Служба jolda"
 INSECURE=0; [ -z "$DOMAIN" ] && INSECURE=1
@@ -96,7 +98,8 @@ systemctl enable -q jolda
 systemctl restart jolda
 
 say "Резервные копии и сторож"
-# Каждую ночь — копия базы и документов в /var/backups/jolda (последние 14). Для надёжности копируйте их и за пределы сервера.
+# Каждую ночь — копия базы и новых загруженных файлов в /var/backups/jolda (последние 14 ночных копий).
+# BACKUP_REMOTE в /etc/jolda.env (адрес для rsync) — отправлять ночную копию ещё и на другой сервер.
 cat > /etc/systemd/system/jolda-backup.service <<EOF
 [Unit]
 Description=Jolda nightly backup
@@ -104,6 +107,7 @@ Description=Jolda nightly backup
 [Service]
 Type=oneshot
 Environment=DATA_DIR=$DATA
+EnvironmentFile=-/etc/jolda.env
 ExecStart=/usr/bin/node $APP/scripts/backup.mjs /var/backups/jolda
 EOF
 cat > /etc/systemd/system/jolda-backup.timer <<'EOF'
@@ -147,8 +151,8 @@ WantedBy=timers.target
 EOF
 systemctl daemon-reload
 systemctl enable -q --now jolda-backup.timer jolda-watchdog.timer
-# копия сразу после установки или обновления — чтобы было к чему вернуться
-systemctl start jolda-backup.service || echo "Не удалось сделать копию — проверьте: journalctl -u jolda-backup"
+# первая копия — сразу после установки; дальше ночные идут по расписанию, а перед обновлением копия уже сделана выше
+[ -f "$DATA/backup-status.json" ] || systemctl start jolda-backup.service || echo "Не удалось сделать копию — проверьте: journalctl -u jolda-backup"
 
 say "Веб-сервер"
 SITE="${DOMAIN:-:80}"
@@ -181,6 +185,10 @@ if curl -fs localhost:3000/api/meta >/dev/null; then
     echo "Демо-режим выключен, а отправка SMS не подключена — войти пока никто не сможет."
     echo "Укажите SMS_WEBHOOK_URL в /etc/jolda.env и выполните: systemctl restart jolda"
     echo "Нужен стенд для показа без SMS — запустите установщик с DEMO=1."
+  fi
+  if ! grep -qs '^BACKUP_REMOTE=.' /etc/jolda.env; then
+    echo "Резервные копии хранятся только на этом сервере (/var/backups/jolda): при поломке сервера пропадут и они."
+    echo "Чтобы каждую ночь отправлять копию на другой сервер, укажите BACKUP_REMOTE=пользователь@сервер:/папка в /etc/jolda.env."
   fi
 else
   echo "Сервис не ответил. Журнал: journalctl -u jolda -n 50"; exit 1
