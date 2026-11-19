@@ -118,7 +118,7 @@ export function normPhone(raw) {
 }
 
 // ---------- сессии ----------
-function cookie(req, name) {
+export function cookie(req, name) {
   const m = (req.headers.cookie || '').match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
   if (!m) return null;
   try {
@@ -127,19 +127,39 @@ function cookie(req, name) {
     return null; // испорченная cookie — считаем, что её нет
   }
 }
-function sessionCookie(req, res, sid) {
-  const secure = req.secure || (PROD && process.env.INSECURE_COOKIES !== '1') ? '; Secure' : '';
-  res.setHeader('Set-Cookie', `sid=${sid}; HttpOnly; Path=/; SameSite=Lax; Max-Age=2592000${secure}`);
+/** Выдать cookie, не затирая уже выданные в этом ответе (при входе их несколько). maxAge = 0 — удалить. */
+export function setCookie(req, res, name, value, maxAge, path = '/') {
+  const secure = maxAge && (req.secure || (PROD && process.env.INSECURE_COOKIES !== '1')) ? '; Secure' : '';
+  const prev = [res.getHeader('Set-Cookie') || []].flat().filter((c) => !c.startsWith(`${name}=`));
+  res.setHeader('Set-Cookie', [...prev, `${name}=${value}; HttpOnly; Path=${path}; SameSite=Lax; Max-Age=${maxAge}${secure}`]);
 }
+const sessionCookie = (req, res, sid) => setCookie(req, res, 'sid', sid, 2592000);
 export function startSession(req, res, userId) {
   const sid = token(32);
   run('INSERT INTO sessions(token, user_id) VALUES(?, ?)', sid, userId);
   sessionCookie(req, res, sid);
 }
+/**
+ * Закрыть вход человека: один (sid) или все. Вместе с входом уходит всё, что на нём держится: уведомления на это
+ * устройство (в браузер и в приложение) и открытые потоки событий — иначе потерянный телефон продолжал бы получать
+ * отклики и маршруты, а открытая вкладка — GPS.
+ */
+export function dropSessions(userId, sid = null) {
+  const [where, arg] = sid ? ['sid = ?', sid] : ['user_id = ?', userId];
+  run(`DELETE FROM sessions WHERE ${sid ? 'token = ?' : 'user_id = ?'}`, arg);
+  run(`DELETE FROM push_subs WHERE ${where}`, arg);
+  run(`DELETE FROM push_devices WHERE ${where}`, arg);
+  for (const res of [...(streams.get(userId) || [])]) {
+    if (sid && res.sid !== sid) continue;
+    // страница или приложение сразу показывают экран входа, не дожидаясь следующего запроса
+    res.write('event: logout\ndata: {}\n\n');
+    res.end();
+  }
+}
 export function endSession(req, res) {
   const sid = cookie(req, 'sid');
   if (sid) run('DELETE FROM sessions WHERE token = ?', sid);
-  res.setHeader('Set-Cookie', 'sid=; HttpOnly; Path=/; SameSite=Lax; Max-Age=0');
+  setCookie(req, res, 'sid', '', 0);
 }
 export function loadUser(req, res, next) {
   const sid = cookie(req, 'sid');
@@ -149,6 +169,7 @@ export function loadUser(req, res, next) {
   req.user = s ? q1('SELECT * FROM users WHERE id = ?', s.user_id) || null : null;
   // учётные записи из демо-данных вне демо-режима не действуют — в том числе вход, открытый ещё во время демо
   if (req.user?.is_demo && !DEMO) req.user = null;
+  req.sid = req.user ? sid : null;
   // продлеваем не чаще раза в сутки: отметка в базе и cookie на новые 30 дней
   if (req.user && Date.parse(s.used) < Date.now() - 86400_000) {
     run('UPDATE sessions SET used_at = ? WHERE token = ?', now(), sid);
@@ -201,7 +222,8 @@ export function admin(req, _res, next) {
 
 // ---------- события в реальном времени (SSE) ----------
 const streams = new Map();
-export function subscribe(userId, res) {
+export function subscribe(userId, res, sid = null) {
+  res.sid = sid;
   if (!streams.has(userId)) streams.set(userId, new Set());
   const set = streams.get(userId);
   // не больше пяти вкладок на пользователя: самая старая закрывается

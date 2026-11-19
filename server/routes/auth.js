@@ -29,7 +29,24 @@ setInterval(() => {
   for (const [k, list] of attempts) if (!list.some((x) => t - x < 3600_000)) attempts.delete(k);
 }, 10 * 60_000).unref();
 
-const MAX_FAILS = 10; // неверных кодов на номер в час — потом вход по номеру закрыт на час
+const CODE_TTL = 5 * 60_000; // сколько живёт код из SMS
+const CODE_TRIES = 5; // неверных вводов на один код — потом нужен новый
+const PHONE_DAY = 10; // кодов на номер в сутки: столько с чужих устройств и столько же со «своих»
+const IP_DAY = 300; // кодов с одного адреса в сутки
+const SMS_DAY = Number(process.env.SMS_DAILY_MAX ?? 3000); // кодов в сутки на всю площадку (0 — без предела): защита от рассылки за наш счёт
+const sha = (s) => crypto.createHash('sha256').update(s).digest('base64url');
+/** Устройство, с которого под этим номером уже входили: cookie `kd`, в базе — только её отпечаток. */
+const knownDevice = (req, phone) => {
+  const kd = L.cookie(req, 'kd');
+  return !!kd && !!q1('SELECT 1 FROM known_devices WHERE token = ? AND phone = ?', sha(kd), phone);
+};
+function rememberDevice(req, res, phone) {
+  if (knownDevice(req, phone)) return;
+  const kd = L.token(32);
+  run('INSERT INTO known_devices(token, phone) VALUES(?, ?)', sha(kd), phone);
+  run('DELETE FROM known_devices WHERE phone = ? AND token NOT IN (SELECT token FROM known_devices WHERE phone = ? ORDER BY created_at DESC, rowid DESC LIMIT 10)', phone, phone);
+  L.setCookie(req, res, 'kd', kd, 31536000, '/api/auth');
+}
 const ADMIN_PHONE = process.env.ADMIN_PHONE ? L.normPhone(process.env.ADMIN_PHONE) : null;
 const INVITE_DAYS = 14;
 const inviteFor = (phone) =>
@@ -103,45 +120,64 @@ export default function authRoutes(app) {
 
   app.post('/api/auth/request-code', async (req, res) => {
     const phone = L.normPhone(req.body?.phone);
-    rateLimit('code:' + phone, 5, 10 * 60_000);
+    // «своё» устройство — то, с которого под этим номером уже входили. У него отдельный счёт кодов: посторонний,
+    // который засыпает номер запросами, исчерпает только общий счёт и не оставит владельца без входа
+    const known = knownDevice(req, phone) ? 1 : 0;
+    rateLimit(`code:${known}:${phone}`, 5, 10 * 60_000);
     rateLimit('ip:' + req.ip, 100, 10 * 60_000); // за одним адресом мобильного оператора — много людей
     // учётные записи из демо-данных вне демо-режима не действуют
     if (!L.DEMO && q1('SELECT 1 FROM users WHERE phone = ? AND is_demo = 1', phone)) throw bad('forbidden', 'Этот номер недоступен', 403);
+    // суточные пределы — про настоящие SMS: в демо-режиме код показывается на экране и ничего не стоит
+    if (!L.DEMO) {
+      const sent = (where, ...args) => q1(`SELECT COUNT(*) AS n FROM login_codes WHERE ${where} AND created_at > strftime('%Y-%m-%dT%H:%M:%fZ','now','-1 day')`, ...args).n;
+      if (sent('phone = ? AND known = ?', phone, known) >= PHONE_DAY || sent('ip = ?', req.ip) >= IP_DAY) throw bad('rate_limit', 'Слишком много запросов кода за сутки. Попробуйте завтра', 429);
+      if (SMS_DAY && sent('1 = 1') >= SMS_DAY) {
+        console.error(`[sms] за сутки отправлено ${SMS_DAY} кодов входа — отправка приостановлена (предел SMS_DAILY_MAX)`);
+        throw bad('sms_limit', 'Отправка кодов временно приостановлена. Попробуйте позже', 503);
+      }
+    }
     const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
-    run(
-      `INSERT INTO otps(phone, code, expires, attempts, reg_token) VALUES(?, ?, ?, 0, NULL)
-       ON CONFLICT(phone) DO UPDATE SET code = excluded.code, expires = excluded.expires, reg_token = NULL`,
-      phone, code, Date.now() + 5 * 60_000,
-    );
-    await sendSms(phone, `Jolda: код входа ${code}`);
+    // новый код не отменяет прежние: чужой запрос на тот же номер не обесценивает код, который человек уже получил
+    const ticket = L.token(32);
+    run('INSERT INTO login_codes(ticket, phone, code, expires, ip, known) VALUES(?, ?, ?, ?, ?, ?)', ticket, phone, code, Date.now() + CODE_TTL, req.ip, known);
+    try {
+      await sendSms(phone, `Jolda: код входа ${code}`);
+    } catch (e) {
+      run('DELETE FROM login_codes WHERE ticket = ?', ticket); // SMS не ушло — в пределы не засчитываем
+      throw e;
+    }
+    L.setCookie(req, res, 'otp', ticket, 1800, '/api/auth');
     res.json({ ok: true, devCode: L.DEMO ? code : undefined });
   });
 
   app.post('/api/auth/verify', (req, res) => {
     const phone = L.normPhone(req.body?.phone);
     rateLimit('verify:' + req.ip, 40, 10 * 60_000);
-    const otp = q1('SELECT * FROM otps WHERE phone = ?', phone);
+    // код принимается только от того, кто его запросил: cookie `otp` выдана вместе с кодом
+    const ticket = L.cookie(req, 'otp');
+    const otp = ticket ? q1('SELECT * FROM login_codes WHERE ticket = ? AND phone = ? AND reg_token IS NULL', ticket, phone) : null;
     if (!otp || otp.expires < Date.now()) throw bad('code_expired', 'Код устарел, запросите новый');
-    // счётчик неверных кодов не сбрасывается новым кодом — перебор не обойти повторным запросом
-    const hour = Math.floor(Date.now() / 3600_000);
-    const fails = otp.fail_hour === hour ? otp.attempts : 0;
-    if (fails >= MAX_FAILS) throw bad('rate_limit', 'Слишком много неверных кодов. Вход по этому номеру закрыт на час', 429);
+    // неверные вводы считаются на сам код: перебор упирается в число кодов на номер, а чужой вход не страдает
+    if (otp.attempts >= CODE_TRIES) throw bad('rate_limit', 'Слишком много неверных кодов. Запросите новый код', 429);
     const given = String(req.body?.code || '').trim();
     const same = given.length === otp.code.length && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(otp.code));
     if (!same) {
-      run('UPDATE otps SET attempts = ?, fail_hour = ? WHERE phone = ?', fails + 1, hour, phone);
+      run('UPDATE login_codes SET attempts = attempts + 1 WHERE ticket = ?', ticket);
       throw bad('code_wrong', 'Неверный код');
     }
     const user = q1('SELECT * FROM users WHERE phone = ?', phone);
     if (user) {
       if (user.is_demo && !L.DEMO) throw bad('forbidden', 'Этот номер недоступен', 403);
-      run('DELETE FROM otps WHERE phone = ?', phone);
+      // код использован; строка остаётся — отправленное SMS учтено в суточных пределах
+      run('UPDATE login_codes SET code = ?, expires = 0 WHERE ticket = ?', L.token(8), ticket);
       if (ADMIN_PHONE === phone && !user.is_admin) run('UPDATE users SET is_admin = 1 WHERE id = ?', user.id);
       L.startSession(req, res, user.id);
+      rememberDevice(req, res, phone);
+      L.setCookie(req, res, 'otp', '', 0, '/api/auth');
       return res.json({ ...L.meOut(q1('SELECT * FROM users WHERE id = ?', user.id)), registered: true });
     }
     const regToken = L.token();
-    run('UPDATE otps SET reg_token = ?, expires = ?, code = ? WHERE phone = ?', regToken, Date.now() + 30 * 60_000, L.token(8), phone);
+    run('UPDATE login_codes SET reg_token = ?, expires = ?, code = ? WHERE ticket = ?', regToken, Date.now() + 30 * 60_000, L.token(8), ticket);
     // если компания пригласила этот номер, человек сам выбирает: присоединиться или создать свою компанию
     const inv = inviteFor(phone);
     res.json({ registered: false, regToken, invite: inv ? { name: inv.name, companyName: inv.companyName, companyForm: inv.companyForm, role: inv.role } : null });
@@ -159,7 +195,7 @@ export default function authRoutes(app) {
   });
   app.post('/api/auth/register', (req, res) => {
     const b = parse(regSchema, req.body);
-    const otp = q1('SELECT * FROM otps WHERE reg_token = ?', b.regToken);
+    const otp = q1('SELECT * FROM login_codes WHERE reg_token = ?', b.regToken);
     if (!otp || otp.expires < Date.now()) throw bad('code_expired', 'Сессия регистрации истекла, подтвердите номер заново');
     const invite = b.joinInvite ? inviteFor(otp.phone) : null;
     if (b.joinInvite && !invite) throw bad('not_found', 'Приглашение не найдено или устарело', 404);
@@ -167,7 +203,7 @@ export default function authRoutes(app) {
     if (!invite && b.role === 'driver') Object.assign(b, { companyName: b.companyName || b.name, companyForm: '' });
     if (!invite && (!b.companyName || (!b.companyForm && b.role !== 'driver') || !b.role)) throw bad('validation', 'Укажите компанию и роль');
     const userId = tx(() => {
-      run('DELETE FROM otps WHERE phone = ?', otp.phone);
+      run('UPDATE login_codes SET reg_token = NULL, expires = 0 WHERE ticket = ?', otp.ticket);
       const isAdmin = ADMIN_PHONE === otp.phone ? 1 : 0;
       if (invite) {
         // сотрудник присоединяется к компании, которая его пригласила
@@ -179,6 +215,8 @@ export default function authRoutes(app) {
       return insert('INSERT INTO users(name, phone, email, role, company_id, accepted_terms, is_admin) VALUES(?, ?, ?, ?, ?, ?, ?)', b.name, otp.phone, b.email, b.role, companyId, L.now(), isAdmin);
     });
     L.startSession(req, res, userId);
+    rememberDevice(req, res, otp.phone);
+    L.setCookie(req, res, 'otp', '', 0, '/api/auth');
     res.json(L.meOut(q1('SELECT * FROM users WHERE id = ?', userId)));
   });
 
@@ -197,8 +235,13 @@ export default function authRoutes(app) {
   });
 
   app.post('/api/auth/logout', (req, res) => {
-    // «выйти везде» закрывает сессии на всех устройствах
-    if (req.user && req.body?.everywhere) run('DELETE FROM sessions WHERE user_id = ?', req.user.id);
+    // вместе с входом уходят уведомления на это устройство и открытые потоки событий; «выйти везде» — на всех устройствах,
+    // и ни одно из них больше не считается «своим» для кодов входа
+    if (req.user) {
+      const everywhere = !!req.body?.everywhere;
+      L.dropSessions(req.user.id, everywhere ? null : req.sid);
+      if (everywhere) run('DELETE FROM known_devices WHERE phone = ?', req.user.phone);
+    }
     L.endSession(req, res);
     res.json({ ok: true });
   });
@@ -251,6 +294,6 @@ export default function authRoutes(app) {
   app.get('/api/events', L.auth, (req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-Accel-Buffering': 'no' });
     res.write(': connected\n\n');
-    L.subscribe(req.user.id, res);
+    L.subscribe(req.user.id, res, req.sid);
   });
 }

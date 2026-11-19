@@ -231,14 +231,13 @@ test('защита: настройки, чёрный список, блокир�
   assert.equal((await stranger.call('POST', '/api/blacklist', { companyId: customer.me.company.id, reason: 'Мошенники' })).data.error, 'no_deal');
   // БИН чужой компании занять нельзя
   assert.equal((await stranger.call('PATCH', '/api/company', { bin: customer.me.company.bin })).data.error, 'bin_taken');
-  // неверный код: после десяти ошибок вход по номеру закрыт, даже с новым кодом
+  // неверный код: после пяти ошибок код «сгорает», с новым кодом вход открыт (подробно — tests/login.test.js)
   const c = client();
-  for (let i = 0; i < 2; i++) {
-    const { devCode } = await c.post('/api/auth/request-code', { phone: '+77052220009' });
-    for (let k = 0; k < 5; k++) assert.equal((await c.call('POST', '/api/auth/verify', { phone: '+77052220009', code: devCode === '000000' ? '111111' : '000000' })).status, 400);
-  }
+  const first = (await c.post('/api/auth/request-code', { phone: '+77052220009' })).devCode;
+  for (let k = 0; k < 5; k++) assert.equal((await c.call('POST', '/api/auth/verify', { phone: '+77052220009', code: first === '000000' ? '111111' : '000000' })).status, 400);
+  assert.equal((await c.call('POST', '/api/auth/verify', { phone: '+77052220009', code: first })).status, 429, 'после пяти ошибок не помогает и верный код');
   const { devCode } = await c.post('/api/auth/request-code', { phone: '+77052220009' });
-  assert.equal((await c.call('POST', '/api/auth/verify', { phone: '+77052220009', code: devCode })).status, 429, 'после десяти ошибок не помогает и верный код');
+  assert.equal((await c.call('POST', '/api/auth/verify', { phone: '+77052220009', code: devCode })).status, 200, 'новый код действует сразу');
   // испорченная cookie и «опасные» имена параметров не дают ошибку сервера
   assert.equal((await fetch(base + '/api/meta', { headers: { Cookie: 'sid=%' } })).status, 200);
   assert.equal((await customer.call('GET', '/api/listings?kind=cargo&sort=__proto__')).status, 200);

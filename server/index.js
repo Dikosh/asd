@@ -95,7 +95,9 @@ export function housekeeping() {
     expireListings();
     autoCompleteTrips();
     run(`DELETE FROM sessions WHERE COALESCE(used_at, created_at) < strftime('%Y-%m-%dT%H:%M:%fZ','now','-30 days')`);
-    run('DELETE FROM otps WHERE expires < ?', Date.now() - 3600_000);
+    run(`DELETE FROM login_codes WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-2 days')`);
+    // вход истёк сам — уведомления на его устройство тоже прекращаются
+    for (const table of ['push_subs', 'push_devices']) run(`DELETE FROM ${table} WHERE sid IS NOT NULL AND sid NOT IN (SELECT token FROM sessions)`);
     run(`DELETE FROM invites WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-14 days')`);
     run(`DELETE FROM route_cache WHERE created_at < strftime('%Y-%m-%dT%H:%M:%fZ','now','-90 days')`);
   } catch (e) {
@@ -114,7 +116,7 @@ export function leaveDemoMode() {
   // база старше этой отметки: если в ней есть демо-пользователи, значит демо включали
   const wasDemo = prev === undefined ? !!q1('SELECT 1 FROM users WHERE is_demo = 1 LIMIT 1') : prev === '1';
   if (!DEMO && wasDemo) {
-    for (const table of ['sessions', 'otps', 'push_subs', 'push_devices']) run(`DELETE FROM ${table}`);
+    for (const table of ['sessions', 'login_codes', 'known_devices', 'push_subs', 'push_devices']) run(`DELETE FROM ${table}`);
     console.warn('Демо-режим выключен: все входы, открытые во время демо, закрыты. Демо-аккаунты больше не действуют.');
   }
   run(`INSERT INTO app_state(key, value) VALUES('demo', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, DEMO ? '1' : '0');

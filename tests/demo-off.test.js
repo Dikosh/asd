@@ -3,6 +3,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn, spawnSync } from 'node:child_process';
+import http from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,9 +14,10 @@ delete process.env.DEMO_MODE;
 delete process.env.SMS_WEBHOOK_URL;
 delete process.env.OSRM_URL;
 delete process.env.FCM_SERVICE_ACCOUNT;
+process.env.SMS_DAILY_MAX = '400'; // предел кодов на всю площадку — небольшой, чтобы его можно было проверить
 const { createApp, leaveDemoMode } = await import('../server/index.js');
 const { seed } = await import('../server/seed.js');
-const { q1, run, insert } = await import('../server/db.js');
+const { q1, run, insert, tx } = await import('../server/db.js');
 
 const entry = fileURLToPath(new URL('../server/index.js', import.meta.url));
 let server;
@@ -109,4 +111,104 @@ test('демо-стенд с подтверждением запускается
     child.removeAllListeners('exit');
     child.kill();
   }
+});
+
+// ---------- пределы SMS: здесь сервер работает без демо, коды уходят «провайдеру» — маленькому серверу теста ----------
+const sms = [];
+let smsFails = false;
+let provider;
+/** Клиент со всеми cookie, как браузер или приложение. */
+function device() {
+  const jar = new Map();
+  const c = { jar };
+  c.call = async (method, url, body) => {
+    const res = await fetch(base + url, {
+      method,
+      headers: { 'Content-Type': 'application/json', Cookie: [...jar].map(([k, v]) => `${k}=${v}`).join('; ') },
+      body: body ? JSON.stringify(body) : undefined,
+    });
+    for (const line of res.headers.getSetCookie()) {
+      const [pair] = line.split(';');
+      const name = pair.slice(0, pair.indexOf('='));
+      if (/Max-Age=0/.test(line)) jar.delete(name);
+      else jar.set(name, pair.slice(name.length + 1));
+    }
+    return { status: res.status, data: await res.json().catch(() => null) };
+  };
+  return c;
+}
+const lastCode = (phone) => sms.findLast((m) => m.phone === phone).text.match(/\d{6}/)[0];
+/** Сколько кодов уже отправлено: строки, как их оставляет запрос кода. */
+const sentBefore = (n, phone, ip) => tx(() => {
+  for (let i = 0; i < n; i++) run(`INSERT INTO login_codes(ticket, phone, code, expires, ip) VALUES(?, ?, '000000', 0, ?)`, `seed-${phone}-${ip}-${i}`, phone, ip);
+});
+const TOO_MANY = 'Слишком много запросов кода за сутки. Попробуйте завтра';
+
+test('сутки: не больше десяти кодов на номер с чужих устройств, у «своего» устройства свой счёт', async () => {
+  provider = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => { body += d; });
+    req.on('end', () => {
+      if (smsFails) return res.writeHead(500).end();
+      sms.push(JSON.parse(body));
+      res.writeHead(200).end('{}');
+    });
+  }).listen(0);
+  await new Promise((r) => provider.once('listening', r));
+  process.env.SMS_WEBHOOK_URL = `http://127.0.0.1:${provider.address().port}`;
+
+  // владелец номера входит со своего телефона — телефон запомнен как «свой»
+  const phone = '+77059990010';
+  const owner = device();
+  assert.equal((await owner.call('POST', '/api/auth/request-code', { phone })).data.devCode, undefined, 'вне демо код на экран не попадает');
+  const v = await owner.call('POST', '/api/auth/verify', { phone, code: lastCode(phone) });
+  const reg = await owner.call('POST', '/api/auth/register', { regToken: v.data.regToken, name: 'Данияр', companyName: 'Данияр Логистик', companyForm: 'ТОО', role: 'customer', accept: true });
+  assert.equal(reg.status, 200);
+  assert.equal((await owner.call('POST', '/api/auth/logout', {})).status, 200);
+  assert.ok(owner.jar.has('kd') && !owner.jar.has('sid'), 'после обычного выхода телефон остаётся «своим»');
+
+  // недоброжелатель засыпал номер запросами: десять кодов за сутки с чужих устройств
+  sentBefore(9, phone, '203.0.113.7'); // плюс один — сам владелец при первом входе
+  const before = sms.length;
+  const stranger = await device().call('POST', '/api/auth/request-code', { phone });
+  assert.equal(stranger.status, 429);
+  assert.equal(stranger.data.message, TOO_MANY);
+  assert.equal(sms.length, before, 'одиннадцатое SMS не отправлено');
+
+  // владелец со своего телефона входит как обычно
+  assert.equal((await owner.call('POST', '/api/auth/request-code', { phone })).status, 200);
+  assert.equal((await owner.call('POST', '/api/auth/verify', { phone, code: lastCode(phone) })).data.registered, true);
+
+  // через сутки счёт обнуляется
+  run(`UPDATE login_codes SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ','now','-25 hours') WHERE phone = ?`, phone);
+  assert.equal((await device().call('POST', '/api/auth/request-code', { phone })).status, 200);
+});
+
+test('сутки: предел кодов с одного адреса и на всю площадку; неотправленное SMS не считается', async () => {
+  const ip = q1('SELECT ip FROM login_codes WHERE ip LIKE ? LIMIT 1', '%127.0.0.1%').ip;
+  const count = () => q1('SELECT COUNT(*) AS n FROM login_codes').n;
+
+  // провайдер SMS недоступен: человек видит ошибку, а в пределы попытка не засчитана
+  smsFails = true;
+  const rows = count();
+  assert.equal((await device().call('POST', '/api/auth/request-code', { phone: '+77059990011' })).status, 502);
+  assert.equal(count(), rows);
+  smsFails = false;
+
+  // рассылка кодов по чужим номерам с одного адреса
+  sentBefore(300, '+77050000000', ip);
+  const flood = await device().call('POST', '/api/auth/request-code', { phone: '+77059990012' });
+  assert.equal(flood.status, 429);
+  assert.equal(flood.data.message, TOO_MANY);
+  run(`DELETE FROM login_codes WHERE ticket LIKE 'seed-+77050000000-%'`);
+  assert.equal((await device().call('POST', '/api/auth/request-code', { phone: '+77059990012' })).status, 200);
+
+  // рассылка с тысяч адресов: общий предел площадки (в тесте — 400 кодов в сутки)
+  sentBefore(400, '+77050000001', '198.51.100.1');
+  const before = sms.length;
+  const all = await device().call('POST', '/api/auth/request-code', { phone: '+77059990013' });
+  assert.equal(all.status, 503);
+  assert.equal(all.data.error, 'sms_limit');
+  assert.equal(sms.length, before);
+  provider.close();
 });

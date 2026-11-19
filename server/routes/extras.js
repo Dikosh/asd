@@ -35,9 +35,9 @@ export default function extraRoutes(app) {
     // не больше пяти устройств на человека: старые подписки вытесняются
     run('DELETE FROM push_subs WHERE user_id = ? AND id NOT IN (SELECT id FROM push_subs WHERE user_id = ? ORDER BY id DESC LIMIT 4)', req.user.id, req.user.id);
     run(
-      `INSERT INTO push_subs(user_id, endpoint, keys) VALUES(?, ?, ?)
-       ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, keys = excluded.keys`,
-      req.user.id, b.endpoint, JSON.stringify(b.keys),
+      `INSERT INTO push_subs(user_id, endpoint, keys, sid) VALUES(?, ?, ?, ?)
+       ON CONFLICT(endpoint) DO UPDATE SET user_id = excluded.user_id, keys = excluded.keys, sid = excluded.sid`,
+      req.user.id, b.endpoint, JSON.stringify(b.keys), req.sid,
     );
     res.json({ ok: true });
   });
@@ -52,9 +52,9 @@ export default function extraRoutes(app) {
   app.post('/api/push/device', auth, (req, res) => {
     const b = parse(deviceSchema, req.body);
     run(
-      `INSERT INTO push_devices(user_id, token, platform) VALUES(?, ?, ?)
-       ON CONFLICT(token) DO UPDATE SET user_id = excluded.user_id, platform = excluded.platform, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
-      req.user.id, b.token, b.platform,
+      `INSERT INTO push_devices(user_id, token, platform, sid) VALUES(?, ?, ?, ?)
+       ON CONFLICT(token) DO UPDATE SET user_id = excluded.user_id, platform = excluded.platform, sid = excluded.sid, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')`,
+      req.user.id, b.token, b.platform, req.sid,
     );
     run(
       `DELETE FROM push_devices WHERE user_id = :u AND token != :t
@@ -164,8 +164,8 @@ export default function extraRoutes(app) {
       // объявления остаются у компании: контактом по ним становится владелец
       run('UPDATE listings SET user_id = ? WHERE user_id = ? AND company_id = ?', req.user.id, m.id, req.user.company_id);
       run(`UPDATE users SET company_id = ?, company_role = 'owner' WHERE id = ?`, companyId, m.id);
-      run('DELETE FROM sessions WHERE user_id = ?', m.id);
     });
+    L.dropSessions(m.id);
     res.json({ ok: true });
   });
 

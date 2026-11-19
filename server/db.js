@@ -22,7 +22,6 @@ CREATE TABLE IF NOT EXISTS users(
   company_id INTEGER NOT NULL REFERENCES companies(id), is_admin INTEGER NOT NULL DEFAULT 0,
   settings TEXT NOT NULL DEFAULT '{}', created_at ${TS});
 CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), created_at ${TS});
-CREATE TABLE IF NOT EXISTS otps(phone TEXT PRIMARY KEY, code TEXT NOT NULL, expires INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, reg_token TEXT);
 CREATE TABLE IF NOT EXISTS documents(
   id INTEGER PRIMARY KEY, company_id INTEGER NOT NULL REFERENCES companies(id), user_id INTEGER NOT NULL,
   kind TEXT NOT NULL, filename TEXT NOT NULL, mime TEXT NOT NULL, path TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', created_at ${TS});
@@ -128,7 +127,6 @@ addColumn('trips', 'sim', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('blacklist', 'reply', `TEXT NOT NULL DEFAULT ''`);
 addColumn('users', 'accepted_terms', 'TEXT');
 addColumn('users', 'is_demo', 'INTEGER NOT NULL DEFAULT 0');
-addColumn('otps', 'fail_hour', 'INTEGER');
 addColumn('trips', 'terms', 'TEXT');
 addColumn('invites', 'user_id', 'INTEGER');
 // чат принадлежит двум компаниям: его видят все их сотрудники
@@ -181,6 +179,20 @@ db.exec(`CREATE TABLE IF NOT EXISTS push_devices(
 CREATE INDEX IF NOT EXISTS push_devices_user ON push_devices(user_id, updated_at);`);
 // когда входом последний раз пользовались: вход действует 30 дней с этого момента, а не со дня входа
 addColumn('sessions', 'used_at', 'TEXT');
+// Коды входа из SMS. Код привязан к тому, кто его запросил (ticket — cookie `otp` этого устройства), и неверные вводы
+// считаются на сам код: посторонний не может ни «сжечь» чужой код, ни закрыть вход по чужому номеру.
+// Строки живут двое суток — по ним считаются суточные пределы SMS (на номер, на адрес, на всю площадку).
+db.exec(`DROP TABLE IF EXISTS otps;
+CREATE TABLE IF NOT EXISTS login_codes(
+  ticket TEXT PRIMARY KEY, phone TEXT NOT NULL, code TEXT NOT NULL, expires INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+  reg_token TEXT, ip TEXT NOT NULL DEFAULT '', known INTEGER NOT NULL DEFAULT 0, created_at ${TS});
+CREATE INDEX IF NOT EXISTS login_codes_phone ON login_codes(phone, created_at);
+CREATE INDEX IF NOT EXISTS login_codes_created ON login_codes(created_at);
+CREATE TABLE IF NOT EXISTS known_devices(token TEXT PRIMARY KEY, phone TEXT NOT NULL, created_at ${TS});
+CREATE INDEX IF NOT EXISTS known_devices_phone ON known_devices(phone);`);
+// уведомления привязаны к входу, с которого их включили: закрыт вход — на это устройство они больше не приходят
+addColumn('push_subs', 'sid', 'TEXT');
+addColumn('push_devices', 'sid', 'TEXT');
 // служебные отметки сервера между запусками (например, в каком режиме он работал в прошлый раз)
 db.exec('CREATE TABLE IF NOT EXISTS app_state(key TEXT PRIMARY KEY, value TEXT NOT NULL)');
 // рейсы, созданные до появления подтверждения, считаются подтверждёнными — их не останавливаем

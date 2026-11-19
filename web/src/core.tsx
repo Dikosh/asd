@@ -140,7 +140,8 @@ export function connectEvents(on: boolean) {
   source = null;
   if (!on) return;
   source = new EventSource('/api/events');
-  for (const type of ['message', 'read', 'response', 'trip', 'position', 'notify']) {
+  // logout — вход закрыли (с этого или с другого устройства): страница перечитывает /me и показывает экран входа
+  for (const type of ['message', 'read', 'response', 'trip', 'position', 'notify', 'logout']) {
     source.addEventListener(type, (e) => {
       const data = JSON.parse((e as MessageEvent).data || '{}');
       handlers.get(type)?.forEach((h) => h(data));

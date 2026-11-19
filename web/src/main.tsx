@@ -83,7 +83,7 @@ function GpsBeacon() {
 function Layout() {
   const { me, reloadMe, meta } = useApp();
   const { toast } = useApp();
-  useEvent('message read response trip', () => { reloadMe(); });
+  useEvent('message read response trip logout', () => { reloadMe(); });
   const { routeName } = useApp();
   useEvent('notify', (n) => {
     reloadMe();
