@@ -142,6 +142,8 @@ export function loadUser(req, _res, next) {
   const sid = cookie(req, 'sid');
   // сессия живёт 30 дней
   req.user = sid ? q1(`SELECT u.* FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ? AND s.created_at > strftime('%Y-%m-%dT%H:%M:%fZ','now','-30 days')`, sid) || null : null;
+  // учётные записи из демо-данных вне демо-режима не действуют — в том числе вход, открытый ещё во время демо
+  if (req.user?.is_demo && !DEMO) req.user = null;
   // отметка активности не чаще раза в час — лишних записей в базу на каждый запрос не делаем
   if (req.user && (!req.user.last_seen || Date.parse(req.user.last_seen) < Date.now() - 3600_000)) run('UPDATE users SET last_seen = ? WHERE id = ?', now(), req.user.id);
   next();

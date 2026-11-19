@@ -98,8 +98,31 @@ export function housekeeping() {
   loadRates();
 }
 
+/**
+ * Переход из демо-режима в боевой. В демо код входа виден на экране, поэтому под любым номером мог войти кто угодно.
+ * При первом запуске без демо закрываем все входы, открытые за время демо, и отвязываем устройства от уведомлений:
+ * каждый входит заново, уже по коду из SMS.
+ */
+export function leaveDemoMode() {
+  const prev = q1(`SELECT value FROM app_state WHERE key = 'demo'`)?.value;
+  // база старше этой отметки: если в ней есть демо-пользователи, значит демо включали
+  const wasDemo = prev === undefined ? !!q1('SELECT 1 FROM users WHERE is_demo = 1 LIMIT 1') : prev === '1';
+  if (!DEMO && wasDemo) {
+    for (const table of ['sessions', 'otps', 'push_subs', 'push_devices']) run(`DELETE FROM ${table}`);
+    console.warn('Демо-режим выключен: все входы, открытые во время демо, закрыты. Демо-аккаунты больше не действуют.');
+  }
+  run(`INSERT INTO app_state(key, value) VALUES('demo', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, DEMO ? '1' : '0');
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  if (DEMO && PROD) console.warn('ВНИМАНИЕ: демо-режим включён на боевом сервере — вход под любой ролью открыт всем. Уберите DEMO_MODE=1.');
+  // демо открывает вход под любым номером и под администратором — на сервере в интернете только с явным подтверждением
+  if (DEMO && PROD && process.env.DEMO_CONFIRM !== '1') {
+    console.error('Сервер не запущен: включён демо-режим (DEMO_MODE=1) на боевом сервере. В демо любой посетитель входит под любым номером и как администратор.\n'
+      + 'Для настоящих пользователей уберите DEMO_MODE. Если это стенд для показа, подтвердите: DEMO_CONFIRM=1.');
+    process.exit(1);
+  }
+  if (DEMO && PROD) console.warn('ВНИМАНИЕ: демо-режим на сервере в боевой конфигурации — вход под любой ролью открыт всем. Только для показа.');
+  leaveDemoMode();
   if (DEMO && !q1('SELECT 1 FROM users LIMIT 1')) seed();
   const port = Number(process.env.PORT || 3000);
   housekeeping();

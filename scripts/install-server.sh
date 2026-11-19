@@ -5,14 +5,22 @@
 # Домен необязателен. С доменом сайт будет на https:// с бесплатным сертификатом
 # (A-запись домена должна указывать на этот сервер). Без домена — http://IP-адрес.
 # Повторный запуск обновляет код до последней версии; данные остаются в /var/lib/jolda.
+# Демо-стенд для показа (вход одним нажатием под любой ролью, коды входа на экране) — только явно:
+#   curl -fsSL https://raw.githubusercontent.com/Dikosh/asd/main/scripts/install-server.sh | DEMO=1 bash -s -- moindomen.kz
+# Настоящим пользователям демо-стенд открывать нельзя: в нём любой входит под любым номером и как администратор.
 set -euo pipefail
 
 DOMAIN="${1:-}"
 REPO="${REPO:-https://github.com/Dikosh/asd.git}"
 APP=/opt/jolda
 DATA=/var/lib/jolda
-# Пока не подключён SMS-провайдер, войти можно только в демо-режиме. Для боевого запуска: DEMO=0
-DEMO="${DEMO:-1}"
+# Демо-режим выключен, пока его не включили явно (DEMO=1). При обновлении сохраняется прежний выбор:
+# демо-стенд остаётся демо-стендом, боевой сервер — боевым. Выключить демо: DEMO=0.
+DEMO="${DEMO:-}"
+if [ -z "$DEMO" ]; then
+  if grep -qs '^Environment=DEMO_MODE=1$' /etc/systemd/system/jolda.service; then DEMO=1; else DEMO=0; fi
+fi
+[ "$DEMO" = 1 ] || DEMO=0
 
 say() { printf '\n\033[1;34m== %s\033[0m\n' "$*"; }
 [ "$(id -u)" = 0 ] || { echo "Запустите под root"; exit 1; }
@@ -69,6 +77,8 @@ Environment=DATA_DIR=$DATA
 Environment=TRUST_PROXY=1
 Environment=INSECURE_COOKIES=$INSECURE
 Environment=DEMO_MODE=$DEMO
+# демо на сервере в интернете запускается только с этим подтверждением — его ставит установщик при DEMO=1
+Environment=DEMO_CONFIRM=$DEMO
 # ключ Firebase для push в мобильное приложение (файл необязателен)
 Environment=FCM_SERVICE_ACCOUNT=$DATA/fcm.json
 EnvironmentFile=-/etc/jolda.env
@@ -163,7 +173,15 @@ if curl -fs localhost:3000/api/meta >/dev/null; then
   echo "Jolda работает."
   if [ -n "$DOMAIN" ]; then echo "Откройте https://$DOMAIN (сертификат выпускается в первую минуту)"
   else echo "Откройте http://$(curl -fs https://api.ipify.org || hostname -I | cut -d' ' -f1)"; fi
-  [ "$DEMO" = 1 ] && echo "Включён демо-режим: вход одним нажатием и коды на экране. Для боевого запуска подключите SMS и запустите с DEMO=0."
+  if [ "$DEMO" = 1 ]; then
+    printf '\n\033[1;31m%s\033[0m\n' "ВНИМАНИЕ: включён демо-режим. Любой посетитель входит под любым номером и как администратор."
+    echo "Это стенд для показа, настоящих пользователей на него пускать нельзя."
+    echo "Боевой запуск: подключите SMS (SMS_WEBHOOK_URL в /etc/jolda.env) и запустите установщик с DEMO=0."
+  elif ! grep -qs '^SMS_WEBHOOK_URL=.' /etc/jolda.env; then
+    echo "Демо-режим выключен, а отправка SMS не подключена — войти пока никто не сможет."
+    echo "Укажите SMS_WEBHOOK_URL в /etc/jolda.env и выполните: systemctl restart jolda"
+    echo "Нужен стенд для показа без SMS — запустите установщик с DEMO=1."
+  fi
 else
   echo "Сервис не ответил. Журнал: journalctl -u jolda -n 50"; exit 1
 fi

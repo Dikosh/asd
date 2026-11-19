@@ -179,6 +179,8 @@ addColumn('users', 'last_seen', 'TEXT');
 db.exec(`CREATE TABLE IF NOT EXISTS push_devices(
   id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, token TEXT NOT NULL UNIQUE, platform TEXT NOT NULL, created_at ${TS}, updated_at ${TS});
 CREATE INDEX IF NOT EXISTS push_devices_user ON push_devices(user_id, updated_at);`);
+// служебные отметки сервера между запусками (например, в каком режиме он работал в прошлый раз)
+db.exec('CREATE TABLE IF NOT EXISTS app_state(key TEXT PRIMARY KEY, value TEXT NOT NULL)');
 // рейсы, созданные до появления подтверждения, считаются подтверждёнными — их не останавливаем
 if (addColumn('trips', 'confirmed_at', 'TEXT')) db.exec('UPDATE trips SET confirmed_at = created_at');
 db.exec(`
