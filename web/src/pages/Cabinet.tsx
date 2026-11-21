@@ -647,6 +647,14 @@ function SettingsTab() {
         <button className="btn ghost danger" onClick={() => act(async () => { await api('/auth/logout', 'POST', {}); setMe(null); })}><LogOut size={16} /> {t('Выйти из аккаунта')}</button>
         <button className="btn ghost" onClick={() => confirm(t('Выйти на всех устройствах?')) && act(async () => { await api('/auth/logout', 'POST', { everywhere: true }); setMe(null); })}>{t('Выйти на всех устройствах')}</button>
       </div>
+      <div className="card form">
+        <h3>{t('Удаление аккаунта')}</h3>
+        <p className="muted small">{t('Имя, телефон, почта, уведомления и подписки будут удалены, вход закроется на всех устройствах. В рейсах и переписке у партнёров останется запись «Аккаунт удалён». С этим номером потом можно зарегистрироваться заново.')}</p>
+        <p className="muted small"><Link to="/privacy" className="link">{t('Политика конфиденциальности')}</Link></p>
+        <div className="row wrap">
+          <button className="btn ghost danger" onClick={() => confirm(t('Удалить аккаунт навсегда? Отменить это нельзя.')) && act(async () => { await api('/me', 'DELETE'); setMe(null); })}><Trash2 size={16} /> {t('Удалить аккаунт')}</button>
+        </div>
+      </div>
     </div>
   );
 }

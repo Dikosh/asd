@@ -21,7 +21,7 @@ import ServicesPage from './pages/Services';
 import ShippersPage from './pages/Shippers';
 import ToolsPage from './pages/Tools';
 import PricesPage from './pages/Prices';
-import HelpPage, { PublicHelp, RulesPage } from './pages/Help';
+import HelpPage, { PrivacyPage, PublicHelp, RulesPage } from './pages/Help';
 import NotificationsPage from './pages/Notifications';
 import TripDoc from './pages/TripDoc';
 
@@ -313,6 +313,7 @@ function App() {
           <Route path="/t/:token" element={<PublicTrack />} />
           <Route path="/d/:token" element={<DrivePage />} />
           <Route path="/rules" element={<RulesPage />} />
+          <Route path="/privacy" element={<PrivacyPage />} />
           {/* справка открывается и без входа: вопросы, безопасность и правила нужны до регистрации */}
           {!ctx.me && <Route path="/help" element={<PublicHelp />} />}
           {!ctx.me && <Route path="/help/:tab" element={<PublicHelp />} />}

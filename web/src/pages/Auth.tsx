@@ -242,7 +242,7 @@ export default function AuthPage() {
               )}
               <label className="switch small consent">
                 <input type="checkbox" checked={accept} onChange={(e) => setAccept(e.target.checked)} />
-                <span>{t('Принимаю правила платформы и согласен на обработку персональных данных')}. <Link to="/rules" target="_blank">{t('Читать правила')}</Link></span>
+                <span>{t('Принимаю правила платформы и согласен на обработку персональных данных')}. <Link to="/rules" target="_blank">{t('Читать правила')}</Link> · <Link to="/privacy" target="_blank">{t('Политика конфиденциальности')}</Link></span>
               </label>
               <button className="btn primary block" disabled={busy || regMissing.length > 0}>{joining ? t('Присоединиться') : t('Зарегистрироваться')}</button>
               {regMissing.length > 0 && <p className="muted small">{t('Осталось заполнить')}: {regMissing.join(', ')}</p>}
@@ -264,6 +264,7 @@ export default function AuthPage() {
           </div>
         )}
         <Link to="/rules" className="link center-link">{t('Правила платформы')} <ArrowRight size={14} /></Link>
+        <Link to="/privacy" className="link center-link">{t('Политика конфиденциальности')} <ArrowRight size={14} /></Link>
       </section>
     </div>
   );

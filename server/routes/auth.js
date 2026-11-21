@@ -1,8 +1,10 @@
 // Вход по номеру телефона с одноразовым кодом, регистрация, профиль, события.
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import zlib from 'node:zlib';
 import { z } from 'zod';
-import { q, q1, run, insert, tx } from '../db.js';
+import { q, q1, run, insert, tx, UPLOAD_DIR } from '../db.js';
 import { CITIES, cityById, isValidBin } from '../geo.js';
 import * as L from '../lib.js';
 import { notify } from '../notify.js';
@@ -337,6 +339,64 @@ export default function authRoutes(app) {
       run('UPDATE users SET settings = ? WHERE id = ?', JSON.stringify(next), req.user.id);
     }
     res.json(L.meOut(q1('SELECT * FROM users WHERE id = ?', req.user.id)));
+  });
+
+  // Удаление аккаунта (требование App Store и Google Play). Запись о человеке не стирается, а обезличивается: на неё
+  // ссылаются рейсы, отзывы и переписка партнёров, и у них эта история должна остаться. Имя, номер, почта, настройки,
+  // входы, уведомления, подписки, заметки и обращения в поддержку удаляются; номер освобождается для новой регистрации.
+  app.delete('/api/me', L.auth, (req, res) => {
+    const u = req.user;
+    if (u.is_demo) throw bad('forbidden', 'Демо-аккаунт удалить нельзя', 403);
+    const mine = u.company_id;
+    const others = q('SELECT id, company_role FROM users WHERE company_id = ? AND id != ? ORDER BY id', mine, u.id);
+    const alone = others.length === 0;
+    if (!alone && u.company_role === 'owner' && !others.some((o) => o.company_role === 'owner'))
+      throw bad('state', 'Вы владелец компании с сотрудниками — сначала удалите их из команды', 409);
+    // как при переходе в другую компанию: единственного человека держат рейсы компании, сотрудника — рейсы, где он водитель
+    const busy = alone
+      ? q(`SELECT id FROM trips WHERE status = 'active' AND (customer_company = :c OR carrier_company = :c) ORDER BY id LIMIT 5`, { c: mine })
+      : q(`SELECT id FROM trips WHERE status = 'active' AND driver_user = ? ORDER BY id LIMIT 5`, u.id);
+    if (busy.length) throw L.tbad('state', 'У вашей компании есть активные рейсы ({n}) — сначала завершите их в разделе «Рейсы»', { n: busy.map((x) => `№${x.id}`).join(', ') }, 409);
+    const docs = alone ? q('SELECT path FROM documents WHERE company_id = ?', mine) : [];
+    tx(() => {
+      run(`UPDATE responses SET status = 'withdrawn' WHERE user_id = ? AND status = 'sent'`, u.id);
+      if (alone) {
+        // в компании никого не остаётся: объявления в архив, вакансии и карточки услуг сняты; документы для проверки,
+        // сотрудники и машины — это данные людей, которых платформа больше не обслуживает. Название остаётся в истории рейсов и отзывах
+        run(`UPDATE responses SET status = 'declined' WHERE status = 'sent' AND listing_id IN (SELECT id FROM listings WHERE company_id = ? AND status = 'active')`, mine);
+        run(`UPDATE listings SET status = 'archived', closed_at = ? WHERE company_id = ? AND status = 'active'`, L.now(), mine);
+        run(`UPDATE jobs SET status = 'closed', phone = '' WHERE company_id = ?`, mine);
+        run(`UPDATE services SET removed = 1, phone = '' WHERE company_id = ?`, mine);
+        run('DELETE FROM documents WHERE company_id = ?', mine);
+        run('DELETE FROM employees WHERE company_id = ?', mine);
+        run('DELETE FROM vehicles WHERE company_id = ?', mine);
+        run('DELETE FROM invites WHERE company_id = ?', mine);
+        run(`UPDATE companies SET bin = NULL, about = '' WHERE id = ?`, mine);
+      } else {
+        // компания работает дальше: объявления, вакансии, услуги и текущие сделки человека переходят владельцу
+        const boss = (others.find((o) => o.company_role === 'owner') || others[0]).id;
+        run('UPDATE listings SET user_id = ? WHERE user_id = ? AND company_id = ?', boss, u.id, mine);
+        run('UPDATE jobs SET user_id = ? WHERE user_id = ? AND company_id = ?', boss, u.id, mine);
+        run('UPDATE services SET user_id = ? WHERE user_id = ? AND company_id = ?', boss, u.id, mine);
+        run(`UPDATE trips SET customer_user = ? WHERE customer_user = ? AND status = 'active'`, boss, u.id);
+        run(`UPDATE trips SET carrier_user = ? WHERE carrier_user = ? AND status = 'active'`, boss, u.id);
+        // сотрудник уходит из команды в свою пустую компанию — как при удалении из команды
+        const own = insert(`INSERT INTO companies(name, form, kind) VALUES('—', 'ИП', ?)`, u.role);
+        run(`UPDATE users SET company_id = ?, company_role = 'owner' WHERE id = ?`, own, u.id);
+      }
+      // в завершённых рейсах человек остаётся водителем, но без имени и номера
+      run(`UPDATE trips SET driver_name = '', driver_phone = '' WHERE driver_user = ?`, u.id);
+      for (const t of ['notifications', 'searches', 'marks', 'listing_views', 'feedback']) run(`DELETE FROM ${t} WHERE user_id = ?`, u.id);
+      run('DELETE FROM invites WHERE phone = ? OR user_id = ?', u.phone, u.id);
+      for (const t of ['login_codes', 'known_devices', 'tg_links']) run(`DELETE FROM ${t} WHERE phone = ?`, u.phone);
+      run(`UPDATE users SET name = 'Аккаунт удалён', phone = ?, email = '', settings = '{"showPhone":false}', is_admin = 0,
+        relocator = 0, licenses = '[]', relocator_city = NULL, relocator_note = '' WHERE id = ?`, `deleted-${u.id}`, u.id);
+    });
+    for (const d of docs) fs.rmSync(path.join(UPLOAD_DIR, path.basename(d.path)), { force: true });
+    L.resetCompanyCache();
+    L.dropSessions(u.id);
+    L.endSession(req, res);
+    res.json({ ok: true });
   });
 
   // Данные компании меняет только владелец.
