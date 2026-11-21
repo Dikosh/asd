@@ -3,7 +3,7 @@
 // а после возврата из объявления поиск остаётся тем же и на том же месте.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useNavigationType, useParams, useSearchParams } from 'react-router-dom';
-import { ArrowLeftRight, BadgeCheck, Bell, BellOff, ChevronDown, FileCheck2, HelpCircle, List, Map as MapIcon, Save, SlidersHorizontal, X } from 'lucide-react';
+import { ArrowLeftRight, BadgeCheck, Bell, BellOff, ChevronDown, FileCheck2, HelpCircle, List, Map as MapIcon, PanelLeftClose, Save, SlidersHorizontal, X } from 'lucide-react';
 import { api, BODY_L, CARGO_L, COUNTRY_L, FLAG_L, fmtDates, Listing, LOADING_L, money, num, opts, PAY_L, t, useApp, useLoad } from '../core';
 import { Chips, CitySelect, Empty, Field, Loading, MapView, Modal, Select, Tabs } from '../ui';
 import { ListingCard, RouteTitle } from '../listing';
@@ -60,6 +60,9 @@ export default function SearchPage() {
   const [debounced, setDebounced] = useState<Filter>(init.f);
   const [notifyNew, setNotifyNew] = useState(true);
   const [panel, setPanel] = useState(false);
+  // на компьютере фильтр можно спрятать, чтобы объявления шли во всю ширину; выбор запоминается в браузере
+  const [hideFilter, setHideFilter] = useState(() => { try { return localStorage.getItem('search.hideFilter') === '1'; } catch { return false; } });
+  const toggleFilter = () => setHideFilter((v) => { try { localStorage.setItem('search.hideFilter', v ? '0' : '1'); } catch { /* приватный режим */ } return !v; });
   const [more, setMore] = useState(() => EXTRA.some((k) => init.f[k]));
   const [hint, setHint] = useState(false);
   const [saveName, setSaveName] = useState<string | null>(null);
@@ -177,7 +180,7 @@ export default function SearchPage() {
       kind: (g.from.length ? 'a' : 'b') as 'a' | 'b',
       label: [cityName(g.id), g.from.length ? `${t('погрузка')}: ${g.from.length}` : '', g.to.length ? `${t('разгрузка')}: ${g.to.length}` : ''].filter(Boolean).join(' · '),
     }));
-    const routes = items.map((l) => ({ pts: l.points.map(pos), color: l.kind === 'cargo' ? '#1554d1' : '#7c3aed', weight: 2 }));
+    const routes = items.map((l) => ({ pts: l.points.map(pos), color: l.kind === 'cargo' ? '#2d5bb9' : '#7c3aed', weight: 2 }));
     // карту наводим на места погрузки, отбросив далёкие одиночные точки, — иначе видна вся Евразия
     let focus = groups.filter((g) => g.from.length);
     if (focus.length > 4) {
@@ -246,6 +249,7 @@ export default function SearchPage() {
         <b>{t('Фильтр')}{active > 0 && <span className="badge inline">{active}</span>}</b>
         <button className="link" onClick={() => setHint(true)}><HelpCircle size={15} /> {t('Как пользоваться')}</button>
         <button className="icon-btn fpanel-close" onClick={() => setPanel(false)} aria-label={t('Закрыть')}><X size={20} /></button>
+        <button className="icon-btn fpanel-hide hide-s" onClick={toggleFilter} aria-label={t('Скрыть фильтр')} title={t('Скрыть фильтр')}><PanelLeftClose size={18} /></button>
       </div>
       <div className="fpanel-body filters">
         <Field label={t('Место погрузки')}><CitySelect value={f.from || null} onChange={(v) => set('from', v)} placeholder={t('Любой город')} /></Field>
@@ -347,6 +351,11 @@ export default function SearchPage() {
           nav(`/search/${v}${s ? `?${s}` : ''}`);
         }} />
         <div className="row">
+          {hideFilter && (
+            <button className="btn soft hide-s" onClick={toggleFilter} aria-expanded={false}>
+              <SlidersHorizontal size={16} /> {t('Показать фильтр')}{active > 0 && <span className="badge inline">{active}</span>}
+            </button>
+          )}
           <button className="btn soft only-s" onClick={() => setPanel(true)}>
             <SlidersHorizontal size={16} /> {t('Фильтр')}{active > 0 && <span className="badge inline">{active}</span>}
           </button>
@@ -379,7 +388,7 @@ export default function SearchPage() {
         </div>
       )}
 
-      <div className="search-layout">
+      <div className={`search-layout ${hideFilter ? 'no-filter' : ''}`}>
         <aside className={`filter-panel card fpanel ${panel ? 'open' : ''}`} aria-label={t('Фильтр')}>
           {filters}
         </aside>

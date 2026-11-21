@@ -40,7 +40,7 @@ function useTripMap(trip: Trip | null) {
     if (!trip) return { routes: [] as MapRoute[], markers: [] as MapMarker[] };
     const pts = trip.points.map((p) => [city(p)!.lat, city(p)!.lon] as [number, number]);
     const routes: MapRoute[] = [{ pts, color: '#9db4dc', dashed: true }];
-    if (trip.track && trip.track.length > 1) routes.push({ pts: trip.track, color: '#1554d1', weight: 5 });
+    if (trip.track && trip.track.length > 1) routes.push({ pts: trip.track, color: '#2d5bb9', weight: 5 });
     const markers: MapMarker[] = pts.map((pos, i) => ({ pos, kind: i === 0 ? 'a' : i === pts.length - 1 ? 'b' : 'stop', label: cityName(trip.points[i]) }));
     if (trip.position) markers.push({ pos: [trip.position.lat, trip.position.lon], kind: 'truck', label: `${trip.carrier.name} · ${fmtWhen(trip.position.at)}` });
     return { routes, markers };

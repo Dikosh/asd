@@ -1,7 +1,7 @@
 // «Работа»: вакансии владельцев транспорта и резюме водителей. Связь — по телефону или в WhatsApp.
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Briefcase, CarFront, MapPin, Megaphone, Plus, Trash2, UserPlus } from 'lucide-react';
+import { ArrowRight, Briefcase, CarFront, MapPin, Megaphone, Plus, Trash2, UserPlus } from 'lucide-react';
 import { api, fmtDate, t, useApp, useLoad } from '../core';
 import { CitySelect, Empty, Field, Loading, Modal, Tabs } from '../ui';
 import { ContactButtons } from '../listing';
@@ -45,9 +45,15 @@ export default function JobsPage() {
         </div>
       </div>
       <p className="muted">{t('Поиск водителей и работы внутри платформы — без перехода на другие сайты.')}</p>
-      {/* подработка для водителей: перегон машин и сопровождение негабарита */}
+      {/* перегон машин живёт здесь, в «Работе»: заявки на перегон и подработка перегонщиком */}
+      {!teamDriver && (
+        <Link to="/relocation" className="banner">
+          <CarFront size={20} />
+          <div><b>{t('Перегон машин и техники')}</b><span>{t('Заявки на перегон своим ходом и подработка перегонщиком')}</span></div>
+          <ArrowRight size={18} />
+        </Link>
+      )}
       <div className="row wrap">
-        {!teamDriver && <Link to="/relocation" className="btn soft"><CarFront size={16} /> {t('Перегон: заявки и перегонщики')}</Link>}
         <Link to="/services?cat=escort" className="btn soft"><Megaphone size={16} /> {t('Сопровождение негабарита')}</Link>
       </div>
       <div className="page-head">

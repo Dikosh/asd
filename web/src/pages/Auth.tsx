@@ -257,7 +257,7 @@ export default function AuthPage() {
             <div className="chips-select">
               {[...meta.roles, 'admin'].map((r) => (
                 <button key={r} className="chip-btn" disabled={busy} onClick={() => demo(r)}>
-                  {r === 'admin' ? t('Модератор') : t(ROLE_L[r])}
+                  {r === 'admin' ? t('Админ (арбитраж)') : t(ROLE_L[r])}
                 </button>
               ))}
             </div>

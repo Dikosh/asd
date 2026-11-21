@@ -262,7 +262,7 @@ export function AdminExtra() {
         ))}
       </div>
       <div className="card form">
-        <h3><History size={17} /> {t('Журнал модератора')}</h3>
+        <h3><History size={17} /> {t('Журнал действий админа')}</h3>
         {data.log.map((l: any) => (
           <div className="line" key={l.id}>
             <div className="grow"><b>{t(LOG_L[l.action] || l.action)}</b> · {l.target}{l.note && <div>{l.note}</div>}<div className="muted small">{l.admin} · {fmtWhen(l.createdAt)}</div></div>

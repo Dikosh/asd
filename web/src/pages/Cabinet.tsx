@@ -30,7 +30,7 @@ export default function Cabinet() {
     { key: 'blacklist', label: t('Чёрный список'), icon: <Ban size={19} />, el: <Blacklist /> },
     { key: 'settings', label: t('Настройки'), icon: <Settings size={19} />, el: <SettingsTab /> },
     ...(me!.user.isAdmin ? [
-      { key: 'admin', label: t('Модерация'), icon: <ShieldCheck size={19} />, el: <Admin /> },
+      { key: 'admin', label: t('Админ (арбитраж)'), icon: <ShieldCheck size={19} />, el: <Admin /> },
       { key: 'metrics', label: t('Показатели площадки'), icon: <BarChart3 size={19} />, el: <MetricsTab /> },
     ] : []),
   ];
@@ -664,7 +664,7 @@ function Admin() {
   if (loading) return <Loading />;
   return (
     <div className="stack">
-      <h1 className="page-title">{t('Модерация')}</h1>
+      <h1 className="page-title">{t('Админ (арбитраж)')}</h1>
       <div className="card form">
         <h3>{t('Компании на проверке')}</h3>
         {data?.companies.map((c) => (

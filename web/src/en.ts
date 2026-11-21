@@ -1817,4 +1817,12 @@ export const EN: Record<string, string> = {
   "Номер {phone}. Если это сделали не вы, отмените приглашение в разделе «Команда» и выйдите на всех устройствах.": "Number {phone}. If you did not do this, cancel the invitation in the “Team” section and sign out on all devices.",
   "Компания открыла слишком много контактов": "A company opened too many contacts",
   "«{name}» за сутки открыла {n} карточек с контактами — предел исчерпан. Так выглядит сбор базы: проверьте компанию.": "“{name}” opened {n} cards with contacts in 24 hours — the limit is used up. This is what database harvesting looks like: check the company.",
+  "Вакансии, резюме и перегон машин": "Vacancies, driver CVs and vehicle relocation",
+  "Заявки на перегон своим ходом и подработка перегонщиком": "Requests to drive vehicles to their destination and extra work as a relocation driver",
+  "Ставка {a} {c}/км ≈ {n} ₸/км": "Rate {a} {c}/km ≈ {n} ₸/km",
+  "{m} ₸/км · {a}–{b} ₸/км": "{m} ₸/km · {a}–{b} ₸/km",
+  "Админ (арбитраж)": "Admin (arbitration)",
+  "Журнал действий админа": "Admin action log",
+  "Скрыть фильтр": "Hide filter",
+  "Показать фильтр": "Show filter",
 };

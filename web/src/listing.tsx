@@ -2,7 +2,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import {
-  ArrowRight, Ban, Bookmark, BookmarkCheck, Check, EyeOff, Eye, ExternalLink, FileCheck2, Flag, Globe2, Handshake, MessageCircle, MoreHorizontal, Phone, Share2, StickyNote,
+  ArrowRight, Ban, Bookmark, BookmarkCheck, Check, ChevronRight, EyeOff, Eye, ExternalLink, FileCheck2, Flag, Globe2, Handshake, MessageCircle, MoreHorizontal, Phone, Share2, StickyNote,
   TriangleAlert, X, Zap,
 } from 'lucide-react';
 import { api, BODY_L, CARGO_L, Company, FLAG_L, fmtDates, KIND_L, licenseLabel, Listing, LOADING_L, money, num, PAY_L, RELOC_VEHICLE_L, ROLE_L, t, useApp, waLink } from './core';
@@ -318,7 +318,7 @@ export function ListingCard({ l, onChange, footer }: { l: Listing; onChange: () 
     nav(`/listing/${l.id}`);
   };
   return (
-    <article className={`card lcard tappable ${l.boosted ? 'boosted' : ''}`} onClick={openCard}>
+    <article className={`card lcard tappable lcard-${l.kind} ${l.boosted ? 'boosted' : ''}`} onClick={openCard}>
       <div className="lcard-top">
         <div>
           <div className="lcard-tags">
@@ -333,7 +333,7 @@ export function ListingCard({ l, onChange, footer }: { l: Listing; onChange: () 
             {l.tripId && <span className="tag trip">{t('В рейсе')}</span>}
             {l.kind !== 'truck' && l.trucks > 1 && <span className="tag">{l.booked > 0 ? t('Машин: {a} из {b}', { a: l.booked, b: l.trucks }) : t('Нужно машин: {n}', { n: l.trucks })}</span>}
           </div>
-          <Link to={`/listing/${l.id}`} className="lcard-title"><RouteTitle points={l.points} /></Link>
+          <Link to={`/listing/${l.id}`} className="lcard-title"><RouteTitle points={l.points} /><ChevronRight size={18} className="lcard-chev" aria-hidden="true" /></Link>
           <div className="muted small">
             {num(l.distanceKm)} {t('км')} · {fmtDates(l.dateFrom, l.dateTo)}
             {l.detourKm ? ` · ${t('крюк ~{n} км', { n: l.detourKm })}` : ''}

@@ -85,11 +85,10 @@ export default function HomePage() {
 
       <nav className="quick" aria-label={t('Сервисы')}>
         <Link to="/tools"><Calculator size={20} /><b>{t('Инструменты')}</b><span>{t('Расстояние, стоимость рейса, нагрузка на оси')}</span></Link>
-        {!teamDriver && <Link to="/relocation"><CarFront size={20} /><b>{t('Перегон')}</b><span>{t('Перегнать машину или технику своим ходом')}</span></Link>}
         {!teamDriver && <Link to="/services"><Megaphone size={20} /><b>{t('Услуги')}</b><span>{t('Перегонщики, сопровождение негабарита, брокеры')}</span></Link>}
         <Link to="/prices"><TrendingUp size={20} /><b>{t('Цены')}</b><span>{t('Ставки по направлениям и кузовам')}</span></Link>
         <Link to="/cabinet/catalog"><Building2 size={20} /><b>{t('Проверка компаний')}</b><span>{t('Рейтинг, отзывы, чёрный список')}</span></Link>
-        <Link to="/jobs"><Briefcase size={20} /><b>{t('Работа')}</b><span>{t('Вакансии и резюме водителей')}</span></Link>
+        <Link to="/jobs"><Briefcase size={20} /><b>{t('Работа')}</b><span>{teamDriver ? t('Вакансии и резюме водителей') : t('Вакансии, резюме и перегон машин')}</span></Link>
         <Link to="/help"><LifeBuoy size={20} /><b>{t('Помощь')}</b><span>{t('Ответы, безопасность, поддержка')}</span></Link>
       </nav>
 

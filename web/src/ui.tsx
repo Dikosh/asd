@@ -415,7 +415,7 @@ export function MapView({ routes, markers, height = 320, fitKey }: { routes: Map
     const all: [number, number][] = [];
     for (const r of routes) {
       if (r.pts.length < 2) continue;
-      L.polyline(r.pts, { color: r.color || '#1554d1', weight: r.weight || 4, opacity: 0.85, dashArray: r.dashed ? '6 8' : undefined }).addTo(g);
+      L.polyline(r.pts, { color: r.color || '#2d5bb9', weight: r.weight || 4, opacity: 0.85, dashArray: r.dashed ? '6 8' : undefined }).addTo(g);
       all.push(...r.pts);
     }
     for (const mk of markers) {
@@ -443,12 +443,12 @@ export function Logo() {
   return (
     <span className="logo">
       <svg viewBox="0 0 64 64" width="30" height="30" aria-hidden="true">
-        <rect width="64" height="64" rx="15" fill="#1554d1" />
+        <rect width="64" height="64" rx="15" fill="#2d5bb9" />
         <path d="M16 44c10 0 12-24 22-24h10" fill="none" stroke="#fff" strokeWidth="6" strokeLinecap="round" />
         <circle cx="48" cy="20" r="6.5" fill="#e5383b" stroke="#fff" strokeWidth="3" />
         <circle cx="16" cy="44" r="4.5" fill="#fff" />
       </svg>
-      Timma
+      timma
     </span>
   );
 }

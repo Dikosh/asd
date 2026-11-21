@@ -2,7 +2,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, Bookmark, BookmarkCheck, Check, ChevronRight, Clock, Eye, FileCheck2, Flag, Globe2, MapPin, MessageSquare, Send, Share2, ShieldAlert, StickyNote, TrendingUp, Truck, X } from 'lucide-react';
-import { api, Company, fmtDates, fmtWhen, Listing, ListingTrip, money, num, PAY_L, ROLE_L, KIND_L, stageLabel, t, useApp, useEvent, useLoad } from '../core';
+import { api, Company, CUR, fmtDates, fmtWhen, Listing, ListingTrip, money, num, PAY_L, ROLE_L, KIND_L, stageLabel, t, useApp, useEvent, useLoad } from '../core';
 import { CompanyBadge, Empty, Field, Loading, MapView, Select } from '../ui';
 import { AcceptResponseModal, canRespondTo, ComplaintModal, ContactButtons, ListingCard, NoteModal, RateBlock, RouteTitle, SpecChips, useShare } from '../listing';
 
@@ -20,6 +20,12 @@ type Detail = Listing & {
   responsesLeft?: number;
 };
 const RESP_L: Record<string, string> = { sent: 'Ожидает ответа', accepted: 'Принят', declined: 'Отклонён', withdrawn: 'Отозван' };
+
+/** Ставка за километр в валюте объявления: мелкие суммы (доллары, рубли) — с копейками. */
+const perKmOwn = (rate: number, km: number) => {
+  const v = rate / km;
+  return v < 10 ? Math.round(v * 100) / 100 : Math.round(v);
+};
 
 export default function ListingPage() {
   const id = Number(useParams().id);
@@ -174,9 +180,15 @@ export default function ListingPage() {
               <div className={`market ${perKm < l.market.low ? 'low' : perKm > l.market.high ? 'high' : ''}`}>
                 <TrendingUp size={18} />
                 <div>
-                  <b>{t('Ставка {n} ₸/км', { n: num(perKm) })} — {perKm < l.market.low ? t('ниже рынка') : perKm > l.market.high ? t('выше рынка') : t('в рынке')}</b>
+                  <b>
+                    {/* ставка в валюте объявления (как её указал автор), рядом — в тенге: рынок считается в тенге */}
+                    {l.currency !== 'KZT' && l.rate && l.distanceKm
+                      ? t('Ставка {a} {c}/км ≈ {n} ₸/км', { a: num(perKmOwn(l.rate, l.distanceKm)), c: CUR[l.currency] || l.currency, n: num(perKm) })
+                      : t('Ставка {n} ₸/км', { n: num(perKm) })}
+                    {' — '}{perKm < l.market.low ? t('ниже рынка') : perKm > l.market.high ? t('выше рынка') : t('в рынке')}
+                  </b>
                   <span>
-                    {t('Обычно {m} ₸/км, чаще всего {a}–{b} ₸/км', { m: num(l.market.median), a: num(l.market.low), b: num(l.market.high) })}
+                    {t('{m} ₸/км · {a}–{b} ₸/км', { m: num(l.market.median), a: num(l.market.low), b: num(l.market.high) })}
                     {' · '}{l.market.basis === 'direction' ? t('по этому направлению, ставок: {n}', { n: l.market.sample }) : t('по похожим рейсам такой же дальности, ставок: {n}', { n: l.market.sample })}
                   </span>
                 </div>
