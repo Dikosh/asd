@@ -36,7 +36,7 @@ export type Kind = 'cargo' | 'truck' | 'relocation';
 export interface Meta {
   demo: boolean; cities: City[]; roles: string[]; body: string[]; cargo: string[]; loading: string[]; pay: string[]; currencies: string[];
   stages: string[]; docKinds: string[]; boostPrice: number; flags: string[]; places: number; relocVehicles: string[]; licenses: string[];
-  login?: { sms: boolean; telegram: string }; support: { phone: string; telegram: string; hours: string }; tiles: { url: string; attribution: string }; limits: { activeFree: number; activePro: number; perHour: number; boostsPro: number };
+  login?: { sms: boolean; telegram: string; whatsapp?: boolean }; support: { phone: string; telegram: string; hours: string }; tiles: { url: string; attribution: string }; limits: { activeFree: number; activePro: number; perHour: number; boostsPro: number };
   plan: { price: number; days: number; free: { seats: number; alerts: number }; pro: { seats: number; alerts: number } }; stats: { cargo: number; truck: number; relocation: number; companies: number; trips: number; shippers: number };
 }
 export interface Trip {

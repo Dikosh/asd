@@ -238,6 +238,8 @@ input[type='checkbox'] { width: 18px; height: 18px; min-height: 0; accent-color:
 .code-input { font-size: 26px; letter-spacing: 0.4em; text-align: center; font-weight: 700; }
 .demo-note { background: var(--amber-l); color: #6b4300; padding: 10px 12px; border-radius: 10px; font-size: 14px; }
 .demo-note b { font-size: 17px; letter-spacing: 0.1em; }
+.wa-steps { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 8px; }
+.wa-pick { display: inline-block; font-size: 26px; line-height: 1.2; letter-spacing: 0.1em; padding: 2px 12px; margin-left: 4px; border-radius: 10px; background: var(--blue-l); }
 .role-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .role { text-align: left; border: 1px solid #cdd6e4; background: #fff; border-radius: 12px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; }
 .role span { font-size: 12px; color: var(--muted); }

@@ -2,7 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, BadgeCheck, FileCheck2, Lock, MapPinned, MessageCircle, Phone, Send, Users } from 'lucide-react';
-import { api, BODY_L, CARGO_L, fmtDates, Me, money, num, KIND_L, ROLE_HINT, ROLE_L, t, useApp, useLoad, waLink } from '../core';
+import { api, ApiError, BODY_L, CARGO_L, fmtDates, getLang, Me, money, num, KIND_L, ROLE_HINT, ROLE_L, t, useApp, useLoad, waLink } from '../core';
 import { Field, LangSwitch, Logo, Select } from '../ui';
 
 const CODES = [
@@ -15,7 +15,7 @@ interface PublicListing { id: number; kind: 'cargo' | 'truck' | 'relocation'; po
 
 export default function AuthPage() {
   const { meta, setMe, act, routeName, toast } = useApp();
-  const [step, setStep] = useState<'phone' | 'code' | 'reg'>('phone');
+  const [step, setStep] = useState<'phone' | 'code' | 'wa' | 'reg'>('phone');
   const [prefix, setPrefix] = useState('+7');
   const [number, setNumber] = useState('');
   const [code, setCode] = useState('');
@@ -24,6 +24,10 @@ export default function AuthPage() {
   const [via, setVia] = useState<'sms' | 'telegram'>('sms');
   const [tgUrl, setTgUrl] = useState('');
   const [tgSent, setTgSent] = useState(false);
+  // вход через WhatsApp: ссылка с готовым сообщением, число для нового устройства и получил ли сервер сообщение
+  const [waUrl, setWaUrl] = useState('');
+  const [waPick, setWaPick] = useState('');
+  const [waSent, setWaSent] = useState(false);
   const [regToken, setRegToken] = useState('');
   const [invite, setInvite] = useState<Invite | null>(null);
   const [join, setJoin] = useState(true);
@@ -65,6 +69,8 @@ export default function AuthPage() {
 
   const canSms = meta.login?.sms ?? true;
   const canTelegram = !!meta.login?.telegram;
+  const canWhatsapp = !!meta.login?.whatsapp;
+  const smsButton = canSms || (!canTelegram && !canWhatsapp);
   const requestCode = (how: 'sms' | 'telegram' = via) =>
     run(async () => {
       const r = await api('/auth/request-code', 'POST', how === 'telegram' ? { phone, via: 'telegram' } : { phone });
@@ -76,18 +82,67 @@ export default function AuthPage() {
       setWait(60);
       setStep('code');
     });
-  const verify = () =>
+  /** Номер подтверждён: либо вход, либо регистрация. */
+  const confirmed = (r: { registered: boolean; regToken: string; invite: Invite | null }) => {
+    if (r.registered) return setMe(r as unknown as Me);
+    setRegToken(r.regToken);
+    setInvite(r.invite);
+    setJoin(!!r.invite);
+    if (r.invite?.name) setReg((x) => ({ ...x, name: r.invite!.name }));
+    setStep('reg');
+  };
+  const verify = () => run(async () => confirmed(await api('/auth/verify', 'POST', { phone, code })));
+  const requestWhatsapp = () =>
     run(async () => {
-      const r = await api('/auth/verify', 'POST', { phone, code });
-      if (r.registered) setMe(r as Me);
-      else {
-        setRegToken(r.regToken);
-        setInvite(r.invite);
-        setJoin(!!r.invite);
-        if (r.invite?.name) setReg((x) => ({ ...x, name: r.invite.name }));
-        setStep('reg');
+      const r = await api('/auth/request-code', 'POST', { phone, via: 'whatsapp', lang: getLang() });
+      setWait(60);
+      // без ссылки — у номера постоянный код (проверяющий магазина приложений): он вводится как обычный
+      if (!r.whatsappUrl) {
+        setVia('sms');
+        setDevCode('');
+        setCode('');
+        return setStep('code');
       }
+      setWaUrl(r.whatsappUrl);
+      setWaPick(r.pick || '');
+      setWaSent(false);
+      setStep('wa');
     });
+  // пока человек в WhatsApp, спрашиваем сервер, подтверждён ли вход; вернулся на страницу — спрашиваем сразу
+  useEffect(() => {
+    if (step !== 'wa') return;
+    let off = false;
+    let asking = false;
+    const ask = async () => {
+      if (off || asking || document.hidden) return;
+      asking = true;
+      try {
+        const r = await api('/auth/whatsapp', 'POST', { phone });
+        if (off) return;
+        if (r.wait) setWaSent(!!r.sent);
+        else {
+          off = true;
+          confirmed(r);
+        }
+      } catch (e) {
+        // связь пропала или сервер занят — спросим ещё раз; вход отклонён или истёк — начинаем заново
+        if (!off && e instanceof ApiError && e.code.startsWith('wa_')) {
+          off = true;
+          toast(e.message, 'error');
+          setStep('phone');
+        }
+      } finally {
+        asking = false;
+      }
+    };
+    const id = setInterval(ask, 3000);
+    document.addEventListener('visibilitychange', ask);
+    return () => {
+      off = true;
+      clearInterval(id);
+      document.removeEventListener('visibilitychange', ask);
+    };
+  }, [step, waUrl]);
   const register = () =>
     run(async () => setMe(await api<Me>('/auth/register', 'POST', joining ? { regToken, name: reg.name, email: reg.email, joinInvite: true, accept } : { regToken, ...reg, ...(isDriver ? { companyName: reg.name.trim(), companyForm: '' } : {}), accept })));
   const demo = (role: string) => run(async () => setMe(await api<Me>('/auth/demo', 'POST', { role })));
@@ -141,7 +196,7 @@ export default function AuthPage() {
       </section>
 
       <section className="auth-panel">
-        <form className="card auth-card" onSubmit={(e) => { e.preventDefault(); step === 'phone' ? requestCode(canSms || !canTelegram ? 'sms' : 'telegram') : step === 'code' ? verify() : register(); }}>
+        <form className="card auth-card" onSubmit={(e) => { e.preventDefault(); step === 'phone' ? (smsButton ? requestCode('sms') : canTelegram ? requestCode('telegram') : requestWhatsapp()) : step === 'code' ? verify() : step === 'reg' && register(); }}>
           {step === 'phone' && (
             <>
               <h2>{t('Вход и регистрация')}</h2>
@@ -152,10 +207,15 @@ export default function AuthPage() {
                   <input ref={phoneInput} type="tel" inputMode="tel" autoFocus placeholder="701 123 45 67" value={number} onChange={(e) => setNumber(e.target.value)} autoComplete="tel-national" />
                 </div>
               </Field>
-              {(canSms || !canTelegram) && <button className="btn primary block" disabled={busy || !phoneOk}>{t('Получить код')}</button>}
+              {smsButton && <button className="btn primary block" disabled={busy || !phoneOk}>{t('Получить код')}</button>}
               {canTelegram && (
                 <button type={canSms ? 'button' : 'submit'} className={`btn ${canSms ? 'soft' : 'primary'} block`} disabled={busy || !phoneOk} onClick={canSms ? () => requestCode('telegram') : undefined}>
                   <Send size={16} /> {t('Получить код в Telegram')}
+                </button>
+              )}
+              {canWhatsapp && (
+                <button type={smsButton || canTelegram ? 'button' : 'submit'} className={`btn ${smsButton || canTelegram ? 'soft' : 'primary'} block`} disabled={busy || !phoneOk} onClick={smsButton || canTelegram ? requestWhatsapp : undefined}>
+                  <MessageCircle size={16} /> {t('Войти через WhatsApp')}
                 </button>
               )}
               {!phoneOk && number.replace(/\D/g, '').length > 0 && <p className="muted small">{t('Введите номер полностью: 10 цифр, например 701 123 45 67')}</p>}
@@ -181,6 +241,21 @@ export default function AuthPage() {
               </Field>
               <button className="btn primary block" disabled={busy || code.length < 6}>{t('Продолжить')}</button>
               <button type="button" className="btn ghost block" disabled={busy || wait > 0} onClick={() => requestCode()}>{wait > 0 ? t('Отправить код ещё раз через {n} с', { n: wait }) : t('Отправить код ещё раз')}</button>
+              <button type="button" className="btn ghost block" onClick={() => setStep('phone')}>{t('Изменить номер')}</button>
+            </>
+          )}
+          {step === 'wa' && (
+            <>
+              <h2>{t('Вход через WhatsApp')}</h2>
+              <ol className="wa-steps">
+                <li>{t('Нажмите «Открыть WhatsApp» и отправьте готовое сообщение с номера {phone}.', { phone })}</li>
+                {waPick && <li>{t('Вам ответят в чате. Напишите туда число:')} <b className="wa-pick">{waPick}</b></li>}
+                <li>{t('Вернитесь сюда — вход откроется сам.')}</li>
+              </ol>
+              {waPick && <p className="muted small">{t('Пишите в чат только число с этого экрана. Если число вам назвал кто-то другой — это мошенники.')}</p>}
+              <a className="btn primary block" href={waUrl} target="_blank" rel="noopener noreferrer"><MessageCircle size={16} /> {t('Открыть WhatsApp')}</a>
+              <p className="muted small" aria-live="polite">{waSent ? t('Сообщение получено. Ждём число в чате…') : t('Ждём ваше сообщение…')}</p>
+              <button type="button" className="btn ghost block" disabled={busy || wait > 0} onClick={requestWhatsapp}>{wait > 0 ? t('Начать заново через {n} с', { n: wait }) : t('Начать заново')}</button>
               <button type="button" className="btn ghost block" onClick={() => setStep('phone')}>{t('Изменить номер')}</button>
             </>
           )}

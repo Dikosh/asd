@@ -17,6 +17,7 @@ import { loadRates } from './rates.js';
 import { checkHealth } from './health.js';
 import { seed } from './seed.js';
 import { startTelegram } from './telegram.js';
+import { handleWebhook, signed, wa } from './whatsapp.js';
 import { closeReview } from './review.js';
 
 // Что может менять водитель из команды: вести рейс и свои личные настройки. Остальное — сотрудники и владелец.
@@ -53,6 +54,23 @@ export function createApp() {
     // общий предел частоты запросов: защищает от перебора и случайных циклов в клиенте
     rateLimit(req.user ? `u:${req.user.id}` : `a:${ip(req)}`, 600, 60_000, 'Слишком много запросов, подождите минуту');
     next();
+  });
+  // Сообщения WhatsApp от Meta. Подпись считается по телу запроса как есть, поэтому разбор — до общего express.json
+  app.get('/api/whatsapp/webhook', (req, res) => {
+    const ok = wa.verify && req.query['hub.mode'] === 'subscribe' && req.query['hub.verify_token'] === wa.verify;
+    if (!ok) throw new HttpError(403, 'forbidden', 'Нет доступа');
+    res.type('text/plain').send(String(req.query['hub.challenge'] || ''));
+  });
+  app.post('/api/whatsapp/webhook', express.raw({ type: () => true, limit: '1mb' }), (req, res) => {
+    if (!signed(req.body, req.get('x-hub-signature-256'))) throw new HttpError(403, 'forbidden', 'Нет доступа');
+    let data;
+    try {
+      data = JSON.parse(req.body.toString('utf8'));
+    } catch {
+      throw new HttpError(400, 'bad_json', 'Запрос повреждён — попробуйте ещё раз');
+    }
+    res.json({ ok: true }); // ответ сразу: иначе Meta присылает то же самое ещё раз
+    handleWebhook(data).catch((e) => console.error('[whatsapp]', e));
   });
   // большое тело запроса нужно только для загрузки файла: вошедшему — до 8 МБ, по ссылке водителя — тоже (право даёт ссылка),
   // и таких загрузок с одного адреса или аккаунта — не больше 20 в минуту

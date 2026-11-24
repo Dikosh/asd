@@ -68,7 +68,7 @@ const codeIn = (m) => /(?<!\d)\d{6}(?!\d)/.exec(m.text)?.[0];
 
 test('сервер сообщает, какими путями можно получить код', async () => {
   const meta = await visitor()('GET', '/api/meta');
-  assert.deepEqual(meta.data.login, { sms: false, telegram: 'OviTestBot' });
+  assert.deepEqual(meta.data.login, { sms: false, telegram: 'OviTestBot', whatsapp: false });
 });
 
 test('первый вход: ссылка на бота → «Поделиться номером» → код в чате → вход; код на экран не попадает', async () => {

@@ -202,6 +202,10 @@ db.exec(`CREATE TABLE IF NOT EXISTS tg_links(phone TEXT PRIMARY KEY, chat_id INT
 CREATE INDEX IF NOT EXISTS tg_links_chat ON tg_links(chat_id);
 CREATE INDEX IF NOT EXISTS login_codes_tg ON login_codes(tg_start) WHERE tg_start IS NOT NULL;`);
 addColumn('tg_links', 'used_at', 'TEXT');
+// вход через WhatsApp (server/whatsapp.js): метка из готового сообщения, число с экрана, язык и состояние:
+// new → pick (ждём число) → ok (можно входить); no — число не совпало, fail — ответить не удалось
+for (const c of ['wa_start', 'wa_pick', 'wa_lang', 'wa_state']) addColumn('login_codes', c, 'TEXT');
+db.exec(`CREATE INDEX IF NOT EXISTS login_codes_wa ON login_codes(wa_start) WHERE wa_start IS NOT NULL;`);
 addColumn('push_subs', 'sid', 'TEXT');
 addColumn('push_devices', 'sid', 'TEXT');
 // служебные отметки сервера между запусками (например, в каком режиме он работал в прошлый раз)

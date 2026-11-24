@@ -11,6 +11,7 @@ import { notify } from '../notify.js';
 import { REVIEW, cancelReviewTrips, ensureReview, reviewCode } from '../review.js';
 import { sendSms } from '../sms.js';
 import { tgBot, tgLink, tgSendCode } from '../telegram.js';
+import { WA_WAIT, newPick, newStart, waLang, waOn, waUrl } from '../whatsapp.js';
 
 const PLACES_JSON = Buffer.from(JSON.stringify(CITIES.map((c) => [c.id, c.ru, c.kz, c.en, c.country, c.lat, c.lon, c.region, c.zh === c.en ? '' : c.zh])));
 const PLACES_GZ = zlib.gzipSync(PLACES_JSON);
@@ -109,8 +110,8 @@ export default function authRoutes(app) {
       boostPrice: L.BOOST_PRICE,
       // контакты поддержки задаются при установке; без них остаётся форма обращения
       tiles: L.TILES,
-      // какими путями можно получить код входа: SMS (в демо код показывается на экране) и бот в Telegram (его имя)
-      login: { sms: L.DEMO || !!process.env.SMS_WEBHOOK_URL, telegram: tgBot() },
+      // какими путями можно получить код входа: SMS (в демо код показывается на экране), бот в Telegram (его имя) и WhatsApp
+      login: { sms: L.DEMO || !!process.env.SMS_WEBHOOK_URL, telegram: tgBot(), whatsapp: waOn() },
       support: { phone: process.env.SUPPORT_PHONE || '', telegram: process.env.TELEGRAM_URL || '', hours: process.env.SUPPORT_HOURS || '' },
       stats: {
         cargo: active('cargo'),
@@ -158,6 +159,9 @@ export default function authRoutes(app) {
     // код можно получить в Telegram вместо SMS, если бот подключён (server/telegram.js)
     const viaTelegram = req.body?.via === 'telegram';
     if (viaTelegram && !tgBot()) throw bad('telegram_off', 'Вход через Telegram не подключён', 503);
+    const viaWhatsapp = req.body?.via === 'whatsapp';
+    if (viaWhatsapp && !waOn()) throw bad('whatsapp_off', 'Вход через WhatsApp сейчас недоступен', 503);
+    const free = viaTelegram || viaWhatsapp; // бесплатные способы: пределы SMS их не касаются
     rateLimit(`code:${known}:${phone}`, 5, 10 * 60_000);
     rateLimit('ip:' + L.ip(req), 100, 10 * 60_000); // за одним адресом мобильного оператора — много людей
     // учётные записи из демо-данных вне демо-режима не действуют
@@ -170,14 +174,16 @@ export default function authRoutes(app) {
       // общий предел площадки — про деньги: коды через Telegram бесплатны и в него не входят
       // один адрес не должен израсходовать запас всей площадки: с незнакомых устройств — не больше его части
       const review = !!reviewCode(phone); // проверяющему SMS не отправляется — пределы SMS его не касаются
-      if (!review && !viaTelegram && SMS_DAY && sent(`channel = 'sms'`) >= (known ? SMS_DAY : Math.ceil(SMS_DAY * SMS_STRANGERS))) {
+      if (!review && !free && SMS_DAY && sent(`channel = 'sms'`) >= (known ? SMS_DAY : Math.ceil(SMS_DAY * SMS_STRANGERS))) {
         console.error(`[sms] за сутки отправлено ${SMS_DAY} кодов входа — отправка приостановлена (предел SMS_DAILY_MAX)`);
         smsLimitAlert();
         if (tgBot()) throw bad('sms_limit', 'Отправка SMS временно приостановлена. Получите код в Telegram', 503);
+        if (waOn()) throw bad('sms_limit', 'Отправка SMS временно приостановлена. Войдите через WhatsApp', 503);
         throw bad('sms_limit', 'Отправка кодов временно приостановлена. Попробуйте позже', 503);
       }
-      if (!review && !viaTelegram && !smsAllowed(phone)) {
+      if (!review && !free && !smsAllowed(phone)) {
         if (tgBot()) throw bad('sms_country', 'На номера этой страны код по SMS не отправляется. Получите код в Telegram', 400);
+        if (waOn()) throw bad('sms_country', 'На номера этой страны код по SMS не отправляется. Войдите через WhatsApp', 400);
         throw bad('sms_country', 'На номера этой страны код по SMS не отправляется', 400);
       }
     }
@@ -189,6 +195,16 @@ export default function authRoutes(app) {
       run(`INSERT INTO login_codes(ticket, phone, code, expires, ip, known, channel) VALUES(?, ?, ?, ?, ?, ?, 'review')`, ticket, phone, code, Date.now() + TG_WAIT, L.ip(req), known);
       L.setCookie(req, res, 'otp', ticket, 1800, '/api/auth');
       return res.json(viaTelegram ? { ok: true, via: 'telegram', sent: true, telegramUrl: '' } : { ok: true });
+    }
+    if (viaWhatsapp) {
+      // число с экрана нужно только новому устройству: своё уже подтверждено прошлым входом
+      const start = newStart();
+      const pick = newPick();
+      const lang = waLang(req.body?.lang);
+      run(`INSERT INTO login_codes(ticket, phone, code, expires, ip, known, channel, wa_start, wa_pick, wa_lang, wa_state) VALUES(?, ?, ?, ?, ?, ?, 'wa', ?, ?, ?, 'new')`,
+        ticket, phone, L.token(8), Date.now() + WA_WAIT, L.ip(req), known, start, pick, lang);
+      L.setCookie(req, res, 'otp', ticket, 1800, '/api/auth');
+      return res.json({ ok: true, via: 'whatsapp', whatsappUrl: waUrl(start, lang), pick: known ? '' : pick });
     }
     if (viaTelegram) {
       const link = tgLink(phone);
@@ -233,7 +249,7 @@ export default function authRoutes(app) {
     const otp = ticket ? q1('SELECT * FROM login_codes WHERE ticket = ? AND phone = ? AND reg_token IS NULL', ticket, phone) : null;
     // код из Telegram действует только после того, как бот отправил его в чат: пока человек не поделился номером,
     // кода никто не видел, и принять его — значит дать постороннему угадывать вслепую
-    if (!otp || otp.expires < Date.now() || otp.tg_start) throw bad('code_expired', 'Код устарел, запросите новый');
+    if (!otp || otp.expires < Date.now() || otp.tg_start || otp.channel === 'wa') throw bad('code_expired', 'Код устарел, запросите новый');
     // неверные вводы считаются на сам код: перебор упирается в число кодов на номер, а чужой вход не страдает
     if (otp.attempts >= CODE_TRIES) throw bad('rate_limit', 'Слишком много неверных кодов. Запросите новый код', 429);
     const given = String(req.body?.code || '').trim();
@@ -245,6 +261,24 @@ export default function authRoutes(app) {
     }
     if (otp.channel === 'tg') run(`UPDATE tg_links SET used_at = ? WHERE phone = ?`, L.now(), phone);
     if (otp.channel === 'review') ensureReview();
+    confirmed(req, res, phone, ticket);
+  });
+
+  // Вход через WhatsApp: экран спрашивает, подтвердил ли человек вход. Отвечаем только тому, кто его начал (cookie `otp`).
+  app.post('/api/auth/whatsapp', (req, res) => {
+    const phone = L.normPhone(req.body?.phone);
+    const ticket = L.cookie(req, 'otp');
+    const row = ticket ? q1(`SELECT * FROM login_codes WHERE ticket = ? AND phone = ? AND channel = 'wa' AND reg_token IS NULL`, ticket, phone) : null;
+    if (!row || row.expires < Date.now()) throw bad('wa_expired', 'Время на вход истекло. Начните заново');
+    rateLimit('wapoll:' + row.ticket, 600, WA_WAIT);
+    if (row.wa_state === 'no') throw bad('wa_denied', 'Число не совпало. Начните вход заново');
+    if (row.wa_state === 'fail') throw bad('wa_failed', 'Не удалось подтвердить номер через WhatsApp. Выберите другой способ входа', 502);
+    if (row.wa_state !== 'ok') return res.json({ wait: true, sent: row.wa_state === 'pick' });
+    confirmed(req, res, phone, ticket);
+  });
+
+  /** Номер подтверждён: вход в аккаунт, а если его нет — право зарегистрироваться. */
+  function confirmed(req, res, phone, ticket) {
     const user = q1('SELECT * FROM users WHERE phone = ?', phone);
     if (user) {
       if (user.is_demo && !L.DEMO) throw bad('forbidden', 'Этот номер недоступен', 403);
@@ -264,7 +298,7 @@ export default function authRoutes(app) {
     // если компания пригласила этот номер, человек сам выбирает: присоединиться или создать свою компанию
     const inv = inviteFor(phone);
     res.json({ registered: false, regToken, invite: inv ? { name: inv.name, companyName: inv.companyName, companyForm: inv.companyForm, role: inv.role } : null });
-  });
+  }
 
   const regSchema = z.object({
     regToken: z.string().min(10),
