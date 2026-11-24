@@ -75,7 +75,7 @@ function Catalog({ cat, onAdd }: { cat: string; onAdd: () => void }) {
                 <CompanyBadge c={s.company} />
                 {!s.mine && s.phone && (
                   <div onClickCapture={() => { api(`/services/${s.id}/view`, 'POST').catch(() => {}); }}>
-                    <ContactButtons phone={s.phone} text={t('Здравствуйте! Нашёл вас в каталоге услуг Timma.')} />
+                    <ContactButtons phone={s.phone} text={t('Здравствуйте! Нашёл вас в каталоге услуг Ovi.')} />
                   </div>
                 )}
               </div>

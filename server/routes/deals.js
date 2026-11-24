@@ -40,7 +40,7 @@ function pushMessage(chat, sender, text) {
   if (!due.length) return;
   for (const u of due) lastMsgPush.set(`${chat.id}:${u}`, now);
   const from = q1('SELECT name FROM companies WHERE id = ?', sender.company_id)?.name || sender.name;
-  // заголовок — всегда от площадки, название отправителя — в тексте: уведомление нельзя выдать за сообщение самой Timma
+  // заголовок — всегда от площадки, название отправителя — в тексте: уведомление нельзя выдать за сообщение самой Ovi
   pushOnly(due, { kind: 'message', title: 'Новое сообщение', body: `${from}: ${text}`.slice(0, 160), link: `/cabinet/messages/${chat.id}` });
 }
 /** silent — сообщение, о котором уже есть своё уведомление (текст отклика). */

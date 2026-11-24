@@ -207,7 +207,7 @@ export default function authRoutes(app) {
     }
     run('INSERT INTO login_codes(ticket, phone, code, expires, ip, known) VALUES(?, ?, ?, ?, ?, ?)', ticket, phone, code, Date.now() + CODE_TTL, L.ip(req), known);
     try {
-      await sendSms(phone, `Timma: код ${code}. Никому его не сообщайте`);
+      await sendSms(phone, `Ovi: код ${code}. Никому его не сообщайте`);
     } catch (e) {
       run('DELETE FROM login_codes WHERE ticket = ?', ticket); // SMS не ушло — в пределы не засчитываем
       throw e;

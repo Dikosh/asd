@@ -143,7 +143,7 @@ function Layout() {
     <div className="app">
       <header className="topbar">
         <div className="topbar-in">
-          <NavLink to="/" aria-label="Timma"><Logo /></NavLink>
+          <NavLink to="/" aria-label="Ovi"><Logo /></NavLink>
           <nav className="topnav">
             {nav.map((n) => (
               <NavLink key={n.to} to={n.to} end={n.end} className={({ isActive }) => (isActive || (n.match && loc.pathname.startsWith(n.match)) ? 'on' : '')}>

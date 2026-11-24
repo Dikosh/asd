@@ -1,4 +1,4 @@
-// Сервис-воркер Timma: показывает push-уведомления и открывает нужную страницу по нажатию.
+// Сервис-воркер Ovi: показывает push-уведомления и открывает нужную страницу по нажатию.
 self.addEventListener('install', () => self.skipWaiting());
 self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
 
@@ -7,10 +7,10 @@ self.addEventListener('push', (event) => {
   try {
     data = event.data ? event.data.json() : {};
   } catch {
-    data = { title: 'Timma', body: event.data ? event.data.text() : '' };
+    data = { title: 'Ovi', body: event.data ? event.data.text() : '' };
   }
   event.waitUntil(
-    self.registration.showNotification(data.title || 'Timma', {
+    self.registration.showNotification(data.title || 'Ovi', {
       body: data.body || '',
       icon: '/icon-192.png',
       badge: '/icon-192.png',

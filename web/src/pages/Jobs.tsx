@@ -88,7 +88,7 @@ export default function JobsPage() {
                     <button className="btn ghost" onClick={async () => confirm(t('Снять объявление?')) && (await act(() => api(`/jobs/${j.id}`, 'DELETE'), t('Объявление снято'))) && reload()}><Trash2 size={16} /> {t('Снять')}</button>
                   ) : (
                     <>
-                      <ContactButtons full phone={j.phone} text={`${t('Здравствуйте! Пишу по объявлению на Timma')}: ${j.title}`} />
+                      <ContactButtons full phone={j.phone} text={`${t('Здравствуйте! Пишу по объявлению на Ovi')}: ${j.title}`} />
                       {kind === 'resume' && canHire && <button className="btn soft" disabled={hired.includes(j.id)} onClick={() => hire(j)}><UserPlus size={16} /> {t('В сотрудники')}</button>}
                     </>
                   )}

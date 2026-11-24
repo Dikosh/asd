@@ -170,7 +170,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   setInterval(housekeeping, 15 * 60_000).unref();
   // HOST=127.0.0.1 (так ставит установщик): программа принимает соединения только от веб-сервера на той же машине
   const server = createApp().listen(port, process.env.HOST || undefined);
-  server.on('listening', () => console.log(`Timma: http://localhost:${port}${DEMO ? ' (демо-режим)' : ''}`));
+  server.on('listening', () => console.log(`Ovi: http://localhost:${port}${DEMO ? ' (демо-режим)' : ''}`));
   startTelegram(); // бот с кодами входа; без TELEGRAM_BOT_TOKEN ничего не делает
   server.on('error', (e) => {
     console.error(`Не удалось запустить сервер на порту ${port}: ${e.code === 'EADDRINUSE' ? 'порт занят' : e.message}`);

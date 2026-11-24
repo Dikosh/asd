@@ -15,14 +15,14 @@ export function PushToggle() {
   const { act } = useApp();
   const [state, setState] = useState<PushState>('off');
   useEffect(() => { pushState().then(setState); }, []);
-  if (state === 'unsupported') return <p className="muted small">{t('Этот браузер не поддерживает push-уведомления. На iPhone сначала добавьте Timma на экран «Домой».')}</p>;
+  if (state === 'unsupported') return <p className="muted small">{t('Этот браузер не поддерживает push-уведомления. На iPhone сначала добавьте Ovi на экран «Домой».')}</p>;
   if (state === 'denied') {
     const d = deviceKind();
     return (
       <p className="muted small">
         {t('Уведомления для этого сайта выключены в браузере.')}{' '}
         {d === 'ios'
-          ? t('На iPhone: «Настройки» → «Уведомления» → Timma → «Допуск уведомлений», затем откройте Timma снова.')
+          ? t('На iPhone: «Настройки» → «Уведомления» → Ovi → «Допуск уведомлений», затем откройте Ovi снова.')
           : d === 'android'
             ? t('На Android: нажмите на значок слева от адреса сайта → «Разрешения» → «Уведомления» → «Разрешить», затем обновите страницу.')
             : t('Нажмите на значок слева от адреса сайта, разрешите уведомления и обновите страницу.')}

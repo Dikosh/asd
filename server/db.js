@@ -192,8 +192,8 @@ CREATE TABLE IF NOT EXISTS known_devices(token TEXT PRIMARY KEY, phone TEXT NOT 
 CREATE INDEX IF NOT EXISTS known_devices_phone ON known_devices(phone);`);
 // уведомления привязаны к входу, с которого их включили: закрыт вход — на это устройство они больше не приходят
 // код входа через бота в Telegram: каким путём ушёл код и метка из ссылки на бота, пока человек не поделился номером
-// площадка переименована из Jolda в Timma (20.11.2026): демо-компания модераторов на уже работающем стенде
-db.exec(`UPDATE companies SET name = 'Timma Модерация' WHERE name = 'Jolda Модерация'`);
+// площадка переименована: Jolda → Timma (20.11.2026) → Ovi (24.11.2026): демо-компания модераторов на уже работающем стенде
+db.exec(`UPDATE companies SET name = 'Ovi Модерация' WHERE name IN ('Jolda Модерация', 'Timma Модерация')`);
 addColumn('login_codes', 'channel', `TEXT NOT NULL DEFAULT 'sms'`);
 addColumn('login_codes', 'tg_start', 'TEXT');
 db.exec(`CREATE TABLE IF NOT EXISTS tg_links(phone TEXT PRIMARY KEY, chat_id INTEGER NOT NULL, lang TEXT NOT NULL DEFAULT 'ru', created_at ${TS});

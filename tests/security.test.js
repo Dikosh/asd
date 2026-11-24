@@ -101,11 +101,13 @@ test('имя и название: нельзя выдать себя за пло
   const { devCode } = await c.post('/api/auth/request-code', { phone: '+77071110010' });
   const { regToken } = await c.post('/api/auth/verify', { phone: '+77071110010', code: devCode });
   const reg = (extra) => c.call('POST', '/api/auth/register', { regToken, accept: true, name: 'Обычное Имя', companyName: 'Обычная Компания', companyForm: 'ТОО', role: 'carrier', ...extra });
-  for (const bad of [{ name: 'Поддержка Timma' }, { companyName: 'Timma Модерация' }, { name: 'Служба безопасности' }, { companyName: 'Проверено ✅ Логистик' },
-    { companyName: '<img src=x onerror=alert(1)>' }, { name: 'Support Тимма' }, { companyName: 'Official Verified' }]) {
+  for (const bad of [{ name: 'Поддержка Ovi' }, { companyName: 'Ovi Модерация' }, { name: 'Служба безопасности' }, { companyName: 'Проверено ✅ Логистик' },
+    { companyName: '<img src=x onerror=alert(1)>' }, { name: 'Support Тимма' }, { companyName: 'OVI' }, { companyName: 'Ови Логистик' }, { companyName: 'ovi.kz' }, { companyName: 'OviKZ' }, { companyName: 'Timma Транс' }, { companyName: 'Official Verified' }]) {
     const r = await reg(bad);
     assert.equal(r.status, 400, `${JSON.stringify(bad)} → ${r.status}`);
   }
+  // «ovi» внутри обычного имени ничего не значит
+  for (const name of ['Petrovich Trans', 'Novikov', 'Новиков', 'Кови Логистик']) assert.ok(L.nameOk(name), name);
   const fine = await reg({ name: 'Нұрлан Әбдіғали', companyName: '«Жол-Транс» & Ко №1 (Алматы)' });
   assert.equal(fine.status, 200, JSON.stringify(fine.data));
   // и сменить имя на такое после регистрации нельзя
@@ -162,7 +164,7 @@ test('команда: ответ на приглашение не раскрыв
   const unknown = await owner.post('/api/team/invite', { phone: '+77071110053' });
   assert.deepEqual([Object.keys(known), Object.keys(unknown)], [['id'], ['id']]);
   assert.equal(q1(`SELECT COUNT(*) AS n FROM notifications WHERE user_id = ? AND title = 'В команду приглашён новый человек'`, owner.me.user.id).n, 2);
-  assert.equal((await owner.call('POST', '/api/team/invite', { phone: '+77071110054', name: 'Поддержка Timma' })).status, 400);
+  assert.equal((await owner.call('POST', '/api/team/invite', { phone: '+77071110054', name: 'Поддержка Ovi' })).status, 400);
 });
 
 test('без входа: большой запрос не разбирается, списки и карточки закрыты, поисковикам сказано не ходить в личные разделы', async () => {

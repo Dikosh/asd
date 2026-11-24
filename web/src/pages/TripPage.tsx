@@ -503,7 +503,7 @@ export default function TripPage() {
               </div>
               <div className="gps-how">
                 <Smartphone size={18} />
-                <span>{t('Включайте на телефоне, который едет в машине. Пока Timma открыта, позиция уходит заказчику, а экран не гаснет. Если за рулём другой человек — отправьте ему ссылку для водителя ниже.')}</span>
+                <span>{t('Включайте на телефоне, который едет в машине. Пока Ovi открыта, позиция уходит заказчику, а экран не гаснет. Если за рулём другой человек — отправьте ему ссылку для водителя ниже.')}</span>
               </div>
 
               {trip.shareGps && onDevice && !trip.position && <div className="info-line">{t('Ждём первую позицию с этого телефона. Если она не появится за минуту — проверьте, что геолокация включена и разрешена для сайта.')}</div>}
@@ -535,7 +535,7 @@ export default function TripPage() {
                 <button className="btn soft" onClick={() => act(() => copyText(driveUrl), t('Ссылка скопирована'))}><Copy size={16} /> {t('Скопировать')}</button>
               </div>
               <div className="row wrap">
-                <a className="btn soft wa" href={waLink('', `${t('Рейс на Timma — откройте ссылку на телефоне и включите GPS')}: ${driveUrl}`)} target="_blank" rel="noreferrer"><MessageSquare size={16} /> WhatsApp</a>
+                <a className="btn soft wa" href={waLink('', `${t('Рейс на Ovi — откройте ссылку на телефоне и включите GPS')}: ${driveUrl}`)} target="_blank" rel="noreferrer"><MessageSquare size={16} /> WhatsApp</a>
                 <button className="btn ghost" onClick={async () => confirm(t('Выпустить новую ссылку? Старая перестанет работать.')) && (await post('driver-link', undefined, t('Новая ссылка готова')))}><RefreshCw size={15} /> {t('Новая ссылка')}</button>
               </div>
             </div>
@@ -659,7 +659,7 @@ export function PublicTrack() {
           </div>
           <div className="card map-card"><MapView routes={map.routes} markers={map.markers} height={420} fitKey={String(trip.id)} /></div>
           <div className="card"><StageBar trip={trip} /></div>
-          <p className="muted small center">{t('Страница обновляется автоматически. Timma — биржа грузов и транспорта.')}</p>
+          <p className="muted small center">{t('Страница обновляется автоматически. Ovi — биржа грузов и транспорта.')}</p>
         </div>
       )}
     </div>

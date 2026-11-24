@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Установка или обновление Timma на чистом сервере Ubuntu 22.04/24.04.
+# Установка или обновление Ovi на чистом сервере Ubuntu 22.04/24.04.
 # Запуск под root:
 #   curl -fsSL https://raw.githubusercontent.com/Dikosh/asd/main/scripts/install-server.sh | bash -s -- moindomen.kz
 # Домен необязателен. С доменом сайт будет на https:// с бесплатным сертификатом
@@ -15,14 +15,24 @@ DOMAIN="${1:-${DOMAIN:-}}"
 # Домен при обновлении запоминается так же, как демо-режим: если его не указали, берётся из настроек веб-сервера
 # прошлой установки. Иначе обновление «короткой командой» молча вернуло бы сайт на http:// и сломало вход.
 # Сознательно вернуться к работе без домена: указать вместо домена слово none.
-if [ -z "$DOMAIN" ] && [ -f /etc/caddy/Caddyfile ]; then
+PREV=""; OLD=""
+DOMAIN_RE='^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,}$'
+if [ -f /etc/caddy/Caddyfile ]; then
   PREV="$(awk '$2 == "{" && $1 ~ /\./ && $1 !~ /^www\./ { print $1; exit }' /etc/caddy/Caddyfile)"
-  if printf '%s' "$PREV" | grep -Eq '^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?\.[A-Za-z]{2,}$'; then
+  printf '%s' "$PREV" | grep -Eq "$DOMAIN_RE" || PREV=""
+  OLD="$(awk '/^# old-domain/ { getline; print $1 }' /etc/caddy/Caddyfile | grep -E "$DOMAIN_RE" || true)"
+  if [ -z "$DOMAIN" ] && [ -n "$PREV" ]; then
     DOMAIN="$PREV"
     echo "Домен из прошлой установки: $DOMAIN"
   fi
 fi
 [ "$DOMAIN" = none ] && DOMAIN=""
+# Смена домена: прежние адреса остаются и ведут на новый (старые ссылки не ломаются). Пока новый домен не виден
+# в интернете, сертификат для него не выпустить и сайт стал бы недоступен — тогда ничего не меняем.
+if [ -n "$DOMAIN" ] && [ -n "$PREV" ] && [ "$DOMAIN" != "$PREV" ]; then
+  getent ahostsv4 "$DOMAIN" >/dev/null || { echo "Домен $DOMAIN ещё не виден в интернете — сайт остаётся на $PREV. Повторите позже."; exit 1; }
+  OLD="$OLD $PREV"
+fi
 REPO="${REPO:-https://github.com/Dikosh/asd.git}"
 APP=/opt/jolda
 DATA=/var/lib/jolda
@@ -50,7 +60,7 @@ ufw --force enable >/dev/null
 # Вход на сервер — только по ключу. Пароль отключается, только если ключ уже добавлен: иначе на сервер было бы не попасть.
 if grep -qsE '^(ssh-|ecdsa-|sk-)' /root/.ssh/authorized_keys; then
   cat > /etc/ssh/sshd_config.d/01-timma.conf <<'EOF'
-# Timma: вход только по ключу (ставит scripts/install-server.sh)
+# Ovi: вход только по ключу (ставит scripts/install-server.sh)
 PasswordAuthentication no
 KbdInteractiveAuthentication no
 PermitRootLogin prohibit-password
@@ -143,7 +153,7 @@ INSECURE=0; [ -z "$DOMAIN" ] && INSECURE=1
 if [ -f "$DATA/fcm.json" ] && [ ! -L "$DATA/fcm.json" ]; then chown -h jolda:jolda "$DATA/fcm.json" && chmod 600 "$DATA/fcm.json"; fi
 cat > /etc/systemd/system/jolda.service <<EOF
 [Unit]
-Description=Timma freight exchange
+Description=Ovi freight exchange
 After=network.target
 
 [Service]
@@ -200,7 +210,7 @@ WantedBy=multi-user.target
 EOF
 # свои настройки (SMS_WEBHOOK_URL, TELEGRAM_BOT_TOKEN, ADMIN_PHONE, SUPPORT_PHONE, TILE_URL…) — в /etc/jolda.env
 # В файле лежат ключи (бот Telegram, SMS) — читать его может только администратор сервера.
-[ -f /etc/jolda.env ] || { install -m 600 -o root -g root /dev/null /etc/jolda.env; printf '# Настройки Timma, по одной в строке: ИМЯ=значение\n' > /etc/jolda.env; }
+[ -f /etc/jolda.env ] || { install -m 600 -o root -g root /dev/null /etc/jolda.env; printf '# Настройки Ovi, по одной в строке: ИМЯ=значение\n' > /etc/jolda.env; }
 chown root:root /etc/jolda.env && chmod 600 /etc/jolda.env
 systemctl daemon-reload
 systemctl enable -q jolda
@@ -211,7 +221,7 @@ say "Резервные копии и сторож"
 # BACKUP_REMOTE в /etc/jolda.env (адрес для rsync) — отправлять ночную копию ещё и на другой сервер.
 cat > /etc/systemd/system/jolda-backup.service <<EOF
 [Unit]
-Description=Timma nightly backup
+Description=Ovi nightly backup
 
 [Service]
 Type=oneshot
@@ -230,7 +240,7 @@ EOF
 install -d -m 700 /var/backups/jolda
 cat > /etc/systemd/system/jolda-backup.timer <<'EOF'
 [Unit]
-Description=Timma nightly backup
+Description=Ovi nightly backup
 
 [Timer]
 OnCalendar=*-*-* 03:30
@@ -255,7 +265,7 @@ EOF
 chmod +x /usr/local/bin/jolda-watchdog
 cat > /etc/systemd/system/jolda-watchdog.service <<'EOF'
 [Unit]
-Description=Timma watchdog
+Description=Ovi watchdog
 
 [Service]
 Type=oneshot
@@ -263,7 +273,7 @@ ExecStart=/usr/local/bin/jolda-watchdog
 EOF
 cat > /etc/systemd/system/jolda-watchdog.timer <<'EOF'
 [Unit]
-Description=Timma watchdog
+Description=Ovi watchdog
 
 [Timer]
 OnBootSec=2min
@@ -320,6 +330,26 @@ www.$DOMAIN {
 }
 EOF
 fi
+if [ -n "$DOMAIN" ]; then
+  for d in $(printf '%s\n' $OLD | sort -u); do
+    if [ "$d" = "$DOMAIN" ] || [ "$d" = "www.$DOMAIN" ]; then continue; fi
+    cat >> /etc/caddy/Caddyfile <<EOF
+
+# old-domain
+$d {
+	redir https://$DOMAIN{uri} 308
+}
+EOF
+    if getent ahostsv4 "www.$d" >/dev/null; then
+      cat >> /etc/caddy/Caddyfile <<EOF
+
+www.$d {
+	redir https://$DOMAIN{uri} 308
+}
+EOF
+    fi
+  done
+fi
 # Журнал пишет сам веб-сервер (пользователь caddy). Проверка настроек тоже идёт от его имени: запущенная под
 # администратором, она создала бы файл журнала с правами администратора, и веб-сервер не смог бы стартовать.
 install -d -m 755 -o caddy -g caddy /var/log/caddy
@@ -352,7 +382,7 @@ if [ "$WEB_OK" = 0 ]; then
   echo "Программа работает, но веб-сервер не отвечает — сайт снаружи недоступен. Журнал: journalctl -u caddy -n 30"; exit 1
 fi
 if curl -fs localhost:3000/api/meta >/dev/null; then
-  echo "Timma работает."
+  echo "Ovi работает."
   if [ -n "$DOMAIN" ]; then echo "Откройте https://$DOMAIN (сертификат выпускается в первую минуту)"
   else echo "Откройте http://$(curl -fs https://api.ipify.org || hostname -I | cut -d' ' -f1)"; fi
   if [ "$DEMO" = 1 ]; then
