@@ -127,6 +127,8 @@ addColumn('trips', 'sim', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('blacklist', 'reply', `TEXT NOT NULL DEFAULT ''`);
 addColumn('users', 'accepted_terms', 'TEXT');
 addColumn('users', 'is_demo', 'INTEGER NOT NULL DEFAULT 0');
+// тестовый аккаунт проверяющего из магазина приложений (server/review.js)
+addColumn('users', 'is_review', 'INTEGER NOT NULL DEFAULT 0');
 addColumn('trips', 'terms', 'TEXT');
 addColumn('invites', 'user_id', 'INTEGER');
 // чат принадлежит двум компаниям: его видят все их сотрудники

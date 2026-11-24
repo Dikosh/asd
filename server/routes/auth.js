@@ -8,6 +8,7 @@ import { q, q1, run, insert, tx, UPLOAD_DIR } from '../db.js';
 import { CITIES, cityById, isValidBin } from '../geo.js';
 import * as L from '../lib.js';
 import { notify } from '../notify.js';
+import { REVIEW, cancelReviewTrips, ensureReview, reviewCode } from '../review.js';
 import { sendSms } from '../sms.js';
 import { tgBot, tgLink, tgSendCode } from '../telegram.js';
 
@@ -66,6 +67,7 @@ const ADMIN_PHONES = new Set(
     }
   }),
 );
+for (const p of REVIEW.keys()) if (ADMIN_PHONES.has(p)) throw new Error(`REVIEW_LOGIN: номер ${p} указан и в ADMIN_PHONE — модератору постоянный код не положен`);
 /** Привести права модераторов к списку ADMIN_PHONE. Демо-аккаунты список не затрагивает. */
 export function syncAdmins(phones = ADMIN_PHONES) {
   if (!phones.size) return { granted: 0, revoked: 0 };
@@ -167,13 +169,14 @@ export default function authRoutes(app) {
       if (sent('phone = ? AND known = ?', phone, known) >= PHONE_DAY || (!known && sent('ip = ? AND known = 0', L.ip(req)) >= IP_DAY)) throw bad('rate_limit', 'Слишком много запросов кода за сутки. Попробуйте завтра', 429);
       // общий предел площадки — про деньги: коды через Telegram бесплатны и в него не входят
       // один адрес не должен израсходовать запас всей площадки: с незнакомых устройств — не больше его части
-      if (!viaTelegram && SMS_DAY && sent(`channel = 'sms'`) >= (known ? SMS_DAY : Math.ceil(SMS_DAY * SMS_STRANGERS))) {
+      const review = !!reviewCode(phone); // проверяющему SMS не отправляется — пределы SMS его не касаются
+      if (!review && !viaTelegram && SMS_DAY && sent(`channel = 'sms'`) >= (known ? SMS_DAY : Math.ceil(SMS_DAY * SMS_STRANGERS))) {
         console.error(`[sms] за сутки отправлено ${SMS_DAY} кодов входа — отправка приостановлена (предел SMS_DAILY_MAX)`);
         smsLimitAlert();
         if (tgBot()) throw bad('sms_limit', 'Отправка SMS временно приостановлена. Получите код в Telegram', 503);
         throw bad('sms_limit', 'Отправка кодов временно приостановлена. Попробуйте позже', 503);
       }
-      if (!viaTelegram && !smsAllowed(phone)) {
+      if (!review && !viaTelegram && !smsAllowed(phone)) {
         if (tgBot()) throw bad('sms_country', 'На номера этой страны код по SMS не отправляется. Получите код в Telegram', 400);
         throw bad('sms_country', 'На номера этой страны код по SMS не отправляется', 400);
       }
@@ -181,6 +184,12 @@ export default function authRoutes(app) {
     const code = String(crypto.randomInt(0, 1_000_000)).padStart(6, '0');
     // новый код не отменяет прежние: чужой запрос на тот же номер не обесценивает код, который человек уже получил
     const ticket = L.token(32);
+    if (reviewCode(phone)) {
+      // постоянный код в базу не пишется: при вводе он сверяется с настройкой сервера
+      run(`INSERT INTO login_codes(ticket, phone, code, expires, ip, known, channel) VALUES(?, ?, ?, ?, ?, ?, 'review')`, ticket, phone, code, Date.now() + TG_WAIT, L.ip(req), known);
+      L.setCookie(req, res, 'otp', ticket, 1800, '/api/auth');
+      return res.json(viaTelegram ? { ok: true, via: 'telegram', sent: true, telegramUrl: '' } : { ok: true });
+    }
     if (viaTelegram) {
       const link = tgLink(phone);
       // номер уже привязан к чату — код уходит сразу; человек удалил бота — привязываем заново по ссылке
@@ -228,12 +237,14 @@ export default function authRoutes(app) {
     // неверные вводы считаются на сам код: перебор упирается в число кодов на номер, а чужой вход не страдает
     if (otp.attempts >= CODE_TRIES) throw bad('rate_limit', 'Слишком много неверных кодов. Запросите новый код', 429);
     const given = String(req.body?.code || '').trim();
-    const same = /^\d{6}$/.test(given) && given.length === otp.code.length && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(otp.code));
+    const expected = otp.channel === 'review' ? reviewCode(phone) : otp.code;
+    const same = !!expected && /^\d{6}$/.test(given) && given.length === expected.length && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(expected));
     if (!same) {
       run('UPDATE login_codes SET attempts = attempts + 1 WHERE ticket = ?', ticket);
       throw bad('code_wrong', 'Неверный код');
     }
     if (otp.channel === 'tg') run(`UPDATE tg_links SET used_at = ? WHERE phone = ?`, L.now(), phone);
+    if (otp.channel === 'review') ensureReview();
     const user = q1('SELECT * FROM users WHERE phone = ?', phone);
     if (user) {
       if (user.is_demo && !L.DEMO) throw bad('forbidden', 'Этот номер недоступен', 403);
@@ -347,6 +358,7 @@ export default function authRoutes(app) {
   app.delete('/api/me', L.auth, (req, res) => {
     const u = req.user;
     if (u.is_demo) throw bad('forbidden', 'Демо-аккаунт удалить нельзя', 403);
+    cancelReviewTrips(u);
     const mine = u.company_id;
     const others = q('SELECT id, company_role FROM users WHERE company_id = ? AND id != ? ORDER BY id', mine, u.id);
     const alone = others.length === 0;

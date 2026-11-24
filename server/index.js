@@ -17,6 +17,7 @@ import { loadRates } from './rates.js';
 import { checkHealth } from './health.js';
 import { seed } from './seed.js';
 import { startTelegram } from './telegram.js';
+import { closeReview } from './review.js';
 
 // Что может менять водитель из команды: вести рейс и свои личные настройки. Остальное — сотрудники и владелец.
 // По ссылке водителя (/drive/…) право даёт сама ссылка, поэтому вошедшему водителю она тоже доступна.
@@ -164,6 +165,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   }
   leaveDemoMode();
   syncAdmins();
+  closeReview();
   if (DEMO && !q1('SELECT 1 FROM users LIMIT 1')) seed();
   const port = Number(process.env.PORT || 3000);
   housekeeping();

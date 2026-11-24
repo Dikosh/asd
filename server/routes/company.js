@@ -29,7 +29,7 @@ export default function companyRoutes(app) {
     res.json(
       q(
         `SELECT * FROM company_stats WHERE (name LIKE :t OR bin LIKE :t) AND (:k IS NULL OR kind = :k)
-           AND id NOT IN (SELECT company_id FROM users WHERE is_admin = 1)
+           AND id NOT IN (SELECT company_id FROM users WHERE is_admin = 1 OR is_review = 1)
          ORDER BY (verified = 'verified') DESC, trips DESC, reviews DESC, id DESC LIMIT 100`,
         { t: term, k: kind },
       ).map((c) => ({ ...L.companyOut(c), cityId: c.city_id, bin: c.bin })),
