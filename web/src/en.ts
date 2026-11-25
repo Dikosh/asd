@@ -1883,4 +1883,7 @@ export const EN: Record<string, string> = {
   "Аккаунт Ovi можно удалить прямо на сайте, приложение для этого не нужно.": "You can delete your Ovi account right on the website; the app is not needed.",
   "Войти и удалить аккаунт": "Sign in and delete account",
   "Что удаляется и что остаётся": "What is deleted and what is kept",
+  "Показать ещё": "Show more",
+  "Ошибка на сервере": "Server error",
+  "Ошибок с прошлого сообщения: {n}, место в коде: {where}. Подробности — в журнале сервера.": "Errors since the last message: {n}, place in code: {where}. Details are in the server log.",
 };

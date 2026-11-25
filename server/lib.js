@@ -366,10 +366,19 @@ LEFT JOIN marks m ON m.listing_id = l.id AND m.user_id = :viewer`;
 // ---------- быстрый поиск ----------
 // Репутация компаний для фильтров поиска считается одним запросом и держится 30 секунд:
 // иначе на каждое из тысяч объявлений заново пересчитываются рейтинг, отзывы и чёрный список.
+// На большой базе пересборка списков в памяти стоит десятки миллисекунд, а изменения идут каждую секунду — без предела сервер
+// только ими и занят. Поэтому чем дороже пересборка, тем реже она делается: не чаще чем раз в 20 её длительностей
+// и не реже раза в 3 секунды. На маленькой базе (пересборка быстрее 5 мс) всё обновляется сразу, как раньше.
+const rest = (cost) => (cost < 5 ? 0 : Math.min(3000, cost * 20));
+const stale = (c, ttl) => Date.now() - c.at > ttl || (c.ver !== dataVersion() && Date.now() - c.at >= rest(c.cost || 0));
+const timed = (fn) => { const t = performance.now(); const value = fn(); return [value, performance.now() - t]; };
+
 let companyCache = { at: 0, ver: -1, map: null };
 export function companyMap() {
-  if (!companyCache.map || companyCache.ver !== dataVersion() || Date.now() - companyCache.at > 30_000) {
-    companyCache = { at: Date.now(), ver: dataVersion(), map: new Map(q('SELECT * FROM company_stats').map((r) => [r.id, companyOut(r)])) };
+  if (!companyCache.map || stale(companyCache, 30_000)) {
+    const ver = dataVersion();
+    const [map, cost] = timed(() => new Map(q('SELECT * FROM company_stats').map((r) => [r.id, companyOut(r)])));
+    companyCache = { at: Date.now(), ver, map, cost };
   }
   return companyCache.map;
 }
@@ -378,8 +387,8 @@ function companyById(id) {
   companyCache.map?.set(id, c);
   return c;
 }
-/** Сбросить кэш репутации: после проверки, блокировки компании, нового отзыва. */
-export const resetCompanyCache = () => { companyCache.map = null; };
+/** Сбросить кэш репутации: после проверки, блокировки компании, нового отзыва. Список объявлений тоже перечитается сразу. */
+export const resetCompanyCache = () => { companyCache.map = null; pool.at = 0; };
 
 /**
  * Активные объявления в памяти — для поиска и подбора. Перечитываются из базы, только когда изменились объявления,
@@ -395,8 +404,9 @@ export const seesCompany = (viewer, companyId) => !!viewer.is_admin || !isReview
 
 let pool = { ver: -1, at: 0, rows: [] };
 function activePool() {
-  if (pool.ver !== dataVersion() || Date.now() - pool.at > 60_000) {
+  if (stale(pool, 60_000)) {
     const ver = dataVersion();
+    const t0 = performance.now();
     const rows = q(
       `SELECT l.id, l.kind, l.points, l.body_type, l.cargo_type, l.weight, l.volume, l.loading, l.date_from, l.date_to, l.pay_terms, l.adr_class, l.flags,
          l.rate, l.currency, l.distance_km, l.created_at, l.boosted_until, l.company_id, l.trucks, l.vehicle_kind, l.licenses, ${BOOKED('l')} AS booked, ${REVIEW_CO('l.company_id')} AS review
@@ -417,6 +427,7 @@ function activePool() {
         };
       }),
     };
+    pool.cost = performance.now() - t0;
   }
   return pool.rows;
 }
@@ -439,7 +450,7 @@ export function lightListings(viewer, kind, { exceptCompany = null } = {}) {
 /** Полные карточки для отобранных лёгких объявлений — в том же порядке, с найденными при отборе полями. */
 export function hydrate(viewer, light) {
   if (!light.length) return [];
-  const full = new Map(listings(viewer, 'l.id IN (SELECT value FROM json_each(:ids))', { ids: JSON.stringify(light.map((l) => l.id)) }, '').map((l) => [l.id, l]));
+  const full = new Map(listings(viewer, `l.id IN (SELECT value FROM json_each(:ids)) AND l.status = 'active' AND cs.banned = 0`, { ids: JSON.stringify(light.map((l) => l.id)) }, '').map((l) => [l.id, l]));
   return light.filter((l) => full.has(l.id)).map((l) => ({ ...full.get(l.id), ...(l.detourKm !== undefined && { detourKm: l.detourKm }), ...(l.match && { match: l.match }) }));
 }
 

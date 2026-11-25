@@ -151,25 +151,48 @@ function matchesFor(user, listing, limit = 10) {
  * Выборка цен для статистики и ориентира. Одна компания даёт по одному значению на направление (самое свежее) —
  * иначе рынок можно «нарисовать» пачкой одинаковых объявлений. Цены состоявшихся рейсов добавляются отдельно.
  */
+// Выборка одна на всех и держится минуту: её просит каждое открытие объявления, а цены рынка за минуту не меняются.
+// Пока в выборке мало строк, она собирается заново при каждом запросе: это ничего не стоит, а новая цена видна сразу.
+const priceCache = new Map();
 export function priceSamples(kind, { bodyType = null, exceptId = 0 } = {}) {
+  const key = `${kind}:${bodyType || ''}`;
+  let hit = priceCache.get(key);
+  if (!hit || Date.now() - hit.at > 60_000) {
+    const rows = readPrices(kind, bodyType);
+    hit = { at: Date.now(), ...onePerCompany(rows) };
+    if (rows.length >= 300) priceCache.set(key, hit);
+    else priceCache.delete(key);
+  }
+  if (!exceptId) return hit.kept;
+  // без одного объявления: на его место встаёт предыдущее той же компании на том же направлении
+  return hit.kept.flatMap((r) => (r.deal || r.id !== exceptId ? [r] : hit.next.has(r.id) ? [hit.next.get(r.id)] : []));
+}
+/** Одна компания — одно значение на направление (самое свежее); состоявшиеся рейсы остаются все. */
+function onePerCompany(rows) {
+  const last = new Map();
+  const next = new Map(); // объявление → предыдущее той же компании на том же направлении
+  const kept = rows.filter((r) => {
+    if (r.deal) return true;
+    const key = `${r.company_id}:${r.from_id}:${r.to_id}`;
+    const newer = last.get(key);
+    if (newer === undefined) return !!last.set(key, r.id);
+    if (!next.has(newer)) next.set(newer, r);
+    return false;
+  });
+  return { kept, next };
+}
+function readPrices(kind, bodyType) {
   const since = new Date(Date.now() - 180 * 86400_000).toISOString();
   const rows = q(
     `SELECT l.id, l.company_id, l.from_id, l.to_id, l.rate, l.currency, l.distance_km AS km, l.body_type, l.weight, 0 AS deal
      FROM listings l JOIN companies c ON c.id = l.company_id
-     WHERE l.kind = :kind AND l.rate > 0 AND l.distance_km > 50 AND l.status != 'removed' AND c.banned = 0 AND l.id != :id AND NOT ${L.REVIEW_CO('c.id')}
+     WHERE l.kind = :kind AND l.rate > 0 AND l.distance_km > 50 AND l.status != 'removed' AND c.banned = 0 AND NOT ${L.REVIEW_CO('c.id')}
        AND (c.verified = 'verified' OR EXISTS (SELECT 1 FROM trips t WHERE t.status = 'completed' AND (t.customer_company = c.id OR t.carrier_company = c.id)))
        AND (:body IS NULL OR l.body_type = :body) AND l.created_at > :since
      ORDER BY l.id DESC LIMIT 5000`,
-    { kind, id: exceptId, body: bodyType, since },
+    { kind, body: bodyType, since },
   );
-  const seen = new Set();
-  const out = [];
-  for (const r of rows) {
-    const key = `${r.company_id}:${r.from_id}:${r.to_id}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({ ...r, rate: toKzt(r.rate, r.currency) });
-  }
+  const out = rows.map((r) => ({ ...r, rate: toKzt(r.rate, r.currency) }));
   // цена, по которой рейс действительно состоялся, весомее объявления
   const deals = q(
     `SELECT t.carrier_company AS company_id, l.from_id, l.to_id, t.price AS rate, t.currency, l.distance_km AS km, l.body_type, l.weight, 1 AS deal
@@ -291,7 +314,9 @@ export default function listingRoutes(app) {
   app.get('/api/listings', auth, (req, res) => {
     const f = req.query;
     const kind = kindOf(f.kind);
-    // отбор и сортировка — по лёгким данным, полные карточки — только для первых 200
+    // отбор и сортировка — по лёгким данным, полные карточки — только для показываемых. Прежние версии приложения
+    // количество не указывают и получают первые 200
+    const limit = Math.min(200, Math.max(1, Math.floor(n(f.limit) ?? 200)));
     const items = L.lightListings(req.user, kind).filter((l) => passes(l, f));
     const kzt = (l) => toKzt(l.rate, l.currency);
     const perKm = (l) => (l.rate && l.distanceKm ? kzt(l) / l.distanceKm : 0);
@@ -305,7 +330,7 @@ export default function listingRoutes(app) {
       distance_asc: (a, b) => a.distanceKm - b.distanceKm,
     };
     items.sort(Object.hasOwn(sorters, f.sort) ? sorters[f.sort] : sorters.new);
-    res.json({ total: items.length, items: L.hydrate(req.user, items.slice(0, 200)) });
+    res.json({ total: items.length, items: L.hydrate(req.user, items.slice(0, limit)) });
   });
 
   app.get('/api/listings/mine', auth, (req, res) => {

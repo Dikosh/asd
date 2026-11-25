@@ -15,7 +15,7 @@ delete process.env.FCM_SERVICE_ACCOUNT;
 const { createApp, housekeeping } = await import('../server/index.js');
 const { seed } = await import('../server/seed.js');
 const { db, q, q1, run } = await import('../server/db.js');
-const { healthProblems, checkHealth } = await import('../server/health.js');
+const { healthProblems, checkHealth, reportFailure } = await import('../server/health.js');
 
 let server;
 let base;
@@ -247,4 +247,34 @@ test('сервер предупреждает администратора о п
   // копия появилась — предупреждений больше нет
   fs.writeFileSync(path.join(process.env.DATA_DIR, 'backup-status.json'), JSON.stringify({ ok: true, lastOk: new Date(now + 49 * 3600_000).toISOString(), remote: 'off' }));
   assert.equal(checkHealth(now + 50 * 3600_000).some((p) => p.code === 'backup'), false);
+});
+
+test('ошибка сервера: администраторам одно сообщение в час, без текста ошибки', () => {
+  const now = Date.parse('2026-11-25T10:00:00Z');
+  const admins = q('SELECT id FROM users WHERE is_admin = 1').length;
+  const sent = () => q(`SELECT title, body, vars FROM notifications WHERE title = 'Ошибка на сервере' ORDER BY id`);
+  const e = new Error('секрет: +77010000000');
+  e.stack = `Error: ${e.message}\n    at f (file:///opt/jolda/server/routes/deals.js:10:5)`;
+  assert.equal(reportFailure(e, now), true);
+  assert.equal(reportFailure(e, now + 60_000), false);
+  assert.equal(reportFailure(e, now + 120_000), false);
+  assert.equal(sent().length, admins);
+  assert.ok(!JSON.stringify(sent()).includes('секрет'));
+  assert.deepEqual(JSON.parse(sent()[0].vars), { n: 1, where: 'routes/deals.js:10' });
+  assert.equal(reportFailure(e, now + 3700_000), true);
+  assert.equal(JSON.parse(sent().at(-1).vars).n, 3, 'посчитаны и те, о которых не сообщалось');
+});
+
+test('поиск: limit ограничивает выдачу, без него — до 200, как ждут прежние версии приложения', async () => {
+  const c = client();
+  await c.post('/api/auth/demo', { role: 'customer' });
+  const all = await c.get('/api/listings?kind=cargo');
+  assert.ok(all.total > 3);
+  assert.equal(all.items.length, Math.min(200, all.total));
+  const part = await c.get('/api/listings?kind=cargo&limit=3');
+  assert.equal(part.total, all.total);
+  assert.deepEqual(part.items.map((l) => l.id), all.items.slice(0, 3).map((l) => l.id));
+  assert.equal((await c.get('/api/listings?kind=cargo&limit=0')).items.length, 1);
+  assert.equal((await c.get('/api/listings?kind=cargo&limit=99999')).items.length, Math.min(200, all.total));
+  assert.equal((await c.get('/api/listings?kind=cargo&limit=abc')).items.length, Math.min(200, all.total));
 });

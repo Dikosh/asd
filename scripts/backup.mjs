@@ -10,7 +10,8 @@
 //
 // Перед работой проверяется свободное место: копия не делается, если после неё останется меньше MIN_FREE_MB (500).
 // Если задан BACKUP_REMOTE (адрес для rsync, например backup@host:/backups/jolda), ночная копия уходит и туда —
-// копии на том же диске, что и база, не спасут при поломке сервера.
+// копии на том же диске, что и база, не спасут при поломке сервера. BACKUP_REMOTE_MIRROR=1 — удалять там то, чего уже нет
+// здесь (иначе стёртые с сайта документы лежали бы там вечно); только для сервера со снимками, см. backup-server.sh.
 // Итог каждого запуска записывается в <DATA_DIR>/backup-status.json: сервер читает его и предупреждает администратора,
 // если копии перестали создаваться.
 //
@@ -121,7 +122,7 @@ try {
   // вторая площадка: без неё поломка сервера уносит и базу, и копии
   if (REMOTE && !UPDATE) {
     try {
-      execFileSync('rsync', ['-a', '--timeout=120', '--exclude=.tmp-*', '--exclude=*.part', `${OUT}/`, `${REMOTE.replace(/\/+$/, '')}/`], { stdio: ['ignore', 'ignore', 'pipe'] });
+      execFileSync('rsync', ['-a', '--timeout=120', ...(process.env.BACKUP_REMOTE_MIRROR === '1' ? ['--delete'] : []), '--exclude=.tmp-*', '--exclude=*.part', `${OUT}/`, `${REMOTE.replace(/\/+$/, '')}/`], { stdio: ['ignore', 'ignore', 'pipe'] });
       status.remote = 'ok';
       console.log(`Копия отправлена: ${REMOTE}`);
     } catch (e) {

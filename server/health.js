@@ -23,6 +23,30 @@ export function healthProblems({ status, free, total, now = Date.now() }) {
   return out;
 }
 
+const HOUR = 3600_000;
+let failures = 0;
+/**
+ * Непредвиденная ошибка сервера: сразу сообщить администраторам, но не чаще раза в час. В сообщении — только сколько их
+ * и где в коде, без текста ошибки: в нём могут оказаться данные людей. Подробности — в журнале сервера.
+ */
+export function reportFailure(e, now = Date.now()) {
+  try {
+    failures++;
+    const key = 'health:error';
+    const last = Number(q1('SELECT value FROM app_state WHERE key = ?', key)?.value || 0);
+    if (now - last < HOUR) return false;
+    run('INSERT INTO app_state(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', key, String(now));
+    const where = /server\/([\w/]+\.js:\d+)/.exec(e?.stack || '')?.[1] || '?';
+    for (const a of q('SELECT id FROM users WHERE is_admin = 1'))
+      notify(a.id, { kind: 'system', title: 'Ошибка на сервере', body: 'Ошибок с прошлого сообщения: {n}, место в коде: {where}. Подробности — в журнале сервера.', vars: { n: failures, where }, link: '/cabinet/admin' });
+    failures = 0;
+    return true;
+  } catch (err) {
+    console.error('[health]', err); // база недоступна — об этом скажет внешнее наблюдение за сайтом
+    return false;
+  }
+}
+
 /** Проверка и уведомление администраторам; об одной и той же беде — не чаще раза в сутки. */
 export function checkHealth(now = Date.now()) {
   let status = null;

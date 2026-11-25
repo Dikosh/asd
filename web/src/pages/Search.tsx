@@ -40,7 +40,10 @@ const parse = (sp: URLSearchParams): { f: Filter; view: View } => ({ f: clean(Ob
 const serialize = (f: Filter, view: View) => new URLSearchParams({ ...clean(f), ...(view === 'map' ? { view: 'map' } : {}) }).toString();
 
 // последняя выдача и положение прокрутки: при возврате «Назад» список появляется сразу и на прежнем месте
-let lastResult: { query: string; data: Result } | null = null;
+let lastResult: { query: string; limit: number; data: Result } | null = null;
+// сколько объявлений загружать сразу и по кнопке «Показать ещё»; больше 200 сервер не отдаёт
+const PAGE = 60;
+const PAGE_MAX = 200;
 const SCROLL = 'jolda:search-scroll:';
 const store = {
   get: (k: string) => { try { return sessionStorage.getItem(k); } catch { return null; } },
@@ -102,12 +105,15 @@ export default function SearchPage() {
   }, [f, view]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const query = new URLSearchParams({ kind, ...debounced }).toString();
+  // сколько показано — отдельно для каждого поиска: другие условия снова начинаются с первой порции
+  const [shown, setShown] = useState({ query: lastResult?.query ?? query, limit: lastResult?.limit ?? PAGE });
+  const limit = shown.query === query ? shown.limit : PAGE;
   const res = useLoad(async () => {
     const q = query;
-    const data = await api<Result>(`/listings?${q}`);
-    lastResult = { query: q, data };
+    const data = await api<Result>(`/listings?${q}&limit=${limit}`);
+    lastResult = { query: q, limit, data };
     return data;
-  }, [query]);
+  }, [query, limit]);
   const data = res.data ?? (lastResult?.query === query ? lastResult.data : null);
   const saved = useLoad(() => api<{ id: number; kind: string; name: string; params: Filter; notify: boolean }[]>('/searches'));
 
@@ -435,6 +441,9 @@ export default function SearchPage() {
           {res.loading && !data ? <Loading /> : (
             <div className="list">
               {data?.items.map((l) => <ListingCard key={l.id} l={l} onChange={res.reload} />)}
+              {data && data.items.length < Math.min(data.total, PAGE_MAX) && (
+                <button className="btn soft" disabled={res.loading} onClick={() => setShown({ query, limit: Math.min(limit + PAGE, PAGE_MAX) })}>{t('Показать ещё')}</button>
+              )}
               {data?.total === 0 && (
                 <div className="card">
                   <Empty title={t('Ничего не найдено')} text={rangeErrors.length ? `${rangeErrors.join('. ')}.` : hasCity ? t('Попробуйте увеличить радиус, убрать часть условий или сохранить поиск — и вернуться позже.') : t('Попробуйте убрать часть условий или сохранить поиск — и вернуться позже.')}>

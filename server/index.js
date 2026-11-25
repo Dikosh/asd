@@ -14,7 +14,7 @@ import relocationRoutes from './routes/relocation.js';
 import serviceRoutes from './routes/services.js';
 import shipperRoutes from './routes/shippers.js';
 import { loadRates } from './rates.js';
-import { checkHealth } from './health.js';
+import { checkHealth, reportFailure } from './health.js';
 import { seed } from './seed.js';
 import { startTelegram } from './telegram.js';
 import { handleWebhook, signed, wa } from './whatsapp.js';
@@ -120,6 +120,7 @@ export function createApp() {
     // прочие ошибки разбора запроса (кодировка, обрыв, неверный адрес) — это ошибка клиента, а не сервера
     if (err.status >= 400 && err.status < 500 && !err.code?.startsWith?.('SQLITE')) return res.status(400).json({ error: 'bad_request', message: 'Запрос повреждён — попробуйте ещё раз' });
     console.error(err);
+    reportFailure(err);
     res.status(500).json({ error: 'internal', message: 'Внутренняя ошибка сервера' });
   });
   return app;
@@ -197,6 +198,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     process.exit(1);
   });
   // необработанная ошибка в одном запросе не должна останавливать сервер для всех
-  process.on('uncaughtException', (e) => console.error('[uncaught]', e));
-  process.on('unhandledRejection', (e) => console.error('[unhandled]', e));
+  process.on('uncaughtException', (e) => { console.error('[uncaught]', e); reportFailure(e); });
+  process.on('unhandledRejection', (e) => { console.error('[unhandled]', e); reportFailure(e); });
 }
