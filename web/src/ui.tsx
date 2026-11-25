@@ -390,7 +390,10 @@ export function MapView({ routes, markers, height = 320, fitKey }: { routes: Map
   const map = useRef<L.Map | null>(null);
   const layer = useRef<L.LayerGroup | null>(null);
   const fitted = useRef<string | null>(null);
+  const whole = useRef<L.LatLngBounds | null>(null);
+  const [near, setNear] = useState(false);
   const tiles = useApp().meta.tiles;
+  const truck = markers.find((mk) => mk.kind === 'truck')?.pos;
 
   useEffect(() => {
     // на телефоне один палец листает страницу, карту двигают двумя — иначе под ней не прокрутить экран
@@ -430,13 +433,26 @@ export function MapView({ routes, markers, height = 320, fitKey }: { routes: Map
       all.push(mk.pos);
     }
     const key = fitKey ?? String(all.length);
-    if (all.length && fitted.current !== key) {
+    whole.current = all.length ? L.latLngBounds(all).pad(0.15) : null;
+    if (whole.current && fitted.current !== key) {
       fitted.current = key;
-      m.fitBounds(L.latLngBounds(all).pad(0.15), { maxZoom: 10, animate: false });
+      setNear(false);
+      m.fitBounds(whole.current, { maxZoom: 10, animate: false });
     }
   }, [routes, markers, fitKey]);
 
-  return <div ref={el} className="map" style={{ height }} data-hint={t('Двигайте карту двумя пальцами')} />;
+  // карта рейса открывается на весь путь — на тысяче километров движения машины не видно
+  const zoom = () => {
+    if (near && whole.current) map.current!.fitBounds(whole.current, { maxZoom: 10, animate: false });
+    else if (truck) map.current!.setView(truck, 15, { animate: false });
+    setNear(!near);
+  };
+  return (
+    <div className="map-wrap">
+      <div ref={el} className="map" style={{ height }} data-hint={t('Двигайте карту двумя пальцами')} />
+      {truck && <button type="button" className="map-zoom" onClick={zoom}>{near ? t('Весь маршрут') : t('Показать машину')}</button>}
+    </div>
+  );
 }
 
 export function Logo() {

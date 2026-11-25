@@ -1352,6 +1352,8 @@ export const EN: Record<string, string> = {
   'Такого города нет в справочнике — проверьте написание': 'This city isn\'t in the directory — check the spelling',
   'Плохая репутация': 'Bad reputation',
   'Двигайте карту двумя пальцами': 'Move the map with two fingers',
+  'Показать машину': 'Show truck',
+  'Весь маршрут': 'Whole route',
   'Компания заблокирована модератором. Причина и обжалование — в разделе «Помощь → Поддержка»': 'The company was blocked by a moderator. For the reason and to appeal, see “Help → Support”',
   'Слишком много попыток. Попробуйте через {n} мин': 'Too many attempts. Try again in {n} min',
   'Неизвестный город': 'Unknown city',
