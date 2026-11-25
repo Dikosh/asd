@@ -126,7 +126,7 @@ function Accordion({ items }: { items: [string, string][] }) {
   );
 }
 
-/** Справка без входа: та же страница, но без поддержки (обращение привязано к аккаунту). */
+/** Справка без входа: та же страница; в поддержке только контакты (обращение привязано к аккаунту). */
 export function PublicHelp() {
   return (
     <div className="public">
@@ -142,10 +142,21 @@ export default function HelpPage({ guest = false }: { guest?: boolean }) {
   const { act, meta } = useApp();
   const news = useLoad(() => api<any[]>('/news'));
   const [text, setText] = useState('');
-  const mine = useLoad(() => (tab === 'support' ? api<any[]>('/feedback/mine') : Promise.resolve([])), [tab]);
+  const mine = useLoad(() => (tab === 'support' && !guest ? api<any[]>('/feedback/mine') : Promise.resolve([])), [tab]);
   const lang = getLang();
   // у новостей нет китайского текста — для китайского показываем английский
   const pick = (n: any, f: string) => (lang === 'kz' && n[f + 'Kz']) || ((lang === 'en' || lang === 'zh') && n[f + 'En']) || n[f];
+  const contacts = (meta.support.phone || meta.support.telegram) && (
+    <div className="stack-s">
+      <b>{t('Связаться сразу')}</b>
+      <div className="row wrap">
+        {meta.support.phone && <a className="btn soft" href={`tel:${meta.support.phone}`}><Phone size={16} /> {meta.support.phone}</a>}
+        {meta.support.phone && <a className="btn soft wa" href={waLink(meta.support.phone)} target="_blank" rel="noreferrer"><MessageCircle size={16} /> WhatsApp</a>}
+        {meta.support.telegram && <a className="btn soft" href={meta.support.telegram} target="_blank" rel="noreferrer"><Send size={16} /> Telegram</a>}
+      </div>
+      {meta.support.hours && <span className="muted small">{t('Часы работы')}: {meta.support.hours}</span>}
+    </div>
+  );
   return (
     <div className="stack">
       <h1 className="page-title">{t('Помощь')}</h1>
@@ -154,7 +165,7 @@ export default function HelpPage({ guest = false }: { guest?: boolean }) {
         onChange={(v) => nav(`/help/${v}`)}
         items={[
           { value: 'faq', label: t('Вопросы и ответы') }, { value: 'safety', label: t('Безопасность') }, { value: 'docs', label: t('Справка') },
-          { value: 'news', label: t('Новости') }, ...(guest ? [] : [{ value: 'support', label: t('Поддержка') }]), { value: 'rules', label: t('Правила') },
+          { value: 'news', label: t('Новости') }, ...(guest && !contacts ? [] : [{ value: 'support', label: t('Поддержка') }]), { value: 'rules', label: t('Правила') },
         ]}
       />
       {tab === 'faq' && <Accordion items={FAQ} />}
@@ -201,20 +212,15 @@ export default function HelpPage({ guest = false }: { guest?: boolean }) {
           {RULES.map(([title, body], i) => (<section key={title}><h3>{i + 1}. {t(title)}</h3><p>{t(body)}</p></section>))}
         </div>
       )}
-      {tab === 'support' && guest && <div className="card"><Empty title={t('Войдите, чтобы написать в поддержку')}><Link to="/" className="btn primary">{t('Войти')}</Link></Empty></div>}
+      {tab === 'support' && guest && (
+        <div className="narrow card form">
+          {contacts}
+          <Empty title={t('Войдите, чтобы написать в поддержку')}><Link to="/" className="btn primary">{t('Войти')}</Link></Empty>
+        </div>
+      )}
       {tab === 'support' && !guest && (
         <div className="narrow card form">
-          {(meta.support.phone || meta.support.telegram) && (
-            <div className="stack-s">
-              <b>{t('Связаться сразу')}</b>
-              <div className="row wrap">
-                {meta.support.phone && <a className="btn soft" href={`tel:${meta.support.phone}`}><Phone size={16} /> {meta.support.phone}</a>}
-                {meta.support.phone && <a className="btn soft wa" href={waLink(meta.support.phone)} target="_blank" rel="noreferrer"><MessageCircle size={16} /> WhatsApp</a>}
-                {meta.support.telegram && <a className="btn soft" href={meta.support.telegram} target="_blank" rel="noreferrer"><Send size={16} /> Telegram</a>}
-              </div>
-              {meta.support.hours && <span className="muted small">{t('Часы работы')}: {meta.support.hours}</span>}
-            </div>
-          )}
+          {contacts}
           <b><LifeBuoy size={18} /> {t('Написать в поддержку')}</b>
           <p className="muted small">{t('Опишите, что случилось или чего не хватает. Ответ придёт в уведомления и появится здесь, в ваших обращениях.')}</p>
           <textarea rows={5} value={text} onChange={(e) => setText(e.target.value)} maxLength={2000} placeholder={t('Например: не могу загрузить документ, пишет ошибку')} />
