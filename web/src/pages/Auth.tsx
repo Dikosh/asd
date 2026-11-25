@@ -65,7 +65,6 @@ export default function AuthPage() {
     !joining && !isDriver && reg.companyName.trim().length < 2 && t('наименование компании'),
     !accept && t('согласие с правилами'),
   ].filter(Boolean) as string[];
-  const emailOptional = joining ? invite!.role === 'driver' : isDriver;
 
   const canSms = meta.login?.sms ?? true;
   const canTelegram = !!meta.login?.telegram;
@@ -287,8 +286,8 @@ export default function AuthPage() {
               <Field label={t('ФИО')}>
                 <input autoFocus required minLength={2} maxLength={100} value={reg.name} onChange={(e) => setReg({ ...reg, name: e.target.value })} autoComplete="name" />
               </Field>
-              <Field label={emailOptional ? t('Почта (необязательно)') : t('Почта')}>
-                <input type="email" required={!emailOptional} maxLength={120} value={reg.email} onChange={(e) => setReg({ ...reg, email: e.target.value })} autoComplete="email" />
+              <Field label={t('Почта (необязательно)')}>
+                <input type="email" maxLength={120} value={reg.email} onChange={(e) => setReg({ ...reg, email: e.target.value })} autoComplete="email" />
               </Field>
               {!joining && (
                 <>
