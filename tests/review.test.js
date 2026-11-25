@@ -14,7 +14,7 @@ process.env.DATA_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'jolda-test-review-
 process.env.REVIEW_LOGIN = `${A}:${CODE_A}, 8 707 999 00 02:${CODE_B}`;
 for (const k of ['DEMO_MODE', 'SMS_WEBHOOK_URL', 'TELEGRAM_BOT_TOKEN', 'ADMIN_PHONE', 'OSRM_URL', 'FCM_SERVICE_ACCOUNT']) delete process.env[k];
 const { createApp } = await import('../server/index.js');
-const { REVIEW, closeReview, parseReview } = await import('../server/review.js');
+const { REVIEW, SAMPLE_NOTE, closeReview, parseReview } = await import('../server/review.js');
 const { q, q1, run, insert } = await import('../server/db.js');
 
 let server;
@@ -93,6 +93,58 @@ test('настоящие люди тестовых данных не видят'
   const get = async (u) => (await fetch(base + u, { headers: { Cookie: 'sid=real-sid' } })).json();
   assert.ok(!JSON.stringify(await get('/api/companies')).includes('Review'));
   assert.deepEqual(await get('/api/public/listings'), []);
+});
+
+test('примеры объявлений видят только проверяющие: ищут, открывают и откликаются', async () => {
+  const { c: carrier } = await signIn(A, CODE_A);
+  const { c: customer } = await signIn(B, CODE_B);
+  const cargo = (await carrier('GET', '/api/listings?kind=cargo')).data;
+  const truck = (await customer('GET', '/api/listings?kind=truck')).data;
+  assert.equal(cargo.total, 8);
+  assert.equal(truck.total, 6);
+  assert.equal((await carrier('GET', '/api/listings?kind=relocation')).data.total, 1);
+  for (const l of [...cargo.items, ...truck.items]) assert.ok(l.description.startsWith(SAMPLE_NOTE), 'у каждого примера пометка');
+  const id = cargo.items[0].id;
+  assert.equal((await carrier('GET', `/api/listings/${id}`)).status, 200);
+  assert.equal((await carrier('POST', `/api/listings/${id}/responses`, { message: 'test' })).status, 200);
+  assert.equal((await customer('GET', `/api/listings/${id}`)).data.responses.length, 1);
+
+  // повторный вход не размножает примеры, а истёкшие и закрытые возвращает
+  run(`UPDATE listings SET status = 'closed', date_to = '2026-01-01' WHERE id = ?`, id);
+  await signIn(A, CODE_A);
+  assert.equal((await carrier('GET', '/api/listings?kind=cargo')).data.total, 8);
+
+  // настоящий человек с подпиской на все грузы и правами перегонщика
+  const company = insert(`INSERT INTO companies(name, form, verified) VALUES('Живая', 'ТОО', 'verified')`);
+  const user = insert(`INSERT INTO users(name, phone, email, role, company_id, accepted_terms, relocator, licenses, relocator_city) VALUES('Живой', '+77059990077', '', 'logist', ?, '2026-01-01', 1, '["B"]', 'almaty')`, company);
+  run(`INSERT INTO sessions(token, user_id) VALUES('live-sid', ?)`, user);
+  run(`INSERT INTO searches(user_id, kind, name, params, notify) VALUES(?, 'cargo', 'все', '{}', 1)`, user);
+  const http = (method, u, body) => fetch(base + u, { method, headers: { Cookie: 'sid=live-sid', 'Content-Type': 'application/json' }, body: body && JSON.stringify(body) });
+  const get = async (u) => (await http('GET', u)).json();
+  for (const kind of ['cargo', 'truck', 'relocation']) assert.equal((await get(`/api/listings?kind=${kind}`)).total, 0);
+  assert.ok((await get('/api/recommendations')).every((r) => !r.items.length));
+  assert.deepEqual(await get('/api/public/listings'), []);
+  const { stats } = await get('/api/meta');
+  assert.deepEqual([stats.cargo, stats.truck, stats.relocation], [0, 0, 0]);
+  assert.equal((await http('GET', `/api/listings/${id}`)).status, 404);
+  assert.equal((await http('POST', `/api/listings/${id}/responses`, { message: 'x' })).status, 404);
+  assert.equal((await http('POST', `/api/listings/${id}/mark`, { marked: true })).status, 404);
+  const owner = q1('SELECT company_id FROM listings WHERE id = ?', id).company_id;
+  assert.deepEqual((await get(`/api/companies/${owner}`)).listings, []);
+  assert.ok(!JSON.stringify(await get('/api/stats/prices?kind=cargo')).includes('almaty'));
+
+  // объявление, которое проверяющий разместит сам, настоящим людям тоже не видно и не рассылается
+  const today = new Date(Date.now()).toISOString().slice(0, 10);
+  const mine = await customer('POST', '/api/listings', { kind: 'cargo', points: ['almaty', 'taraz'], bodyType: 'tent', cargoType: 'food', weight: 5, dateFrom: today, dateTo: today });
+  assert.equal(mine.status, 200, JSON.stringify(mine.data));
+  assert.equal((await carrier('GET', '/api/listings?kind=cargo')).data.total, 9);
+  assert.equal((await get('/api/listings?kind=cargo')).total, 0);
+  assert.equal(q1('SELECT COUNT(*) AS n FROM notifications WHERE user_id = ?', user).n, 0);
+
+  // а настоящее объявление проверяющий видит вместе со всеми
+  insert(`INSERT INTO listings(kind, user_id, company_id, points, from_id, to_id, date_from, date_to) VALUES('cargo', ?, ?, '["almaty","astana"]', 'almaty', 'astana', ?, ?)`, user, company, today, today);
+  assert.equal((await get('/api/listings?kind=cargo')).total, 1);
+  assert.equal((await carrier('GET', '/api/listings?kind=cargo')).data.total, 10);
 });
 
 test('удаление аккаунта работает несмотря на активный рейс, а следующий вход создаёт всё заново', async () => {

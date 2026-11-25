@@ -71,7 +71,7 @@ export default function companyRoutes(app) {
         c.id,
       ),
       // водителю из команды объявления и ставки не показываются
-      listings: req.user.company_role === 'driver' ? [] : L.listings(req.user, `l.company_id = :c AND l.status = 'active' AND l.date_to >= :today`, { c: c.id, today: L.today() }).slice(0, 10),
+      listings: req.user.company_role === 'driver' || !L.seesCompany(req.user, c.id) ? [] : L.listings(req.user, `l.company_id = :c AND l.status = 'active' AND l.date_to >= :today`, { c: c.id, today: L.today() }).slice(0, 10),
     });
   });
 

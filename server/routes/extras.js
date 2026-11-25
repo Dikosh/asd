@@ -341,7 +341,7 @@ export default function extraRoutes(app) {
         companies: count('SELECT COUNT(*) AS n FROM companies'),
         verified: count(`SELECT COUNT(*) AS n FROM companies WHERE verified = 'verified'`),
         // заблокированные компании в поиске не видны — и в счётчике их объявления не учитываем
-        listings: count(`SELECT COUNT(*) AS n FROM listings l JOIN companies c ON c.id = l.company_id WHERE l.status = 'active' AND c.banned = 0`),
+        listings: count(`SELECT COUNT(*) AS n FROM listings l JOIN companies c ON c.id = l.company_id WHERE l.status = 'active' AND c.banned = 0 AND NOT ${L.REVIEW_CO('c.id')}`),
         tripsActive: count(`SELECT COUNT(*) AS n FROM trips WHERE status = 'active'`),
         tripsDone: count(`SELECT COUNT(*) AS n FROM trips WHERE status = 'completed'`),
         tripsFailed: count(`SELECT COUNT(*) AS n FROM trips WHERE status = 'failed'`),

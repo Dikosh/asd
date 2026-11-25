@@ -90,7 +90,7 @@ const inviteFor = (phone) =>
 export default function authRoutes(app) {
   app.get('/api/meta', (_req, res) => {
     const active = (kind) =>
-      q1(`SELECT COUNT(*) AS n FROM listings l JOIN companies c ON c.id = l.company_id WHERE l.kind = ? AND l.status = 'active' AND l.date_to >= ? AND c.banned = 0`, kind, L.today()).n;
+      q1(`SELECT COUNT(*) AS n FROM listings l JOIN companies c ON c.id = l.company_id WHERE l.kind = ? AND l.status = 'active' AND l.date_to >= ? AND c.banned = 0 AND NOT ${L.REVIEW_CO('c.id')}`, kind, L.today()).n;
     res.json({
       demo: L.DEMO,
       flags: L.FLAGS,
@@ -117,7 +117,7 @@ export default function authRoutes(app) {
         cargo: active('cargo'),
         truck: active('truck'),
         relocation: active('relocation'),
-        companies: q1('SELECT COUNT(*) AS n FROM companies WHERE banned = 0').n,
+        companies: q1(`SELECT COUNT(*) AS n FROM companies c WHERE banned = 0 AND NOT ${L.REVIEW_CO('c.id')}`).n,
         trips: q1(`SELECT COUNT(*) AS n FROM trips WHERE status = 'completed'`).n,
         shippers: q1('SELECT COUNT(*) AS n FROM shippers WHERE visible = 1').n,
       },
@@ -141,7 +141,7 @@ export default function authRoutes(app) {
       `SELECT l.id, l.kind, l.points, l.body_type, l.cargo_type, l.weight, l.volume, l.date_from, l.date_to, l.rate, l.currency, l.distance_km
        FROM listings l JOIN companies c ON c.id = l.company_id
        WHERE l.status = 'active' AND l.date_to >= ? AND c.banned = 0
-         AND ${L.BOOKED('l')} < l.trucks
+         AND ${L.BOOKED('l')} < l.trucks AND NOT ${L.REVIEW_CO('c.id')}
        ORDER BY l.id DESC LIMIT 12`,
       L.today(),
     );

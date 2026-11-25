@@ -348,7 +348,7 @@ export default function dealRoutes(app) {
     L.requireNoPendingReviews(req.user);
     const b = parse(respSchema, req.body);
     const l = q1('SELECT * FROM listings WHERE id = ?', Number(req.params.id));
-    if (!l || l.status !== 'active') throw bad('not_found', 'Объявление недоступно', 404);
+    if (!l || l.status !== 'active' || !L.seesCompany(req.user, l.company_id)) throw bad('not_found', 'Объявление недоступно', 404);
     if (l.company_id === req.user.company_id) throw bad('own', 'Нельзя откликнуться на объявление своей компании');
     // компания, которую владелец объявления скрыл, откликнуться не может (ответ тот же, что для закрытого объявления)
     if (q1('SELECT 1 FROM blocks WHERE company_id = ? AND blocked_id = ?', l.company_id, req.user.company_id)) throw bad('not_found', 'Объявление недоступно', 404);

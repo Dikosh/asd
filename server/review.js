@@ -5,6 +5,7 @@
 // с таким номером им не открыть. Между двумя аккаунтами всегда есть активный рейс — на нём проверяют передачу GPS.
 import { q, q1, run, insert, tx } from './db.js';
 import * as L from './lib.js';
+import { cityById, roadKm } from './geo.js';
 
 /** Разобрать REVIEW_LOGIN: номер → код. Коды в текст ошибки не попадают: он уходит в журнал сервера. */
 export function parseReview(raw) {
@@ -51,13 +52,61 @@ function account(i) {
   L.resetCompanyCache();
   return q1('SELECT * FROM users WHERE id = ?', id);
 }
-/** Аккаунты и активный рейс между ними: вызывается при каждом входе — проверяющий мог удалить аккаунт или закрыть рейс. */
+// Примеры объявлений: на новой бирже проверяющему иначе нечего искать. Их владельцы — тестовые компании, поэтому настоящие
+// люди примеров не видят (L.seesCompany), в счётчики и цены они не попадают. Пометка — первой строкой описания.
+export const SAMPLE_NOTE = 'SAMPLE FOR APP REVIEW. Пример для проверки приложения, не настоящая заявка.';
+// [вид, откуда, куда, кузов, груз, тонн, м³, тенге за км, описание]
+const SAMPLES = [
+  ['cargo', 'almaty', 'astana', 'tent', 'consumer', 20, 82, 330, 'Household goods on pallets'],
+  ['cargo', 'astana', 'karaganda', 'tent', 'building', 10, 40, 480, 'Building materials'],
+  ['cargo', 'shymkent', 'almaty', 'ref', 'food', 18, 80, 400, 'Vegetables, +2…+4 °C'],
+  ['cargo', 'pavlodar', 'kostanay', 'board', 'metal', 21, null, 340, 'Metal pipes'],
+  ['cargo', 'aktobe', 'atyrau', 'trawl', 'equipment', 24, null, 520, 'Drilling equipment'],
+  ['cargo', 'almaty', 'tashkent', 'tent', 'furniture', 8, 60, 420, 'Furniture'],
+  ['cargo', 'novosibirsk', 'almaty', 'tent', 'groupage', 12, 70, 300, 'Groupage cargo'],
+  ['cargo', 'oskemen', 'semey', 'van', 'furniture', 3, 18, 450, 'Office furniture'],
+  ['truck', 'astana', 'almaty', 'ref', null, 20, 82, 310, 'Refrigerated truck, available now'],
+  ['truck', 'almaty', 'shymkent', 'tent', null, 20, 90, 320, 'Curtainsider truck'],
+  ['truck', 'karaganda', 'almaty', 'tent', null, 22, 92, 300, 'Curtainsider truck, returning empty'],
+  ['truck', 'atyrau', 'aktobe', 'trawl', null, 40, null, 560, 'Low loader'],
+  ['truck', 'almaty', 'bishkek', 'van', null, 3, 18, 350, 'Light van'],
+  ['truck', 'kostanay', 'astana', 'grain', null, 25, 45, 300, 'Grain truck'],
+  ['relocation', 'almaty', 'astana', null, null, null, null, 60, 'Drive a car from Almaty to Astana'],
+];
+/** Вернуть недостающие примеры и продлить им сроки. Примеры с рейсом не трогаем: там идёт проверка сделки. */
+function samples(customer, carrier) {
+  const day = (n) => new Date(Date.now() + n * 86400_000).toISOString().slice(0, 10);
+  for (const [kind, from, to, body, cargo, weight, volume, perKm, text] of SAMPLES) {
+    const owner = kind === 'truck' ? carrier : customer;
+    const description = `${SAMPLE_NOTE}\n${text}`;
+    const old = q1(
+      `SELECT id FROM listings l WHERE company_id = ? AND kind = ? AND from_id = ? AND to_id = ? AND description = ? AND status != 'removed'
+         AND NOT EXISTS (SELECT 1 FROM trips t WHERE t.listing_id = l.id) ORDER BY id DESC LIMIT 1`,
+      owner.company_id, kind, from, to, description,
+    );
+    if (old) {
+      run(`UPDATE listings SET status = 'active', closed_at = NULL, date_from = ?, date_to = ? WHERE id = ?`, day(0), day(30), old.id);
+      continue;
+    }
+    const km = roadKm([cityById.get(from), cityById.get(to)]);
+    insert(
+      `INSERT INTO listings(kind, user_id, company_id, points, from_id, to_id, brand, body_type, cargo_type, weight, volume, loading, date_from, date_to,
+         pay_terms, rate, description, distance_km, vehicle_kind, licenses)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      kind, owner.id, owner.company_id, JSON.stringify([from, to]), from, to, kind === 'relocation' ? 'Toyota Camry' : '', body, cargo, weight, volume,
+      JSON.stringify(kind === 'relocation' ? [] : ['rear']), day(0), day(30), '["cashless_vat"]', Math.round((km * perKm) / 5000) * 5000, description, km,
+      kind === 'relocation' ? 'car' : null, kind === 'relocation' ? '["B"]' : '[]',
+    );
+  }
+}
+/** Аккаунты, примеры объявлений и активный рейс между аккаунтами: вызывается при каждом входе — проверяющий мог удалить аккаунт или закрыть рейс. */
 export function ensureReview() {
   if (!REVIEW.size) return;
   tx(() => {
     const [carrier, customer] = [account(0), account(1)];
     if (!carrier || !customer) return;
     const pair = [customer.company_id, carrier.company_id];
+    samples(customer, carrier);
     // закрытый тестовый рейс требует отзыва и через три дня запирает аккаунт — для проверяющего это тупик
     run(`UPDATE trips SET status = 'cancelled' WHERE status IN ('completed', 'failed') AND customer_company = ? AND carrier_company = ?`, ...pair);
     if (q1(`SELECT 1 FROM trips WHERE status = 'active' AND customer_company = ? AND carrier_company = ?`, ...pair)) return;
@@ -93,4 +142,6 @@ export function cancelReviewTrips(user) {
 /** Номер убрали из REVIEW_LOGIN — входы в его тестовый аккаунт закрываются при следующем запуске. */
 export function closeReview() {
   for (const u of q('SELECT id, phone FROM users WHERE is_review = 1')) if (!REVIEW.has(u.phone)) L.dropSessions(u.id);
+  // и примеры закрываются: показывать их больше некому
+  if (!REVIEW.size) run(`UPDATE listings SET status = 'archived', closed_at = ? WHERE status = 'active' AND description LIKE ?`, L.now(), `${SAMPLE_NOTE}%`);
 }

@@ -94,9 +94,9 @@ export default function shipperRoutes(app) {
   // По умолчанию демо-данные не учитываются: показываем только настоящих пользователей.
   app.get('/api/admin/metrics', auth, admin, (req, res) => {
     const withDemo = req.query.demo === '1';
-    const realUser = withDemo ? '1 = 1' : 'u.is_demo = 0';
+    const realUser = withDemo ? '1 = 1' : 'u.is_demo = 0 AND u.is_review = 0';
     // компания настоящая, если в ней есть хотя бы один не-демо пользователь
-    const realCo = withDemo ? '1 = 1' : 'EXISTS (SELECT 1 FROM users u WHERE u.company_id = c.id AND u.is_demo = 0)';
+    const realCo = withDemo ? '1 = 1' : 'EXISTS (SELECT 1 FROM users u WHERE u.company_id = c.id AND u.is_demo = 0 AND u.is_review = 0)';
     const n = (sql, ...a) => q1(sql, ...a).n;
     const ago = (days) => new Date(Date.now() - days * 86400_000).toISOString();
     const carrierCo = `c.banned = 0 AND c.kind IN ('carrier', 'driver') AND ${realCo}`;

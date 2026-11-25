@@ -386,13 +386,20 @@ export const resetCompanyCache = () => { companyCache.map = null; };
  * рейсы или компании (dataVersion), и не реже раза в минуту (истекают даты). Здесь лишь поля для фильтров и сортировки;
  * полные карточки (отклики, рейсы, отметки) загружаются только для показываемой страницы — hydrate().
  */
+// Тестовые компании проверяющих (server/review.js): их объявления видят только они сами, настоящим людям они не показываются нигде.
+// Компания тестовая, если тестовый у неё владелец: человек, перешедший в чужую компанию, её тестовой не делает.
+export const REVIEW_CO = (col) => `EXISTS (SELECT 1 FROM users ru WHERE ru.company_id = ${col} AND ru.is_review = 1 AND ru.company_role = 'owner')`;
+export const isReviewCompany = (companyId) => !!q1(`SELECT 1 WHERE ${REVIEW_CO('?')}`, companyId);
+/** Может ли пользователь видеть объявления этой компании. Модератору видно всё. */
+export const seesCompany = (viewer, companyId) => !!viewer.is_admin || !isReviewCompany(companyId) || isReviewCompany(viewer.company_id);
+
 let pool = { ver: -1, at: 0, rows: [] };
 function activePool() {
   if (pool.ver !== dataVersion() || Date.now() - pool.at > 60_000) {
     const ver = dataVersion();
     const rows = q(
       `SELECT l.id, l.kind, l.points, l.body_type, l.cargo_type, l.weight, l.volume, l.loading, l.date_from, l.date_to, l.pay_terms, l.adr_class, l.flags,
-         l.rate, l.currency, l.distance_km, l.created_at, l.boosted_until, l.company_id, l.trucks, l.vehicle_kind, l.licenses, ${BOOKED('l')} AS booked
+         l.rate, l.currency, l.distance_km, l.created_at, l.boosted_until, l.company_id, l.trucks, l.vehicle_kind, l.licenses, ${BOOKED('l')} AS booked, ${REVIEW_CO('l.company_id')} AS review
        FROM listings l JOIN companies c ON c.id = l.company_id
        WHERE l.status = 'active' AND c.banned = 0 AND l.date_to >= ? ORDER BY l.id DESC`,
       today(),
@@ -405,7 +412,7 @@ function activePool() {
           id: r.id, kind: r.kind, points, bodyType: r.body_type, cargoType: r.cargo_type, weight: r.weight, volume: r.volume, loading: j(r.loading, []),
           dateFrom: r.date_from, dateTo: r.date_to, payTerms: j(r.pay_terms, []), adrClass: r.adr_class, flags: j(r.flags, []), rate: r.rate, currency: r.currency,
           distanceKm: r.distance_km, createdAt: r.created_at, boostedUntil: r.boosted_until, companyId: r.company_id,
-          vehicleKind: r.vehicle_kind, licenses: j(r.licenses, []),
+          vehicleKind: r.vehicle_kind, licenses: j(r.licenses, []), review: !!r.review,
           international: new Set(points.map((id) => cityById.get(id)?.country)).size > 1,
         };
       }),
@@ -421,9 +428,10 @@ export function lightListings(viewer, kind, { exceptCompany = null } = {}) {
   const partners = new Set(q('SELECT partner_id FROM partners WHERE company_id = ?', viewer.company_id).map((r) => r.partner_id));
   const t = today();
   const at = now();
+  const reviewer = isReviewCompany(viewer.company_id);
   const out = [];
   for (const r of activePool()) {
-    if (r.kind !== kind || r.dateTo < t || hidden.has(r.id) || blocked.has(r.companyId) || r.companyId === exceptCompany) continue;
+    if (r.kind !== kind || (r.review && !reviewer) || r.dateTo < t || hidden.has(r.id) || blocked.has(r.companyId) || r.companyId === exceptCompany) continue;
     out.push({ ...r, boosted: !!r.boostedUntil && r.boostedUntil > at, partner: partners.has(r.companyId), company: companies.get(r.companyId) || companyById(r.companyId) });
   }
   return out;

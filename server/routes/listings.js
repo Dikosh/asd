@@ -156,7 +156,7 @@ export function priceSamples(kind, { bodyType = null, exceptId = 0 } = {}) {
   const rows = q(
     `SELECT l.id, l.company_id, l.from_id, l.to_id, l.rate, l.currency, l.distance_km AS km, l.body_type, l.weight, 0 AS deal
      FROM listings l JOIN companies c ON c.id = l.company_id
-     WHERE l.kind = :kind AND l.rate > 0 AND l.distance_km > 50 AND l.status != 'removed' AND c.banned = 0 AND l.id != :id
+     WHERE l.kind = :kind AND l.rate > 0 AND l.distance_km > 50 AND l.status != 'removed' AND c.banned = 0 AND l.id != :id AND NOT ${L.REVIEW_CO('c.id')}
        AND (c.verified = 'verified' OR EXISTS (SELECT 1 FROM trips t WHERE t.status = 'completed' AND (t.customer_company = c.id OR t.carrier_company = c.id)))
        AND (:body IS NULL OR l.body_type = :body) AND l.created_at > :since
      ORDER BY l.id DESC LIMIT 5000`,
@@ -174,7 +174,7 @@ export function priceSamples(kind, { bodyType = null, exceptId = 0 } = {}) {
   const deals = q(
     `SELECT t.carrier_company AS company_id, l.from_id, l.to_id, t.price AS rate, t.currency, l.distance_km AS km, l.body_type, l.weight, 1 AS deal
      FROM trips t JOIN listings l ON l.id = t.listing_id
-     WHERE t.status = 'completed' AND t.price > 0 AND l.distance_km > 50 AND l.kind = :kind AND (:body IS NULL OR l.body_type = :body) AND t.finished_at > :since
+     WHERE t.status = 'completed' AND t.price > 0 AND l.distance_km > 50 AND l.kind = :kind AND NOT ${L.REVIEW_CO('l.company_id')} AND (:body IS NULL OR l.body_type = :body) AND t.finished_at > :since
      ORDER BY t.id DESC LIMIT 2000`,
     { kind, body: bodyType, since },
   );
@@ -361,7 +361,8 @@ export default function listingRoutes(app) {
     forgetRecommendations(req.user.id);
     const b = parse(markSchema, req.body);
     const id = Number(req.params.id);
-    if (!q1('SELECT 1 FROM listings WHERE id = ?', id)) throw bad('not_found', 'Объявление не найдено', 404);
+    const marked0 = q1('SELECT company_id FROM listings WHERE id = ?', id);
+    if (!marked0 || !L.seesCompany(req.user, marked0.company_id)) throw bad('not_found', 'Объявление не найдено', 404);
     const cur = q1('SELECT * FROM marks WHERE user_id = ? AND listing_id = ?', req.user.id, id) || { marked: 0, note: '', hidden: 0 };
     const note = b.note ?? cur.note;
     // заметка работает вместе с отметкой
@@ -444,6 +445,7 @@ export default function listingRoutes(app) {
       b.kind, req.user.id, req.user.company_id, ...values,
     );
     res.json({ id });
+    if (L.isReviewCompany(c)) return; // объявление проверяющего настоящим людям не рассылается
     try {
       alertSubscribers(id, req.user);
       if (b.kind === 'relocation') alertRelocators(id, req.user);
@@ -528,7 +530,7 @@ export default function listingRoutes(app) {
   app.get('/api/listings/:id', auth, (req, res) => {
     const id = Number(req.params.id);
     const own0 = q1('SELECT company_id, status FROM listings WHERE id = ?', id);
-    if (!own0) throw bad('not_found', 'Объявление не найдено', 404);
+    if (!own0 || !L.seesCompany(req.user, own0.company_id)) throw bad('not_found', 'Объявление не найдено', 404);
     // Контакты автора и точные адреса (server/contacts.js): своё объявление и то, по которому у компании есть отклик
     // или рейс, открывается всегда; закрытое чужое — без контактов; остальные — в пределах суточного счёта.
     let contact = true;
