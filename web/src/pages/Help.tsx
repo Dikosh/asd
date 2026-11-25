@@ -109,6 +109,31 @@ export function PrivacyPage() {
   );
 }
 
+/** Удаление аккаунта — открыта без входа: её адрес (/delete-account) указывается в анкете Google Play «Безопасность данных».
+    Google требует, чтобы удалить аккаунт можно было с сайта, без установки приложения. Для гостя адрес настроек
+    показывает форму входа, после входа открываются сами настройки. */
+export function DeleteAccountPage() {
+  const steps = [
+    t('Нажмите кнопку ниже и войдите по номеру телефона.'),
+    t('В настройках найдите раздел «Удаление аккаунта» и нажмите «Удалить аккаунт».'),
+    t('Подтвердите удаление. Если у вас идёт рейс, сначала завершите его.'),
+  ];
+  return (
+    <div className="public">
+      <header className="row between"><a href="/"><Logo /></a><span className="muted small">{t('Удаление аккаунта')}</span></header>
+      <div className="card rules">
+        <h1 className="page-title">{t('Удаление аккаунта Ovi')}</h1>
+        <p>{t('Аккаунт Ovi можно удалить прямо на сайте, приложение для этого не нужно.')}</p>
+        <ol>{steps.map((s) => <li key={s}>{s}</li>)}</ol>
+        <p><Link to="/cabinet/settings" className="btn primary">{t('Войти и удалить аккаунт')}</Link></p>
+        <h3>{t('Что удаляется и что остаётся')}</h3>
+        <p>{t(PRIVACY.find(([title]) => title === 'Удаление аккаунта')![1])}</p>
+        <p><Link to="/help/support" className="link">{t('Поддержка')}</Link> · <Link to="/privacy" className="link">{t('Политика конфиденциальности')}</Link></p>
+      </div>
+    </div>
+  );
+}
+
 function Accordion({ items }: { items: [string, string][] }) {
   const [open, setOpen] = useState<number | null>(0);
   return (

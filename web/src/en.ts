@@ -1876,4 +1876,11 @@ export const EN: Record<string, string> = {
   "Изменения политики": "Changes to this policy",
   "О существенных изменениях мы сообщаем в разделе «Новости». Дата редакции указана вверху страницы.": "We announce significant changes in the News section. The version date is shown at the top of the page.",
   "Демо-аккаунт удалить нельзя": "A demo account cannot be deleted",
+  "Нажмите кнопку ниже и войдите по номеру телефона.": "Press the button below and sign in with your phone number.",
+  "В настройках найдите раздел «Удаление аккаунта» и нажмите «Удалить аккаунт».": "In settings, find the “Account deletion” section and press “Delete account”.",
+  "Подтвердите удаление. Если у вас идёт рейс, сначала завершите его.": "Confirm the deletion. If you have an active trip, finish it first.",
+  "Удаление аккаунта Ovi": "Delete your Ovi account",
+  "Аккаунт Ovi можно удалить прямо на сайте, приложение для этого не нужно.": "You can delete your Ovi account right on the website; the app is not needed.",
+  "Войти и удалить аккаунт": "Sign in and delete account",
+  "Что удаляется и что остаётся": "What is deleted and what is kept",
 };
